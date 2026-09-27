@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Daily" };
 
 export default async function DailyPage({ searchParams }: PageProps<"/daily">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Daily"
       description="Each day's revenue, invoices and AOV by branch and doctor."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Daily sales" icon={CalendarDays} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Daily sales" icon={CalendarDays} />
     </PageShell>
   );
 }

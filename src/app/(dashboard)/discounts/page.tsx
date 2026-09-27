@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Discounts" };
 
 export default async function DiscountsPage({ searchParams }: PageProps<"/discounts">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Discounts"
       description="Discount totals, discount rates and the discount types used."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Discounts" icon={BadgePercent} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Discounts" icon={BadgePercent} />
     </PageShell>
   );
 }

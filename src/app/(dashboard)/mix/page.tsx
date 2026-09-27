@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Mix" };
 
 export default async function MixPage({ searchParams }: PageProps<"/mix">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Mix"
       description="Service-mix groups, top items, surgery, vaccines and dental per doctor."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Service mix" icon={PieChart} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Service mix" icon={PieChart} />
     </PageShell>
   );
 }

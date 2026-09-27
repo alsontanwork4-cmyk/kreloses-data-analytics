@@ -10,7 +10,6 @@ import {
   formatDateRange,
   isIsoDate,
   mergeFilterIntoSearchParams,
-  parseFilter,
   withSearchParams,
   type FilterOption,
   type FilterState,
@@ -23,11 +22,17 @@ import { cn } from "@/lib/utils";
 /**
  * The global filter bar. Its state lives entirely in the URL: every change navigates to the same
  * page with new search params (see `@/filters`), and the page re-renders on the server.
+ *
+ * `state` is the filter the page resolved on the server (`parseFilter(await searchParams)`), so
+ * the bar always shows exactly the dates the page's data is for (no client-clock drift around
+ * midnight in KL).
  */
 export function FilterBarControls({
+  state,
   branches,
   doctors,
 }: {
+  state: FilterState;
   branches: FilterOption[];
   doctors?: FilterOption[];
 }) {
@@ -35,7 +40,6 @@ export function FilterBarControls({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
-  const state = parseFilter(searchParams);
   const [customOpen, setCustomOpen] = useState(state.range === "custom");
 
   const hrefFor = (next: FilterState) =>

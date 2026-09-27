@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Overview" };
 
 export default async function OverviewPage({ searchParams }: PageProps<"/overview">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Overview"
       description="Headline KPIs for the selected period, compared with the previous period and the same period last year."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Revenue, invoices, customers and AOV" icon={LayoutDashboard} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Revenue, invoices, customers and AOV" icon={LayoutDashboard} />
     </PageShell>
   );
 }

@@ -33,9 +33,22 @@ export function assertManagedDatabaseName(name: string): void {
   }
 }
 
-/** `kx_test_<base36 ms>_<random>`; the timestamp lets stale databases be cleaned up safely. */
-export function timestampedDatabaseName(prefix: "kx_test_" | "kx_e2e_"): string {
-  return `${prefix}${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
+export type ThrowawayPrefix = "kx_test_" | "kx_e2e_";
+
+/** `kx_test_<base36 ms>_<8 hex>`; the timestamp lets stale databases be cleaned up safely. */
+export function timestampedDatabaseName(prefix: ThrowawayPrefix, createdAt: number = Date.now()): string {
+  return `${prefix}${createdAt.toString(36)}_${randomBytes(4).toString("hex")}`;
+}
+
+const GENERATED_NAME = /^kx_(?:test|e2e)_([0-9a-z]{8,9})_[0-9a-f]{8}$/;
+const EARLIEST_PLAUSIBLE = Date.UTC(2024, 0, 1);
+
+/** Creation time encoded in a `timestampedDatabaseName`, or null for any other name. */
+function generatedAt(name: string, now: number): number | null {
+  const match = GENERATED_NAME.exec(name);
+  if (!match) return null;
+  const createdAt = parseInt(match[1]!, 36);
+  return createdAt >= EARLIEST_PLAUSIBLE && createdAt <= now ? createdAt : null;
 }
 
 export async function withAdminSql<T>(fn: (sql: Sql) => Promise<T>): Promise<T> {
@@ -69,26 +82,41 @@ export async function dropDatabase(name: string): Promise<void> {
 }
 
 /**
- * Drops `kx_test_*` / `kx_e2e_*` databases left behind by crashed runs. Only databases older than
- * `olderThanMs` are touched, so runs in other worktrees that are still going are safe.
+ * Drops `kx_test_*` / `kx_e2e_*` databases left behind by crashed runs. Only databases whose name
+ * has the exact generated shape, that are older than `olderThanMs`, and that nobody is connected
+ * to are touched — so runs in other worktrees (even a long `playwright test --ui` session) and
+ * hand-named databases are never disturbed.
  */
 export async function dropStaleDatabases(
-  prefix: "kx_test_" | "kx_e2e_",
+  prefix: ThrowawayPrefix,
   olderThanMs: number,
   now: number = Date.now(),
 ): Promise<string[]> {
-  const names = await withAdminSql(async (sql) => {
+  const candidates = await withAdminSql(async (sql) => {
     const rows = await sql<{ datname: string }[]>`
-      select datname from pg_database where starts_with(datname, ${prefix})
+      select d.datname
+      from pg_database d
+      where starts_with(d.datname, ${prefix})
+        and not exists (select 1 from pg_stat_activity a where a.datname = d.datname)
     `;
     return rows.map((row) => row.datname);
   });
-  const stale = names.filter((name) => {
-    const createdAt = parseInt(name.slice(prefix.length).split("_")[0] ?? "", 36);
-    return Number.isFinite(createdAt) && now - createdAt > olderThanMs;
+  const stale = candidates.filter((name) => {
+    const createdAt = generatedAt(name, now);
+    return createdAt !== null && now - createdAt > olderThanMs;
   });
-  for (const name of stale) await dropDatabase(name);
-  return stale;
+  const dropped: string[] = [];
+  for (const name of stale) {
+    // Re-check under the drop: someone may have connected since the listing. Plain DROP (no
+    // FORCE) fails instead of kicking them off.
+    try {
+      await withAdminSql((sql) => sql.unsafe(`drop database if exists "${name}"`));
+      dropped.push(name);
+    } catch {
+      // In use: leave it.
+    }
+  }
+  return dropped;
 }
 
 function explainConnectionError(error: unknown): unknown {

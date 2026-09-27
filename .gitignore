@@ -42,6 +42,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Claude Code: agent worktrees live here (would be committed as gitlinks) and per-user settings
+/.claude/worktrees/
+/.claude/settings.local.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

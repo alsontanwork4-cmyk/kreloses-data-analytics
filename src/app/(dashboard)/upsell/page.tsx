@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Upsell" };
 
 export default async function UpsellPage({ searchParams }: PageProps<"/upsell">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Upsell"
       description="How often consults include diagnostics, products or a second service."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Upsell rates" icon={ShoppingBasket} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Upsell rates" icon={ShoppingBasket} />
     </PageShell>
   );
 }

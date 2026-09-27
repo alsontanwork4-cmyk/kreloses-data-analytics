@@ -48,7 +48,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
  *   const db = useTestDatabase();
  *   it("…", async () => { await db.sql`select 1`; });
  */
-export function useTestDatabase(): { readonly sql: Sql; readonly url: string } {
+export function useTestDatabase(): { readonly sql: Sql; readonly url: string; readonly name: string } {
   let database: TestDatabase | undefined;
   beforeAll(async () => {
     database = await createTestDatabase();
@@ -66,6 +66,9 @@ export function useTestDatabase(): { readonly sql: Sql; readonly url: string } {
     },
     get url() {
       return current().url;
+    },
+    get name() {
+      return current().name;
     },
   };
 }

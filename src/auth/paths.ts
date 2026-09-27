@@ -31,11 +31,25 @@ export function isLoginError(value: unknown): value is LoginError {
   return typeof value === "string" && value in LOGIN_ERROR_MESSAGES;
 }
 
-/** A same-origin path to return to after sign-in, or null if `value` is not one. */
+// Control characters are stripped by browsers ("/\t/evil" becomes "//evil"); backslashes are
+// treated as slashes. Either can turn a path into another origin, so refuse them outright.
+const UNSAFE_URL_CHARS = /[\u0000-\u001F\u007F\\]/;
+const PARSE_BASE = "http://n.invalid";
+
+/**
+ * A same-origin path (pathname + query) to return to after sign-in, or null if `value` is not
+ * one. Never redirect to a user-supplied path without passing it through this.
+ */
 export function safeNextPath(value: unknown): string | null {
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return null;
-  if (value.includes("\\") || isPublicPath(value.split("?")[0]!)) return null;
-  return value;
+  if (typeof value !== "string" || !value.startsWith("/") || UNSAFE_URL_CHARS.test(value)) return null;
+  let url: URL;
+  try {
+    url = new URL(value, PARSE_BASE);
+  } catch {
+    return null;
+  }
+  if (url.origin !== PARSE_BASE || isPublicPath(url.pathname)) return null;
+  return `${url.pathname}${url.search}`;
 }
 
 export function loginPath(params: { next?: string; error?: LoginError } = {}): string {

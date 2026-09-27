@@ -7,6 +7,7 @@ import { requestMagicLink, signIn } from "./support/auth";
 import { withRunDatabase } from "./support/db";
 import { countEmailsTo } from "./support/mailpit";
 import { run } from "./support/run";
+import { passwordSession, useSessionInBrowser } from "./support/supabase";
 
 test.describe("access control", () => {
   test("anonymous visitors are sent to sign in from every page, and API routes return 401", async ({
@@ -39,6 +40,11 @@ test.describe("access control", () => {
   test("the owner (seeded from OWNER_EMAIL) signs in with a magic link", async ({ page }) => {
     await signIn(page, run.ownerEmail);
     await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+
+    // Session cookies are never readable from page scripts.
+    const authCookies = (await page.context().cookies()).filter((cookie) => cookie.name.startsWith("sb-"));
+    expect(authCookies.length).toBeGreaterThan(0);
+    expect(authCookies.every((cookie) => cookie.httpOnly)).toBe(true);
 
     const me = await page.request.get("/api/me");
     expect(me.status()).toBe(200);
@@ -74,6 +80,30 @@ test.describe("access control", () => {
     await page.goto(link);
     await expect(page).toHaveURL("/login?error=link-invalid");
     await expect(page.getByText(/invalid or has expired/)).toBeVisible();
+  });
+
+  test("a session that did not come from a magic link (a password sign-in) gets no access", async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    const email = `e2e-password-${run.runId}@example.test`;
+    await withRunDatabase((sql) => addAppUser(sql, email, "manager"));
+    await useSessionInBrowser(context, await passwordSession(email, baseURL!), baseURL!);
+
+    expect((await page.request.get("/api/me")).status()).toBe(401);
+    await page.goto("/overview");
+    await expect(page).toHaveURL("/login");
+    await expect(page.getByRole("button", { name: "Email me a sign-in link" })).toBeVisible();
+  });
+
+  test("the login page never redirects a signed-in user off-site via ?next=", async ({ page }) => {
+    await signIn(page, run.ownerEmail);
+    // A tab is stripped by browsers, so "/<tab>/evil.example" would become "//evil.example".
+    await page.goto("/login?next=/%09/evil.example");
+    await expect(page).toHaveURL("/overview");
+    await page.goto("/login?next=/doctors%3Frange%3Dtoday");
+    await expect(page).toHaveURL("/doctors?range=today");
   });
 
   test("a manager cannot open owner-only pages", async ({ page }) => {

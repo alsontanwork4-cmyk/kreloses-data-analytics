@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { loadLocalEnv } from "./scripts/env";
 import { databaseUrl } from "./src/db/admin";
 
 /**
@@ -13,6 +14,9 @@ import { databaseUrl } from "./src/db/admin";
  * Needs: `supabase start` (shared stack), `.env.local` with the Supabase URL + publishable key,
  * and once per machine `npx playwright install --only-shell chromium`.
  */
+
+// The tests talk to Supabase Auth directly too, so they need the same URL/key as the app.
+loadLocalEnv();
 
 // Values are put on process.env so the test workers (child processes) see the same run.
 process.env.E2E_RUN_ID ||= randomBytes(4).toString("hex");

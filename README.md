@@ -58,7 +58,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | Variable | Used for |
 | --- | --- |
 | `DATABASE_URL` | Direct Postgres for all app data (server only) |
-| `DATABASE_PREPARE` | `false` behind Supabase's transaction pooler (port 6543) |
+| `DATABASE_PREPARE` | Prepared statements; defaults to `false` on port 6543 (Supabase's transaction pooler), `true` otherwise |
 | `DATABASE_POOL_MAX` | Connections per server instance (default 3) |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase API URL (Auth only) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key (`sb_publishable_…`) |
@@ -105,12 +105,20 @@ in a React component or an MCP handler.
 ### Auth and access
 
 Supabase Auth (magic link) proves who someone is; the `app_users` allow-list (roles `owner` |
-`manager`) decides whether they get in. Enforcement happens twice:
+`manager`) decides whether they get in. Only sessions that came from an emailed link count:
+`sessionEmail()` (`src/auth/supabase-shared.ts`) verifies the JWT with `getClaims()` and requires
+the `amr` claim to contain `otp` (our token-hash link) or `magiclink` (the PKCE fallback). A
+password, OAuth or anonymous session for an invited email is treated as signed out — Supabase's
+public Auth API would otherwise let someone register a password for an invited email.
+Enforcement happens twice:
 
 1. **The proxy** (`src/proxy.ts` → `src/auth/proxy-gate.ts`) runs on every request except static
    files. It refreshes the session cookie and checks the allow-list: anonymous → `/login?next=…`
    (pages) or `401` (API); signed in but not allow-listed → signed out, `/login?error=access-denied`
-   or `403`. New pages and API routes are protected automatically.
+   or `403`. New pages and API routes are protected automatically. The matcher skips Next.js
+   internals and paths ending in a static-file extension (`.svg`, `.png`, `.jpg`, `.jpeg`,
+   `.gif`, `.webp`, `.ico`, `.txt`), so a route handler at such a path relies on its in-code
+   guard alone.
 2. **In code, always** (defence in depth, and to get the role):
 
 | Where | Call | On failure |
@@ -127,8 +135,13 @@ Supabase Auth (magic link) proves who someone is; the `app_users` allow-list (ro
 connection so they can be tested against a throwaway database.
 
 Public routes are listed in `PUBLIC_PATHS` (`src/auth/paths.ts`): today `/login` and `/auth/*`.
-Anything added there (e.g. a future `/api/mcp` with a bearer token, `/api/cron` with a secret)
-must authenticate itself.
+Anything added there (e.g. a future `/api/mcp` with a bearer token, `/api/cron` with a secret) is
+the one exception to "wrap every route handler in `withUser`/`withRole`": it must authenticate
+itself.
+
+Never redirect to a user-supplied path without `safeNextPath()` (`src/auth/paths.ts`): it refuses
+control characters and backslashes (browsers strip tabs/newlines, so `/\t/evil.example` becomes
+`//evil.example`), resolves the path, and returns only a same-origin pathname + query.
 
 The owner row is upserted from `OWNER_EMAIL` the first time the server checks access for a
 signed-in email (and by `db:create-dev`), so a fresh production database needs no manual seeding.
@@ -143,11 +156,18 @@ Supabase's default template.
 
 - App data goes through **`getDb()`** (`@/db/client`, server only) — postgres.js over
   `DATABASE_URL`. Supabase JS is used for Auth only; never read app tables via the Data API.
+- `DATABASE_URL` on port 6543 (Supabase's transaction pooler) turns prepared statements off
+  automatically (`src/db/env.ts`); `DATABASE_PREPARE` overrides.
 - Connection behaviour is defined once in `createSql()` (`src/db/sql.ts`): result columns are
   camelCased (`created_at` → `createdAt`; write SQL in snake_case), `date` columns come back as
   `'YYYY-MM-DD'` strings, `numeric`/`bigint`/`count(*)` come back as strings (cast deliberately,
   e.g. `count(*)::int`), and the session time zone is never relied on — use
   `at time zone 'Asia/Kuala_Lumpur'` explicitly.
+- **Money** (RM): columns are `numeric(12,2)`. Sums, discount spreads and other money arithmetic
+  happen in SQL (`numeric` is exact); values come back as strings like `'1234.50'`. If JS must do
+  money maths, convert to integer sen first (`Math.round(Number(value) * 100)` on a 2-dp string)
+  and back at the end. Never do floating-point arithmetic on money. Format for display only at the
+  edge (components/CSV).
 
 ### Migrations
 
@@ -155,8 +175,18 @@ Supabase's default template.
   `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`. A fresh timestamp avoids collisions between
   parallel tickets. **Never edit a migration that is already on `main`.**
 - Plain Postgres only. Tests apply every migration to a fresh, empty database, so never reference
-  the `auth`, `storage` or `extensions` schemas or Supabase-only extensions. Grants/revokes on the
-  cluster-wide roles `anon`, `authenticated`, `service_role` are fine.
+  the `auth` or `storage` schemas or Supabase-only extensions. Grants/revokes on the cluster-wide
+  roles `anon`, `authenticated`, `service_role` are fine.
+- Extensions: install contrib extensions into the `extensions` schema with exactly these two lines,
+  which work both in a fresh test database and in hosted Supabase (where the schema already exists):
+
+  ```sql
+  create schema if not exists extensions;
+  create extension if not exists pg_trgm with schema extensions;
+  ```
+
+  The `postgres` role's search_path includes `extensions` locally and on Supabase, so functions
+  such as `similarity()` can be called unqualified (covered by `src/db/testing.test.ts`).
 - App tables are server-only: `alter table … enable row level security;` with **no policies**, and
   `revoke all on table … from anon, authenticated;` (the Supabase advisor's "RLS enabled, no
   policy" notice is expected). `supabase/config.toml` also turns off auto-exposing new tables.
@@ -183,9 +213,12 @@ Supabase's default template.
   });
   ```
 
-  `createTestDatabase()` → `{ name, url, sql, close() }` gives you one outside the Vitest hooks.
-  Databases are uniquely named, so several worktrees can run `npm test` at once; the global setup
-  also drops `kx_test_*` databases older than two hours that crashed runs left behind.
+  `useTestDatabase()` exposes `sql`, `url` and `name`; `createTestDatabase()` →
+  `{ name, url, sql, close() }` gives you one outside the Vitest hooks. Databases are uniquely
+  named, so several worktrees can run `npm test` at once. The global setup also drops databases
+  that crashed runs left behind — only ones with the exact generated name shape
+  (`kx_test_<base36 ms>_<8 hex>`), older than two hours, and with nobody connected; the e2e setup
+  does the same for `kx_e2e_*`.
 - `server-only` imports are stubbed in Vitest, so server modules can be tested directly.
 
 ### E2E tests
@@ -233,10 +266,11 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   `icon`, `section: "analytics" | "admin"`, optional minimum `role`). Add one entry per new
   top-level page; the sidebar, mobile menu and e2e tests pick it up. Owner-only entries are hidden
   from managers, but the page must still call `requireRole("owner")`.
-- Page template: `requireUser()`, `parseFilter(await searchParams)`, then
-  `<PageShell title description filters>` (`filters` shows the global filter bar — analytics pages
-  only). Empty states: `<EmptyState>` and `<NoSalesYet user filter what>` in
-  `src/components/empty-state.tsx`.
+- Page template: `const user = await requireUser()`, `const filterState = parseFilter(await searchParams)`,
+  then `<PageShell title description filter={filterState}>` (passing `filter` shows the global
+  filter bar — analytics pages only — built from the same server-resolved state the page queries
+  with, so labels and data never disagree). Pass `filterState.filter` to the Analytics Service.
+  Empty states: `<EmptyState>` and `<NoSalesYet user filter what>` in `src/components/empty-state.tsx`.
 - Nav links keep the current filter params, so the date range and branch survive page switches.
 - Mobile first (the owner checks numbers on a phone): the shell switches to a top bar + slide-in
   menu below `md`, and the e2e suite asserts no horizontal scrolling at phone width.
@@ -256,6 +290,9 @@ When a hosted Supabase project and Vercel are set up:
 - Use the new API keys (`sb_publishable_…`); JWTs signed with asymmetric keys are verified locally
   by `getClaims()`.
 - Set `OWNER_EMAIL`.
+- **Confirm email must stay ON in hosted Supabase; never `supabase config push` the local
+  `config.toml`.** (Locally it is on too.) The app also refuses non-magic-link sessions, but
+  confirmation stops password sign-ups from getting a session at all.
 
 Known limitation: Supabase Auth itself will create an `auth.users` row for any email that calls its
 API directly with the publishable key; such users still get no access (the allow-list gate), but a

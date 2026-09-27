@@ -7,7 +7,7 @@ import { lookupAccess } from "./access";
 import type { Access } from "./allow-list";
 import { FORBIDDEN_PATH, loginPath } from "./paths";
 import { hasRole, type AppUser, type Role } from "./roles";
-import { createSupabaseServerClient, verifiedEmail } from "./supabase";
+import { createSupabaseServerClient, sessionEmail } from "./supabase";
 
 /**
  * Who is making this request: `anonymous`, `denied` (signed in but not on the allow-list) or
@@ -15,7 +15,7 @@ import { createSupabaseServerClient, verifiedEmail } from "./supabase";
  */
 export const getAccess = cache(async (): Promise<Access> => {
   const supabase = await createSupabaseServerClient();
-  return lookupAccess(await verifiedEmail(supabase));
+  return lookupAccess(await sessionEmail(supabase));
 });
 
 /** The signed-in, allow-listed user, or null. */

@@ -1,21 +1,22 @@
 import type { ReactNode } from "react";
 
 import { GlobalFilterBar } from "@/components/filter-bar/global-filter-bar";
+import type { FilterState } from "@/filters";
 
 /**
  * Standard page frame: title, optional description, the global filter bar (analytics pages pass
- * `filters`), then the page content.
+ * the `filter` state they resolved with `parseFilter(await searchParams)`), then the page content.
  */
 export function PageShell({
   title,
   description,
-  filters = false,
+  filter,
   actions,
   children,
 }: {
   title: string;
   description?: string;
-  filters?: boolean;
+  filter?: FilterState;
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -28,7 +29,7 @@ export function PageShell({
         </div>
         {actions}
       </div>
-      {filters ? <GlobalFilterBar /> : null}
+      {filter ? <GlobalFilterBar state={filter} /> : null}
       {children}
     </div>
   );

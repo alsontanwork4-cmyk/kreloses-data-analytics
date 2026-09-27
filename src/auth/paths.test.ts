@@ -8,10 +8,21 @@ describe("safeNextPath (where to return after sign-in)", () => {
     expect(safeNextPath("/doctors?range=today")).toBe("/doctors?range=today");
   });
 
+  it("returns the normalised path and query", () => {
+    expect(safeNextPath("/daily/../doctors?range=today#top")).toBe("/doctors?range=today");
+  });
+
   it.each([
     ["another origin", "https://evil.example/x"],
     ["a protocol-relative URL", "//evil.example/x"],
     ["a backslash trick", "/\\evil.example"],
+    // Browsers strip tab/newline from URLs, turning these into //evil.example.
+    ["a tab before a second slash", "/\t/evil.example"],
+    ["a newline before a second slash", "/\n/evil"],
+    ["a CRLF before a second slash", "/\r\n/evil"],
+    ["a NUL character", "/\u0000/evil"],
+    ["a DEL character", "/\u007f/evil"],
+    ["a percent-encoded tab, once decoded by the query string", new URLSearchParams("next=/%09/evil.example").get("next")],
     ["the login page itself", "/login?next=/overview"],
     ["an auth route", "/auth/confirm?code=x"],
     ["a relative path", "doctors"],

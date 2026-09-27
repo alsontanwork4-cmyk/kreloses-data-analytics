@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Retention" };
 
 export default async function RetentionPage({ searchParams }: PageProps<"/retention">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Retention"
       description="New vs returning customers, yearly cohorts and 90-day return rates per doctor."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Retention figures" icon={Repeat} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Retention figures" icon={Repeat} />
     </PageShell>
   );
 }

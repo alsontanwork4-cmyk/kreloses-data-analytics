@@ -10,14 +10,14 @@ export const metadata: Metadata = { title: "Doctors" };
 
 export default async function DoctorsPage({ searchParams }: PageProps<"/doctors">) {
   const user = await requireUser();
-  const { filter } = parseFilter(await searchParams);
+  const filterState = parseFilter(await searchParams);
   return (
     <PageShell
       title="Doctors"
       description="Revenue, AOV per customer, invoices and share of revenue for each doctor, by branch."
-      filters
+      filter={filterState}
     >
-      <NoSalesYet user={user} filter={filter} what="Doctor rankings" icon={Stethoscope} />
+      <NoSalesYet user={user} filter={filterState.filter} what="Doctor rankings" icon={Stethoscope} />
     </PageShell>
   );
 }

@@ -21,10 +21,21 @@ describe("test database harness", () => {
     expect(row).toEqual({ saleDate: "2026-09-28" });
   });
 
+  it("supports the documented extensions pattern, unqualified like on hosted Supabase", async () => {
+    // README "Migrations": the same two lines work here and in hosted Supabase.
+    await db.sql.unsafe(`
+      create schema if not exists extensions;
+      create extension if not exists pg_trgm with schema extensions;
+    `);
+    const [row] = await db.sql<{ score: number }[]>`select similarity('consult', 'consult') as score`;
+    expect(row!.score).toBe(1);
+  });
+
   it("isolates databases from each other and drops them on close", async () => {
     const other = await createTestDatabase();
     try {
-      expect(other.name).not.toBe(db.url);
+      expect(other.name).not.toBe(db.name);
+      expect(other.url).not.toBe(db.url);
       await other.sql`create table only_here (id int)`;
       const [{ exists }] = await db.sql<{ exists: boolean }[]>`
         select to_regclass('public.only_here') is not null as exists
