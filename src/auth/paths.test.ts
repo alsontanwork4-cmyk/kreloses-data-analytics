@@ -23,6 +23,13 @@ describe("safeNextPath (where to return after sign-in)", () => {
     ["a NUL character", "/\u0000/evil"],
     ["a DEL character", "/\u007f/evil"],
     ["a percent-encoded tab, once decoded by the query string", new URLSearchParams("next=/%09/evil.example").get("next")],
+    // Dot segments normalise away, leaving a protocol-relative "//evil.example".
+    ["a parent segment before a second slash", "/..//evil.example"],
+    ["a current segment before a second slash", "/.//evil"],
+    ["a parent segment after a real segment", "/a/..//evil"],
+    ["an encoded parent segment", "/%2e%2e//evil.example"],
+    ["an encoded parent segment, once decoded by the query string", new URLSearchParams("next=/%2e%2e//evil.example").get("next")],
+    ["a parent segment inside the dashboard", "/overview/..//evil.example"],
     ["the login page itself", "/login?next=/overview"],
     ["an auth route", "/auth/confirm?code=x"],
     ["a relative path", "doctors"],

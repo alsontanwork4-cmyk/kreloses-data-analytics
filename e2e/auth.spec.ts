@@ -100,7 +100,12 @@ test.describe("access control", () => {
   test("the login page never redirects a signed-in user off-site via ?next=", async ({ page }) => {
     await signIn(page, run.ownerEmail);
     // A tab is stripped by browsers, so "/<tab>/evil.example" would become "//evil.example".
-    await page.goto("/login?next=/%09/evil.example");
+    for (const next of ["/%09/evil.example", "/..//evil.example", "/%2e%2e//evil.example", "/overview/..//evil.example"]) {
+      const response = await page.request.get(`/login?next=${next}`, { maxRedirects: 0 });
+      expect(response.status(), next).toBe(307);
+      expect(response.headers().location, next).toBe("/overview");
+    }
+    await page.goto("/login?next=/..//evil.example");
     await expect(page).toHaveURL("/overview");
     await page.goto("/login?next=/doctors%3Frange%3Dtoday");
     await expect(page).toHaveURL("/doctors?range=today");

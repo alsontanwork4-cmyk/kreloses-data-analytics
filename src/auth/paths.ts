@@ -36,20 +36,35 @@ export function isLoginError(value: unknown): value is LoginError {
 const UNSAFE_URL_CHARS = /[\u0000-\u001F\u007F\\]/;
 const PARSE_BASE = "http://n.invalid";
 
-/**
- * A same-origin path (pathname + query) to return to after sign-in, or null if `value` is not
- * one. Never redirect to a user-supplied path without passing it through this.
- */
-export function safeNextPath(value: unknown): string | null {
-  if (typeof value !== "string" || !value.startsWith("/") || UNSAFE_URL_CHARS.test(value)) return null;
-  let url: URL;
+/** A single leading slash (not `//`, which is protocol-relative) and no unsafe characters. */
+function looksLikeLocalPath(value: string): boolean {
+  return value.startsWith("/") && !value.startsWith("//") && !UNSAFE_URL_CHARS.test(value);
+}
+
+/** Resolves `value` against a fixed origin; the same-origin pathname + query, or null. */
+function normalisePath(value: string): string | null {
   try {
-    url = new URL(value, PARSE_BASE);
+    const url = new URL(value, PARSE_BASE);
+    return url.origin === PARSE_BASE ? `${url.pathname}${url.search}` : null;
   } catch {
     return null;
   }
-  if (url.origin !== PARSE_BASE || isPublicPath(url.pathname)) return null;
-  return `${url.pathname}${url.search}`;
+}
+
+/**
+ * A same-origin path (pathname + query) to return to after sign-in, or null if `value` is not
+ * one. Never redirect to a user-supplied path without passing it through this.
+ *
+ * Both the input and the normalised output are checked: dot segments normalise away, so
+ * "/..//evil.example" would otherwise come out as the protocol-relative "//evil.example". The
+ * output must also be stable (normalising it again changes nothing).
+ */
+export function safeNextPath(value: unknown): string | null {
+  if (typeof value !== "string" || !looksLikeLocalPath(value)) return null;
+  const out = normalisePath(value);
+  if (out === null || !looksLikeLocalPath(out) || normalisePath(out) !== out) return null;
+  if (isPublicPath(out.split("?")[0]!)) return null;
+  return out;
 }
 
 export function loginPath(params: { next?: string; error?: LoginError } = {}): string {
