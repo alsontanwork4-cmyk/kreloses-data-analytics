@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { requireRole } from "@/auth/session";
 import { connectionsContext } from "@/connections/context";
+import { ConnectionBusy } from "@/connections/lock";
 import {
   deleteConnection,
   saveConnection,
@@ -12,6 +13,9 @@ import {
   type ConnectionStatus,
 } from "@/connections/service";
 import { getDb } from "@/db/client";
+import { runSync } from "@/sync";
+import { syncDeps, syncTimeBudgetMs } from "@/sync/context";
+import { describeSyncResult, monthLabel, monthRange } from "@/sync/months";
 
 /**
  * Connections page actions. Each one re-checks that the caller is the owner (Server Actions are
@@ -62,16 +66,46 @@ export async function saveConnectionAction(
     label: connection.label,
     testStatus: connection.status,
     message:
-      connection.status === "ok"
-        ? `Saved “${connection.label}”. The login works and can see ${branches} ${branches === 1 ? "branch" : "branches"}.`
-        : `Saved “${connection.label}”, but the login test failed: ${connection.lastError ?? "unknown error"}`,
+      result.loginTestSkipped === "busy"
+        ? `Saved “${connection.label}”. A sync is using this login right now, so it was not tested; use “Test again” when the sync has finished.`
+        : connection.status === "ok"
+          ? `Saved “${connection.label}”. The login works and can see ${branches} ${branches === 1 ? "branch" : "branches"}.`
+          : `Saved “${connection.label}”, but the login test failed: ${connection.lastError ?? "unknown error"}`,
   };
 }
 
-export async function retestConnectionAction(formData: FormData): Promise<void> {
+/** "Test again". `busy` when a sync is using the login (the app never runs two Kreloses sessions for one login). */
+export type RetestState = { status: "idle" } | { status: "busy"; message: string };
+
+export async function retestConnectionAction(_previous: RetestState, formData: FormData): Promise<RetestState> {
   await requireRole("owner");
-  await testConnection(connectionsContext(), String(formData.get("id") ?? ""));
+  try {
+    await testConnection(connectionsContext(), String(formData.get("id") ?? ""));
+  } catch (error) {
+    if (error instanceof ConnectionBusy) return { status: "busy", message: `${error.message} Try again when it has finished.` };
+    throw error;
+  }
   revalidatePath(PATH);
+  return { status: "idle" };
+}
+
+export type SyncNowState = { status: "idle" } | { status: "done"; tone: "ok" | "warning" | "error"; message: string };
+
+/**
+ * "Sync now": reads one month of this connection's Kreloses sales (the Sync Engine's manual mode).
+ * Takes a few seconds per 500 invoices; the page's `maxDuration` allows for the time budget.
+ */
+export async function syncNowAction(_previous: SyncNowState, formData: FormData): Promise<SyncNowState> {
+  await requireRole("owner");
+  const month = String(formData.get("month") ?? "");
+  const range = monthRange(month);
+  if (!range) return { status: "done", tone: "error", message: "Choose a month to sync." };
+  const result = await runSync(syncDeps(), String(formData.get("id") ?? ""), "manual", {
+    dateRange: range,
+    timeBudgetMs: syncTimeBudgetMs(),
+  });
+  revalidatePath(PATH);
+  return { status: "done", ...describeSyncResult(result, monthLabel(month)) };
 }
 
 export async function deleteConnectionAction(formData: FormData): Promise<void> {

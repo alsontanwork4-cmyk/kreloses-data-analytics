@@ -20,8 +20,11 @@ import { SYNTHETIC_ACCOUNTS, type FakeAccount } from "./synthetic-accounts";
  * one, a page load is redirected to the www login page and an AJAX call (X-Requested-With) gets
  * ASP.NET Identity's HTTP 200 + `X-Responded-JSON` 401.
  *
- * Extending it (tickets #4, #5): add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in
- * a test), backed by fixture files; sea routes get the login check for free. Use `intercept()` in
+ * It also serves the Sale List (`POST /Sale/Get`, #4) from `__fixtures__/sale-list-rows.json`
+ * (filtered, newest first, paged; `saleRows` is mutable).
+ *
+ * Extending it (ticket #5): add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in a
+ * test), backed by fixture files; sea routes get the login check for free. Use `intercept()` in
  * a test to inject one-off responses (errors, odd shapes) and `expireSessions()` for expiry.
  */
 

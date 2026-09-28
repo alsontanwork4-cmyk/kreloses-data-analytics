@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { CLINIC_TIME_ZONE } from "@/filters";
 import { cn } from "@/lib/utils";
 
-import { ConnectionActions } from "./connection-actions";
+import { ConnectionActions, type MonthOption } from "./connection-actions";
 
 const STATUS: Record<ConnectionStatus, { label: string; className: string }> = {
   ok: { label: "Connected", className: "bg-emerald-600/10 text-emerald-800 dark:text-emerald-300" },
@@ -24,7 +24,7 @@ const TESTED_AT = new Intl.DateTimeFormat("en-GB", {
 });
 
 /** One Kreloses connection: what it is, whether its login works, and which branches it can see. */
-export function ConnectionCard({ connection }: { connection: ConnectionSummary }) {
+export function ConnectionCard({ connection, months }: { connection: ConnectionSummary; months: MonthOption[] }) {
   const status = STATUS[connection.status];
   const titleId = `connection-${connection.id}-title`;
   return (
@@ -80,7 +80,7 @@ export function ConnectionCard({ connection }: { connection: ConnectionSummary }
         </p>
       ) : null}
 
-      <ConnectionActions connection={{ id: connection.id, label: connection.label, email: connection.email }} />
+      <ConnectionActions connection={{ id: connection.id, label: connection.label, email: connection.email }} months={months} />
     </article>
   );
 }

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { getDb } from "@/db/client";
+
 import type { FilterOption } from "./types";
 
 /**
@@ -7,7 +9,7 @@ import type { FilterOption } from "./types";
  * client components import). Each list is its own function so the ticket that owns the data
  * swaps one body without touching the UI:
  *
- * - branches: will read the `branches` table (ticket #4). Empty until branches exist.
+ * - branches: the `branches` table (created by the sync, #4). Empty until the first sync.
  * - doctors: will read `staff` (ticket #5). While undefined, the doctor selector is hidden.
  */
 export interface FilterOptions {
@@ -20,8 +22,9 @@ export async function getFilterOptions(): Promise<FilterOptions> {
   return doctors ? { branches, doctors } : { branches };
 }
 
+/** Every synced branch, by name; `id` is `branches.id` (what `GlobalFilter.branchIds` holds). */
 export async function listBranchOptions(): Promise<FilterOption[]> {
-  return [];
+  return getDb()<FilterOption[]>`select id::text as id, name as label from branches order by lower(name), id`;
 }
 
 /** `undefined` hides the doctor selector; return a list (even empty) to show it. */

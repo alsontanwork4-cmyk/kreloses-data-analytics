@@ -73,3 +73,67 @@ _Avoid_: Query params, slicer
 A named, relative date range: Today, This week, Month to date, Last month (the whole previous
 calendar month), Year to date. All except Last month end today. A custom range has explicit dates.
 _Avoid_: Period (reserved for comparisons such as "previous period")
+
+**Previous period**:
+The same number of clinic days immediately before the selected period (1–30 Sep is compared with
+2–31 Aug). Every KPI is compared with it and with the same period last year.
+
+**Same period last year**:
+The same calendar dates one year earlier (29 Feb becomes 28 Feb).
+
+## Sales and metrics
+
+Every metric is defined once, in the Analytics Service (`src/analytics`); `METRIC_DEFINITIONS`
+there holds the wording the dashboard and Claude show.
+
+**Invoice**:
+One Kreloses sale (Kreloses calls it a *sale*; people see its number, e.g. INV-000123). It belongs to
+one branch, usually one customer, and has a status.
+_Avoid_: Order, transaction, bill
+
+**Active / cancelled**:
+An invoice's status. Only active invoices count in any metric; cancelled (or voided) ones are kept
+but never counted. Kreloses hides cancelled sales by default, so the sync asks for them explicitly
+to notice cancellations.
+
+**Customer**:
+The Kreloses customer (the pet owner) on an invoice. A walk-in invoice has no customer.
+_Avoid_: Client, patient (the patient is the pet)
+
+**Revenue**:
+The net amount (after discounts) of active invoices on clinic days in the period. Refunds are not
+deducted; a negative (return) invoice reduces it. Until line items are synced (#5) it is the
+invoice's net amount; afterwards it is the sum of credited lines, which add up to the same total.
+_Avoid_: Sales (ambiguous with invoices), turnover, takings
+
+**Invoices (count)**:
+The number of active invoices in the period.
+
+**Customers (count)**:
+Distinct customers with at least one active invoice in the period: once overall, and once per branch
+in a branch breakdown (a customer who visited both branches counts in each). Walk-ins are not
+customers.
+
+**AOV per customer**:
+Revenue divided by customers, rounded to the sen. Per branch, the branch's revenue ÷ the branch's
+customers; per doctor (later), the doctor's revenue ÷ the customers they billed.
+_Avoid_: Average order value per invoice (that is revenue ÷ invoices, a different number)
+
+**Change**:
+A KPI minus its value in a comparison period; as a percentage, the change ÷ the comparison value,
+to one decimal place, and none when the comparison value is zero.
+
+## Syncing
+
+**Sync run**:
+One pass of the sync for one connection over a range of clinic days: reads the Kreloses sale list
+and stores its invoices, branches and customers. Every run is logged, with its counts (invoices
+read / new / changed / unchanged) and, if it failed, why. Kinds: *Sync now* (manual, one month
+chosen by the owner), *nightly* and *history backfill* (later). Outcomes: succeeded, stopped early
+(hit its time limit; it records where it got to) or failed.
+_Avoid_: Job, import, refresh
+
+**Data as of**:
+For a branch, when the latest successful sync run that read that branch finished. Changes made in
+Kreloses after that are not in the numbers yet.
+_Avoid_: Last updated, last refreshed
