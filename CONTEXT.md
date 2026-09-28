@@ -176,6 +176,33 @@ Doctors by revenue for the global filter, with AOV per customer, invoices, items
 share of revenue, optionally split by branch. Other staff, generic accounts, No staff on line and
 line items not synced yet are shown as separate groups, never ranked with doctors.
 
+**Discount**:
+What a credited line was charged below its price: gross (quantity × unit price, to the sen) minus
+what it was credited with (after its own item discount and its share of the invoice's discount
+lines and of any gap to the invoice's net). A doctor's discount is the sum over the lines credited to
+them, so an invoice discount on a sale with two doctors is shared between them exactly as its
+revenue is. Only sold lines count: **return** lines (negative quantity × unit price) are left out of
+every discount figure — they already reduce revenue — so an invoice with only returns (or with no
+sold line at all, e.g. only a discount line) is left out entirely. Refunds are not discounts. Sales
+whose line items are not synced yet have no known gross and are left out (pages say how many).
+_Avoid_: Markdown, rebate
+
+**Discount rate**:
+Discount ÷ gross (sold lines only), as a percentage; none when gross is zero.
+
+**Discounted invoice**:
+For a doctor (or group), an invoice with a line credited to them on which their share of the
+discount is over RM 0.05 (exactly 5 sen is not). **Share of invoices discounted** = their discounted
+invoices ÷ their invoices.
+
+**Discount type**:
+A discount name as used on sales: an **item discount** (on one line, e.g. "10% DISCOUNT") or a
+**discount line** (on the whole invoice, e.g. "RM50 LOYALTY"); names that differ only in case or
+whitespace are one type ("5%DISCOUNT" = "5% discount"). Whatever else the lines differ from the
+invoice's net by, with no discount line saying why, shows as the **other difference to the invoice
+net** (it can be negative), so the types add up to the total discount.
+_Avoid_: Promo, coupon (Kreloses may call them vouchers; the name is shown as written)
+
 **Change**:
 A KPI minus its value in a comparison period; as a percentage, the change ÷ the comparison value,
 to one decimal place, and none when the comparison value is zero.

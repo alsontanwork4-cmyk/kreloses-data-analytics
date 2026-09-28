@@ -378,8 +378,10 @@ session.getHtml(path): Promise<string>                             // page load 
   the login page (`session.getHtml`) — raises **`PageMissing`**, a subclass of `LayoutChanged`
   (`reason` `not_found` | `redirected`, `status`), so the Sync Engine can skip one missing invoice
   while treating a changed page as fatal. UNVERIFIED until the live check: `Totals` key names, that `Amount`
-  is after the item discount, the discount line's sign, and how refunds show in
-  `RefundInfo`/`CreditNoteInfo` (kept raw in `invoices.raw_detail` for #6).
+  is after the item discount, the discount line's sign, how refunds show in
+  `RefundInfo`/`CreditNoteInfo` (kept raw in `invoices.raw_detail` for #6), and whether item lines
+  ever carry an invoice-level discount's `DiscountName`/`DiscountAmount` as well as the type-55 line
+  (would double-count that type's row on the Discounts page; the total discount stays exact).
 - **`listStaff`** (`src/kreloses/staff.ts`): full staff names from the Sale List filter template's
   Staff filter (shared with `listLocations`); no Staff filter → `LayoutChanged` (the Sync Engine
   records it as a warning and carries on); an empty one (e.g. loaded on demand) → `[]` (names on
@@ -560,9 +562,26 @@ Existing credited lines then need re-deriving: bump `header_version` for the aff
 turn pending and the next sync re-reads them), or add a re-credit step that recomputes
 `credited_lines` from stored `invoice_lines`.
 
-**#12 (discounts)**: per line, discount = `gross_amount − credited_amount` (independent of the spread
-rule); discount types and amounts come from `invoice_lines` with `item_type = 55` and
-`discount_name` / `discount_amount` on item lines.
+**Discounts (#12, `src/analytics/discounts.ts`)**: per SOLD line (a credited item line with
+`gross_amount >= 0`: `soldLine()`), discount = `gross_amount − revenue` (the credited amount: after the line's item discount AND its share of the invoice's
+discount lines/gap, so a multi-doctor invoice's discount is shared by #5's spread rule — nothing
+re-spreads it). Per doctor: discount = Σ gross − Σ charged, rate = discount ÷ gross, an invoice is
+"discounted" for them when THEIR share of its discount is > RM 0.05 (`DISCOUNTED_INVOICE_THRESHOLD`).
+Return lines (gross < 0) are left out of every discount figure in both functions — totals, rate,
+counts, types, difference row — so a return-only invoice is out entirely (orchestrator decision:
+counted, a discounted return showed as a positive "discount" at a negative rate); the rate is null
+when gross ≤ 0. Pending rows and the unitemised remainder (e.g. a sale with only a discount line)
+have no gross and are left out too (`pendingLineItems` says how many are pending). **Refunds are not discounts**: charged is the pre-refund amount — true today because the
+revenue base does not deduct refunds; if #6 ever deducts them, discounts must add the refund share
+back (the refund test in `discounts.test.ts` fails until then). Discount types come from
+`invoice_lines`: item discounts (`discount_name`, or any line charged ≠ gross; amount = gross −
+amount), discount lines (`item_type = 55`, amount = −`amount`) and one "other difference to the
+invoice net" row (Σ line amount − credited not explained by discount lines; can be negative), so
+without a doctor filter the types add up exactly to the total discount. Names are grouped by
+`lower(name)` with ALL whitespace removed ("5%DISCOUNT" = "5% discount"), shown as written most often.
+Live check: do item lines ever carry an invoice-level discount's DiscountName/DiscountAmount as well
+as the type-55 line? (That would double-count that type's row; the total stays exact.) Under a doctor filter an invoice-level type counts in the
+proportion the spread gave the selected doctors' lines, rounded per type.
 
 ### Sync Engine (`src/sync/`)
 
@@ -649,6 +668,11 @@ getPendingLineItems(sql, { dateFrom, dateTo, branchIds? }): Promise<{ invoices, 
   // sales whose line items are not synced yet (doctor filter ignored on purpose): pages show
   // <PendingLineItemsNote> (src/components/pending-line-items-note.tsx) under a doctor filter
 getStaffAliasRevenue(sql, { dateFrom, dateTo, branchIds? }): Promise<Record<aliasId, Money>>   // Settings → Doctors
+getDoctorDiscounts(sql, filter): Promise<DoctorDiscounts>   // #12, see "Discounts" above
+  // { period, total: DiscountFigures, doctors: StaffDiscountRow[] (by discount desc), groups: { other, generic: StaffDiscountGroup, noStaff },
+  //   pendingLineItems }   DiscountFigures = { gross, charged, discount: Money, discountRatePercent, invoices, discountedInvoices, discountedInvoicesPercent }
+getDiscountTypes(sql, filter): Promise<DiscountTypes>
+  // { period, total: Money, types: { key, label, appliedTo: "item" | "invoice" | "both" | "difference", lines | null, invoices, amount, sharePercent }[] }
 METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); #17's MCP answers quote them
 ```
 
@@ -725,6 +749,9 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
 - Doctors (`/doctors`, #5): the ranking (`?split=branch` for the per-branch view — a page-specific
   param the filter bar keeps), a bar chart of revenue by doctor, the "not in the ranking" groups, and
   each doctor linked to `/doctors/<staff id>` (a placeholder with the filter bar; #10 builds it).
+  Discounts (`/discounts`, #12): totals (discount, rate, invoices discounted), a bar chart of
+  discount by doctor, the per-doctor table, the "not in the ranking" groups and the discount types
+  (each a `<DataTable>` with CSV); sales with line items not synced yet are named in a note.
   Settings → Doctors (`/settings/doctors`, owner only): every name on lines with its match and
   revenue for the URL's period, a form to credit it to another staff member, and each staff
   member's kind; changes revalidate the whole dashboard.

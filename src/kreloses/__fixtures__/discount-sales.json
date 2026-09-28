@@ -1,0 +1,1036 @@
+{
+  "comment": "SYNTHETIC discount edge cases for the Discounts page (#12): extra Sale List rows and Sale Overview models for June-July 2026, served next to the shared fixtures (sale-list-rows.json / sale-overviews.json) only by the tests that load this file. No real sales, customers, staff or amounts. 710001 two doctors + an invoice discount line; 710002 an item discount next to an invoice discount line (shared by what each line charged); 710003 / 710004 discounts of exactly 5 and 6 sen; 710005 fractional quantities; 710006 a fully discounted line, a zero-price line and an invoice discount; 710007 one name as an item discount and (spelled differently) as a discount line; 710008 an unnamed item discount (Branch South); 710009 no invoice page (line items not synced yet); 710010 cancelled. June: 710011 only a return (with a discount line); 710012 a sale plus the return of an item sold with an item discount; 710013 only a discount line; 710014 \"5%DISCOUNT\" written without its space. Hand-computed figures: src/analytics/discounts.test.ts.",
+  "rows": [
+    {
+      "SaleId": 710001,
+      "SaleName": "INV-N-7101",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91001,
+      "CustomerName": "Customer 0101",
+      "SaleDate": "/Date(1782871200000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "400.00",
+      "Discounts": "20.00",
+      "NetAmount": "380.00",
+      "TaxAmount": "0.00",
+      "Total": "380.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "380.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710002,
+      "SaleName": "INV-N-7102",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91002,
+      "CustomerName": "Customer 0102",
+      "SaleDate": "/Date(1782957600000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "200.00",
+      "Discounts": "150.00",
+      "NetAmount": "50.00",
+      "TaxAmount": "0.00",
+      "Total": "50.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "50.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710003,
+      "SaleName": "INV-N-7103",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91003,
+      "CustomerName": "Customer 0103",
+      "SaleDate": "/Date(1783044000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "10.00",
+      "Discounts": "0.05",
+      "NetAmount": "9.95",
+      "TaxAmount": "0.00",
+      "Total": "9.95",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "9.95",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710004,
+      "SaleName": "INV-N-7104",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91004,
+      "CustomerName": "Customer 0104",
+      "SaleDate": "/Date(1783130400000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "10.00",
+      "Discounts": "0.06",
+      "NetAmount": "9.94",
+      "TaxAmount": "0.00",
+      "Total": "9.94",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "9.94",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710005,
+      "SaleName": "INV-N-7105",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91001,
+      "CustomerName": "Customer 0101",
+      "SaleDate": "/Date(1783216800000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "230.50",
+      "Discounts": "18.05",
+      "NetAmount": "212.45",
+      "TaxAmount": "0.00",
+      "Total": "212.45",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "212.45",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710006,
+      "SaleName": "INV-N-7106",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91002,
+      "CustomerName": "Customer 0102",
+      "SaleDate": "/Date(1783303200000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "200.00",
+      "Discounts": "92.00",
+      "NetAmount": "108.00",
+      "TaxAmount": "0.00",
+      "Total": "108.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "108.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710007,
+      "SaleName": "INV-N-7107",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91003,
+      "CustomerName": "Customer 0103",
+      "SaleDate": "/Date(1783389600000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "250.00",
+      "Discounts": "12.50",
+      "NetAmount": "237.50",
+      "TaxAmount": "0.00",
+      "Total": "237.50",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "237.50",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710008,
+      "SaleName": "INV-S-7108",
+      "Location": "Branch South",
+      "LocationId": 1102,
+      "CustomerId": 91005,
+      "CustomerName": "Customer 0105",
+      "SaleDate": "/Date(1783476000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "90.00",
+      "Discounts": "9.00",
+      "NetAmount": "81.00",
+      "TaxAmount": "0.00",
+      "Total": "81.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "81.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710009,
+      "SaleName": "INV-N-7109",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91004,
+      "CustomerName": "Customer 0104",
+      "SaleDate": "/Date(1783562400000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "525.00",
+      "Discounts": "25.00",
+      "NetAmount": "500.00",
+      "TaxAmount": "0.00",
+      "Total": "500.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "500.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710010,
+      "SaleName": "INV-N-7110",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91005,
+      "CustomerName": "Customer 0105",
+      "SaleDate": "/Date(1783648800000)/",
+      "SaleStatusName": "Cancelled",
+      "GrossAmount": "300.00",
+      "Discounts": "50.00",
+      "NetAmount": "250.00",
+      "TaxAmount": "0.00",
+      "Total": "250.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "250.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710011,
+      "SaleName": "INV-N-7111",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91001,
+      "CustomerName": "Customer 0101",
+      "SaleDate": "/Date(1780279200000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "(150.00)",
+      "Discounts": "10.00",
+      "NetAmount": "(160.00)",
+      "TaxAmount": "0.00",
+      "Total": "(160.00)",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "(160.00)",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710012,
+      "SaleName": "INV-N-7112",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91002,
+      "CustomerName": "Customer 0102",
+      "SaleDate": "/Date(1780365600000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "50.00",
+      "Discounts": "(2.50)",
+      "NetAmount": "52.50",
+      "TaxAmount": "0.00",
+      "Total": "52.50",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "52.50",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710013,
+      "SaleName": "INV-N-7113",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91003,
+      "CustomerName": "Customer 0103",
+      "SaleDate": "/Date(1780452000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "0.00",
+      "Discounts": "15.00",
+      "NetAmount": "(15.00)",
+      "TaxAmount": "0.00",
+      "Total": "(15.00)",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "(15.00)",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 710014,
+      "SaleName": "INV-N-7114",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 91004,
+      "CustomerName": "Customer 0104",
+      "SaleDate": "/Date(1780538400000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "100.00",
+      "Discounts": "5.00",
+      "NetAmount": "95.00",
+      "TaxAmount": "0.00",
+      "Total": "95.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "95.00",
+      "TotalRefunds": "0.00"
+    }
+  ],
+  "models": {
+    "710001": {
+      "Sale": {
+        "SaleId": 710001,
+        "SaleName": "INV-N-7101",
+        "SaleDate": "/Date(1782871200000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91001,
+        "Name": "Customer 0101",
+        "Phone": "000-000 0101",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100011,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "100.00",
+          "Amount": "100.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100012,
+          "Name": "Surgery - Neuter",
+          "Quantity": "1",
+          "UnitPrice": "300.00",
+          "Amount": "300.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100013,
+          "Name": "5% DISCOUNT",
+          "Quantity": "1",
+          "UnitPrice": "(20.00)",
+          "Amount": "(20.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "5% DISCOUNT",
+          "DiscountAmount": "20.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "400.00",
+        "Discounts": "20.00",
+        "NetAmount": "380.00",
+        "TaxAmount": "0.00",
+        "Total": "380.00",
+        "TotalPayments": "380.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100010,
+          "PaymentMethod": "Card",
+          "Amount": "380.00",
+          "TransactionDate": "/Date(1782871200000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710002": {
+      "Sale": {
+        "SaleId": 710002,
+        "SaleName": "INV-N-7102",
+        "SaleDate": "/Date(1782957600000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91002,
+        "Name": "Customer 0102",
+        "Phone": "000-000 0102",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100021,
+          "Name": "Dental scaling",
+          "Quantity": "1",
+          "UnitPrice": "100.00",
+          "Amount": "10.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": "90% OFF",
+          "DiscountAmount": "90.00"
+        },
+        {
+          "SaleItemId": 7100022,
+          "Name": "X-ray",
+          "Quantity": "1",
+          "UnitPrice": "100.00",
+          "Amount": "100.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100023,
+          "Name": "RM60 OFF",
+          "Quantity": "1",
+          "UnitPrice": "(60.00)",
+          "Amount": "(60.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "RM60 OFF",
+          "DiscountAmount": "60.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "200.00",
+        "Discounts": "150.00",
+        "NetAmount": "50.00",
+        "TaxAmount": "0.00",
+        "Total": "50.00",
+        "TotalPayments": "50.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100020,
+          "PaymentMethod": "Card",
+          "Amount": "50.00",
+          "TransactionDate": "/Date(1782957600000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710003": {
+      "Sale": {
+        "SaleId": 710003,
+        "SaleName": "INV-N-7103",
+        "SaleDate": "/Date(1783044000000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91003,
+        "Name": "Customer 0103",
+        "Phone": "000-000 0103",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100031,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "10.00",
+          "Amount": "10.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100032,
+          "Name": "ROUNDING",
+          "Quantity": "1",
+          "UnitPrice": "(0.05)",
+          "Amount": "(0.05)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "ROUNDING",
+          "DiscountAmount": "0.05"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "10.00",
+        "Discounts": "0.05",
+        "NetAmount": "9.95",
+        "TaxAmount": "0.00",
+        "Total": "9.95",
+        "TotalPayments": "9.95",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100030,
+          "PaymentMethod": "Card",
+          "Amount": "9.95",
+          "TransactionDate": "/Date(1783044000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710004": {
+      "Sale": {
+        "SaleId": 710004,
+        "SaleName": "INV-N-7104",
+        "SaleDate": "/Date(1783130400000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91004,
+        "Name": "Customer 0104",
+        "Phone": "000-000 0104",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100041,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "10.00",
+          "Amount": "10.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100042,
+          "Name": "ROUNDING",
+          "Quantity": "1",
+          "UnitPrice": "(0.06)",
+          "Amount": "(0.06)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "ROUNDING",
+          "DiscountAmount": "0.06"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "10.00",
+        "Discounts": "0.06",
+        "NetAmount": "9.94",
+        "TaxAmount": "0.00",
+        "Total": "9.94",
+        "TotalPayments": "9.94",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100040,
+          "PaymentMethod": "Card",
+          "Amount": "9.94",
+          "TransactionDate": "/Date(1783130400000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710005": {
+      "Sale": {
+        "SaleId": 710005,
+        "SaleName": "INV-N-7105",
+        "SaleDate": "/Date(1783216800000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91001,
+        "Name": "Customer 0101",
+        "Phone": "000-000 0101",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100051,
+          "Name": "Deworming tablets",
+          "Quantity": "2.5",
+          "UnitPrice": "72.20",
+          "Amount": "162.45",
+          "StaffName": "Dr Alpha",
+          "ItemType": 1,
+          "DiscountName": "STAFF 10%",
+          "DiscountAmount": "18.05"
+        },
+        {
+          "SaleItemId": 7100052,
+          "Name": "Ear drops",
+          "Quantity": "1.5",
+          "UnitPrice": "33.33",
+          "Amount": "50.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 1,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "230.50",
+        "Discounts": "18.05",
+        "NetAmount": "212.45",
+        "TaxAmount": "0.00",
+        "Total": "212.45",
+        "TotalPayments": "212.45",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100050,
+          "PaymentMethod": "Card",
+          "Amount": "212.45",
+          "TransactionDate": "/Date(1783216800000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710006": {
+      "Sale": {
+        "SaleId": 710006,
+        "SaleName": "INV-N-7106",
+        "SaleDate": "/Date(1783303200000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91002,
+        "Name": "Customer 0102",
+        "Phone": "000-000 0102",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100061,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "80.00",
+          "Amount": "0.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": "FREE CONSULT",
+          "DiscountAmount": "80.00"
+        },
+        {
+          "SaleItemId": 7100062,
+          "Name": "Nail clipping",
+          "Quantity": "1",
+          "UnitPrice": "0.00",
+          "Amount": "0.00",
+          "StaffName": "Charlie",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100063,
+          "Name": "Vaccination - Rabies",
+          "Quantity": "1",
+          "UnitPrice": "120.00",
+          "Amount": "120.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100064,
+          "Name": "RM12 OFF",
+          "Quantity": "1",
+          "UnitPrice": "(12.00)",
+          "Amount": "(12.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "RM12 OFF",
+          "DiscountAmount": "12.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "200.00",
+        "Discounts": "92.00",
+        "NetAmount": "108.00",
+        "TaxAmount": "0.00",
+        "Total": "108.00",
+        "TotalPayments": "108.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100060,
+          "PaymentMethod": "Card",
+          "Amount": "108.00",
+          "TransactionDate": "/Date(1783303200000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710007": {
+      "Sale": {
+        "SaleId": 710007,
+        "SaleName": "INV-N-7107",
+        "SaleDate": "/Date(1783389600000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91003,
+        "Name": "Customer 0103",
+        "Phone": "000-000 0103",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100071,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "200.00",
+          "Amount": "200.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100072,
+          "Name": "Ear cleaner 100ml",
+          "Quantity": "1",
+          "UnitPrice": "50.00",
+          "Amount": "47.50",
+          "StaffName": "Dr Bravo",
+          "ItemType": 1,
+          "DiscountName": "5% DISCOUNT",
+          "DiscountAmount": "2.50"
+        },
+        {
+          "SaleItemId": 7100073,
+          "Name": " 5% discount ",
+          "Quantity": "1",
+          "UnitPrice": "(10.00)",
+          "Amount": "(10.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": " 5% discount ",
+          "DiscountAmount": "10.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "250.00",
+        "Discounts": "12.50",
+        "NetAmount": "237.50",
+        "TaxAmount": "0.00",
+        "Total": "237.50",
+        "TotalPayments": "237.50",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100070,
+          "PaymentMethod": "Card",
+          "Amount": "237.50",
+          "TransactionDate": "/Date(1783389600000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710008": {
+      "Sale": {
+        "SaleId": 710008,
+        "SaleName": "INV-S-7108",
+        "SaleDate": "/Date(1783476000000)/",
+        "LocationId": 1102,
+        "Location": "Branch South",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91005,
+        "Name": "Customer 0105",
+        "Phone": "000-000 0105",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100081,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "90.00",
+          "Amount": "81.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "9.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "90.00",
+        "Discounts": "9.00",
+        "NetAmount": "81.00",
+        "TaxAmount": "0.00",
+        "Total": "81.00",
+        "TotalPayments": "81.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100080,
+          "PaymentMethod": "Card",
+          "Amount": "81.00",
+          "TransactionDate": "/Date(1783476000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710011": {
+      "Sale": {
+        "SaleId": 710011,
+        "SaleName": "INV-N-7111",
+        "SaleDate": "/Date(1780279200000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91001,
+        "Name": "Customer 0101",
+        "Phone": "000-000 0101",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100111,
+          "Name": "Prescription diet 2kg",
+          "Quantity": "(1)",
+          "UnitPrice": "150.00",
+          "Amount": "(150.00)",
+          "StaffName": "Dr Alpha",
+          "ItemType": 1,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100112,
+          "Name": "RM10 OFF",
+          "Quantity": "1",
+          "UnitPrice": "(10.00)",
+          "Amount": "(10.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "RM10 OFF",
+          "DiscountAmount": "10.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "(150.00)",
+        "Discounts": "10.00",
+        "NetAmount": "(160.00)",
+        "TaxAmount": "0.00",
+        "Total": "(160.00)",
+        "TotalPayments": "(160.00)",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100110,
+          "PaymentMethod": "Card",
+          "Amount": "(160.00)",
+          "TransactionDate": "/Date(1780279200000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710012": {
+      "Sale": {
+        "SaleId": 710012,
+        "SaleName": "INV-N-7112",
+        "SaleDate": "/Date(1780365600000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91002,
+        "Name": "Customer 0102",
+        "Phone": "000-000 0102",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100121,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "100.00",
+          "Amount": "100.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100122,
+          "Name": "Ear cleaner 100ml",
+          "Quantity": "(1)",
+          "UnitPrice": "50.00",
+          "Amount": "(47.50)",
+          "StaffName": "Dr Bravo",
+          "ItemType": 1,
+          "DiscountName": "5% DISCOUNT",
+          "DiscountAmount": "(2.50)"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "50.00",
+        "Discounts": "(2.50)",
+        "NetAmount": "52.50",
+        "TaxAmount": "0.00",
+        "Total": "52.50",
+        "TotalPayments": "52.50",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100120,
+          "PaymentMethod": "Card",
+          "Amount": "52.50",
+          "TransactionDate": "/Date(1780365600000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710013": {
+      "Sale": {
+        "SaleId": 710013,
+        "SaleName": "INV-N-7113",
+        "SaleDate": "/Date(1780452000000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91003,
+        "Name": "Customer 0103",
+        "Phone": "000-000 0103",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100131,
+          "Name": "RM15 OFF",
+          "Quantity": "1",
+          "UnitPrice": "(15.00)",
+          "Amount": "(15.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "RM15 OFF",
+          "DiscountAmount": "15.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "0.00",
+        "Discounts": "15.00",
+        "NetAmount": "(15.00)",
+        "TaxAmount": "0.00",
+        "Total": "(15.00)",
+        "TotalPayments": "(15.00)",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100130,
+          "PaymentMethod": "Card",
+          "Amount": "(15.00)",
+          "TransactionDate": "/Date(1780452000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "710014": {
+      "Sale": {
+        "SaleId": 710014,
+        "SaleName": "INV-N-7114",
+        "SaleDate": "/Date(1780538400000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 91004,
+        "Name": "Customer 0104",
+        "Phone": "000-000 0104",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 7100141,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "100.00",
+          "Amount": "100.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 7100142,
+          "Name": "5%DISCOUNT",
+          "Quantity": "1",
+          "UnitPrice": "(5.00)",
+          "Amount": "(5.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "5%DISCOUNT",
+          "DiscountAmount": "5.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "100.00",
+        "Discounts": "5.00",
+        "NetAmount": "95.00",
+        "TaxAmount": "0.00",
+        "Total": "95.00",
+        "TotalPayments": "95.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 7100140,
+          "PaymentMethod": "Card",
+          "Amount": "95.00",
+          "TransactionDate": "/Date(1780538400000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    }
+  }
+}
