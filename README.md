@@ -69,6 +69,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `E2E_MAILPIT_URL`, `E2E_PORT`, `E2E_KRELOSES_PORT` | Local tooling only: e2e overrides |
 | `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
 | `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
+| `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page) |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
 `SUPABASE_SECRET_KEY` (server only, never `NEXT_PUBLIC_`).
@@ -92,9 +93,10 @@ src/
   kreloses/       Kreloses Reader — the ONLY code that knows Kreloses exists (login, locations;
                   __fixtures__/ synthetic responses, testing/ the fake Kreloses)
   connections/    Kreloses connections: encrypted credentials, login test, store
-  sync/           Sync Engine (later)
+  sync/           Sync Engine: Sale List → invoices/branches/customers, sync_runs log, lease
   attribution/    Attribution & Rules — pure functions (later)
-  analytics/      Analytics Service — the single source of every metric (later)
+  analytics/      Analytics Service — the single source of every metric (Overview KPIs, freshness)
+  lib/            money (exact RM strings ↔ integer sen, display), format (display only)
   mcp/            Read-only MCP server (later)
   proxy.ts        Next.js proxy: session refresh + global auth gate
 supabase/
@@ -189,10 +191,11 @@ Supabase's default template.
   e.g. `count(*)::int`), and the session time zone is never relied on — use
   `at time zone 'Asia/Kuala_Lumpur'` explicitly.
 - **Money** (RM): columns are `numeric(12,2)`. Sums, discount spreads and other money arithmetic
-  happen in SQL (`numeric` is exact); values come back as strings like `'1234.50'`. If JS must do
-  money maths, convert to integer sen first (`Math.round(Number(value) * 100)` on a 2-dp string)
-  and back at the end. Never do floating-point arithmetic on money. Format for display only at the
-  edge (components/CSV).
+  happen in SQL (`numeric` is exact); values come back as strings like `'1234.50'` (type `Money`).
+  If JS must do money maths, use the one helper, `@/lib/money`: `moneyToSen("1234.50")` →
+  `123450` (exact, from the decimal string — never `Number(value) * 100`), integer arithmetic on sen,
+  then `senToMoney(sen)` → `"1234.50"`. No floating-point arithmetic on money anywhere. Format for
+  display only at the edge (components/CSV): `formatRinggit`, `formatRinggitChange`.
 
 ### Migrations
 
@@ -267,7 +270,10 @@ The app under test talks to a **fake Kreloses** (`e2e/support/fake-kreloses-serv
 fake the unit tests use, on its own port) via `KRELOSES_BASE_URL_WWW/SEA`, with a throwaway
 `CREDENTIALS_ENCRYPTION_KEY` per run. Its synthetic logins are `SYNTHETIC_ACCOUNTS` in
 `src/kreloses/testing/fake-kreloses.ts` (`north`, `south`, `both`, `oneTimeCode`, `down`, …). A
-spec that creates connections must leave the table empty (the shell spec expects empty states).
+spec that creates connections must leave the table empty (the shell spec expects empty states); a
+spec that syncs must also empty `invoices`, `customers`, `sync_runs` and `branches` (children first;
+see `clearSales()` in `e2e/sync.spec.ts`). The fake serves the synthetic Sale List
+(`sale-list-rows.json`: Aug–Sep 2026 and Sep–Oct 2025), so a spec can "Sync now" September 2026.
 
 ### Kreloses Reader (`src/kreloses/`)
 
@@ -276,7 +282,10 @@ The only code that knows Kreloses exists. Import from `@/kreloses`:
 ```ts
 login(credentials: { email; password }, options?: ReaderOptions): Promise<KrelosesSession>
 listLocations(session): Promise<{ id: string; name: string }[]>   // POST /Report/GetFilter {report: 14}; never empty
-fetchFilterTemplate(session, report: number): Promise<unknown>     // raw filter template (#4 passes it back as `filter`)
+fetchFilterTemplate(session, report: number): Promise<unknown>     // raw filter template (uncached)
+listInvoices(session, { page, dateRange?, includeCancelled, pageSize?, previous? }): Promise<InvoicePage>
+  // POST /Sale/Get, one page: { invoices: KrelosesInvoice[], totalCount, page, rowCount, hasMore, span }
+  // pass the previous page back as `previous` for every page after the first
 readerOptionsFromEnv(process.env): ReaderOptions                   // real Kreloses, or the e2e fake outside production/Vercel
 session.postJson(path, body): Promise<unknown>                     // AJAX POST to a sea endpoint (#4: /Sale/Get)
 session.getHtml(path): Promise<string>                             // page load of a sea page (#5: /Sale/Overview/{id})
@@ -312,11 +321,30 @@ session.getHtml(path): Promise<string>                             // page load 
   `src/kreloses/testing/fake-kreloses.ts`. Every sea path needs a signed-in session in the fake
   (page loads get a 302 to the login page, AJAX calls the `X-Responded-JSON` answer; option
   `ajaxAuthFailure: "redirect"` for a plain 302). To extend for `listInvoices` / `getInvoice`
-  (#4, #5): add `*.response.json` + body fixtures and a route to `BUILT_IN_ROUTES` (or
+  (#5): add `*.response.json` + body fixtures and a route to `BUILT_IN_ROUTES` (or
   `fake.addRoute({host: "sea", method, path, handler: ({request, account, fixture}) => …})` in a
   test) — the login check comes for free — then the Reader function on top of `session.postJson`
   / `session.getHtml`. Use `fake.intercept(request => Response | undefined)` for one-off failures
-  and `fake.expireSessions()` for expiry.
+  and `fake.expireSessions()` for expiry. The Sale List route filters/sorts/pages `fake.saleRows`
+  (mutable: cancel a sale, change a refund, then sync again); `createFakeKreloses({saleList:
+  {ignoreDateFilter: true}})` simulates a server that ignores the date filter.
+- **`listInvoices`** (`src/kreloses/sale-list.ts`): passes the Sale List filter template (fetched
+  once per session, shared with `listLocations`) back as `filter` with every Sale status selected
+  when `includeCancelled` (the default selects only Active), every location, and the date range in
+  the template's own format (`dd/MM/yyyy` here; day-first assumed for slashed dates). Rows become
+  `KrelosesInvoice`: ids as strings, money in **integer sen** (`grossSen`, `discountsSen`, `netSen`,
+  `taxSen`, `totalSen`, `totalPaymentsSen`, `totalRefundsSen`; thousand separators, `(12.00)`,
+  minus signs, `RM` prefixes and JSON numbers accepted; more than 2 decimals is refused), `saleAt`
+  (instant) + `saleDate` (clinic day), `status` `active`|`cancelled` (+ Kreloses's `statusName`),
+  `raw` (the row as sent). Any missing field, unreadable amount/date or unknown status raises
+  `LayoutChanged` naming the row and field (never a value). **Verify with the live smoke test:**
+  the server-side date filter, the `SaleDate` format (`/Date(ms)/` is read as UTC; an ISO string
+  without a zone as KL wall-clock time) and the sort order are unrecorded guesses, so the Reader
+  also drops rows outside the range itself and returns `hasMore: false` once a whole page is
+  older than `dateRange.from` — but only while every page seen so far is newest first (otherwise
+  it pages on to TotalCount). Paging that does not add up raises `LayoutChanged` instead of losing
+  sales: a page shorter than asked while TotalCount says more (a capped page size), more rows than
+  asked, or a page repeating the previous one's first/last sale (RequestingPage ignored).
 
 #### Live login check (real Kreloses)
 
@@ -326,8 +354,17 @@ segments other than generic route words shown as `<segment>`, numbers as `<numbe
 any `X-Responded-JSON` status, cookie names with their Domain/Path/expiry/flags (never values),
 whether a one-time-code step appeared, which host the session works on, the number of visible
 locations (not their names) and the shape (keys/types) of the GetFilter JSON (objects whose keys
-look like data, e.g. names, are shown only as `{<n keys>: …}`). It is skipped unless credentials are set, needs no
-database, and is never part of `npm test`. Run it from a terminal without saving the password in
+could be data — non-identifier keys, more than 20 keys, or values that all share one shape, e.g.
+`{Staff: {Ong: 1}}` — are shown only as `{<n keys>: …}`). It then reads ONE Sale List page (previous
+month up to today, all statuses) and prints only its structure: the filter template's status
+options, selection mechanism and date pattern, the response shape, TotalCount, which expected fields
+are present/missing (and other field names), `SaleDate` patterns (digits as `9`), how many sales
+fall in each 3-hour slot of the KL day as the Reader reads them (clinic hours showing at night would
+mean `/Date()/` holds KL time sent as UTC), whether rows come newest first, how many rows fall
+outside the requested range, how amounts are
+formatted (separators / parentheses / minus / currency: yes or no), the status labels seen, whether
+cancelled sales appear, and whether the Reader parses the page — never a name, amount, number or
+id. It is skipped unless credentials are set, needs no database, and is never part of `npm test`. Run it from a terminal without saving the password in
 your shell history:
 
 ```bash
@@ -358,7 +395,105 @@ table: label, Kreloses email, password as an AES-256-GCM envelope
 - **The password never leaves the server**: `listConnections` / `ConnectionSummary` never select
   `password_ciphertext`, actions return only what the page shows, and the password field is never
   pre-filled (blank on edit = keep the stored one). Only `loginAsConnection(context, id)` decrypts,
-  just for the Reader call — use it from the Sync Engine to log in as a connection.
+  just for the Reader call — the Sync Engine logs in with it.
+- **One Kreloses session per connection** (`@/connections/lock`, ADR 0004): a lease row in
+  `connection_locks` (`acquireConnectionLease` / `releaseConnectionLease` / `withConnectionLease`,
+  purpose `sync` | `login-test`, a TTL after which a crashed holder's lease is free). A login test
+  (save or "Test again") takes it too: `testConnection` throws `ConnectionBusy` while a sync runs,
+  and `saveConnection` saves but skips the test (`loginTestSkipped: "busy"`).
+- `recordLoginOutcome(sql, id, {ok, visibleLocations} | {ok: false, error})` stores what a sync's
+  login showed exactly as a login test would, so a failing login shows on the Connections page.
+
+### Sales data (`invoices`, `branches`, `customers`, `sync_runs`)
+
+Migration `…_sales_sync.sql`. Kreloses ids (location, customer, sale) are assumed unique across
+every Kreloses login, so two connections that see the same branch update the same rows. Deleting a
+connection **keeps** synced data: `branches.connection_id` / `sync_runs.connection_id` become null
+(`sync_runs.connection_label` keeps the name); invoices do not reference connections.
+
+- `branches` — `id` (what `GlobalFilter.branchIds` holds), `kreloses_location_id` (unique), `name`,
+  `connection_id` (last connection that synced it).
+- `customers` — `kreloses_customer_id` (unique), `name` (from the latest sale seen), `first_seen_date`
+  (earliest synced clinic day).
+- `invoices` — `kreloses_sale_id` (unique), `sale_number`, `branch_id`, `customer_id` (null = walk-in),
+  `sale_at` (timestamptz) and `sale_date` (**generated**: the KL clinic day — filter on this),
+  `status` (`active` | `cancelled`) + `status_name`, `gross_amount`, `discount_amount`, `net_amount`,
+  `tax_amount`, `total_amount`, `payment_status`, `total_payments`, `total_refunds`
+  (`numeric(12,2)`, Kreloses's sign), `raw_header` (jsonb), `sync_run_id`, `fetched_at` (when the
+  header was last written, i.e. first read or changed — an identical re-read leaves the row alone),
+  `detail_fetched_at` (#5: line items need a (re)fetch when null or `< fetched_at`). `raw_header`
+  is refreshed on its own when only unparsed fields change (no new `fetched_at`).
+- `sync_runs` — `connection_id`, `connection_label`, `mode` (`nightly` | `backfill` | `manual`),
+  `status` (`running` | `succeeded` | `partial` | `failed`), `date_from` / `date_to`, `started_at`,
+  `finished_at`, `counts` (`{pages, invoicesSeen, inserted, updated, unchanged}`), `checkpoint`
+  (`{nextPage, pageSize}` — saved with every page, kept on partial/failed), `covered_location_ids`
+  (set on success; drives "data as of"), `error_code` (`auth_failed` | `layout_changed` |
+  `rate_limited` | `transient` | `key_problem` | `interrupted` | `internal`) + `error` (shown to users).
+  At most one `running` run per connection (unique partial index).
+- `connection_locks` — the per-connection lease (above).
+
+### Sync Engine (`src/sync/`)
+
+```ts
+runSync(deps: SyncDeps, connectionId, mode: "manual" | "nightly" | "backfill", options?): Promise<SyncResult>
+  // deps: { sql, login(id) → KrelosesSession, reader?, now?, sleep? }; syncDeps() (@/sync/context) in the app
+  // options: { dateRange? (default: current clinic month), timeBudgetMs? (default 200 s),
+  //            pageSize?, startPage?, resume? (carry on from the latest partial run of the same
+  //            connection + dates), maxRetries? (default 3) }
+  // → { status: "succeeded" | "partial" | "failed", runId, counts, error? } | { status: "busy", heldFor, until } | { status: "not_found" }
+listSyncRuns(sql, { limit? }): Promise<SyncRun[]>   // newest first, for the Sync status page
+```
+
+A run takes the connection's lease (else `busy`, no run row), marks the connection's stale
+`running` runs `interrupted` (and runs of deleted connections left `running` for over an hour),
+logs in, stores the visible branches (and the connection's login
+status), then reads Sale List pages serially (the Reader's polite delay). Each page is upserted
+**idempotently** (`on conflict … do update … where (…) is distinct from (…)`: a re-run writes
+nothing and counts `unchanged`; a change only in fields the app does not parse refreshes
+`raw_header` without counting as a change or moving `fetched_at`) together with the run's counts
+and checkpoint in one transaction. Each page is handed back to the Reader as `previous`, so paging
+that does not advance fails the run.
+Before each page it checks the time budget and stops as `partial` with a checkpoint. Errors:
+`AuthFailed` and `LayoutChanged` fail the run at once (AuthFailed and key problems also mark the
+connection failed); an expired session gets one fresh login per run; `RateLimited` / `Transient`
+are retried with backoff (5 s, 15 s, 45 s, or Retry-After) while the budget allows. Every run ends
+with a `sync_runs` row, failures included (`describeSyncFailure` words the error).
+"Sync now" (Connections page, owner only) runs `manual` for one chosen month (`@/sync/months`)
+with `resume: true`, so syncing a month that stopped at the time limit again carries on from its
+checkpoint.
+
+**Extension points.** #5 (line items): after `saveInvoicePage` in `execute()` (`engine.ts`), fetch
+`getInvoice` for the page's invoices with `detail_fetched_at is null or detail_fetched_at <
+fetched_at`, store lines + credited lines, set `detail_fetched_at`; add `getInvoice` to `SyncReader`.
+#6 (nightly/cron/resume): call `runSync(…, "nightly", { dateRange, startPage: checkpoint.nextPage })`
+from a cron route (under `PUBLIC_PATHS`, secret-authenticated); the lease already stops overlapping
+runs. #8 (backfill): `mode: "backfill"` over bounded date ranges; `partial` + checkpoint says where
+the chunk stopped. Tests: `createSyncHarness(sql)` / `clearSyncTables(sql)` in
+`src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps).
+
+### Analytics Service (`src/analytics/`)
+
+The single source of every metric; pages and (later) MCP tools only render its results. Every query
+takes `(sql, filter: GlobalFilter)`; sums and averages happen in SQL on `numeric`; money comes back
+as exact strings (`"1234.50"`, `Money` in `@/lib/money`), changes are worked out in integer sen.
+
+```ts
+getOverviewKpis(sql, filter): Promise<OverviewKpis>
+  // { period, previousPeriod, lastYear, total: KpiSet, branches: (KpiSet & { branchId, branchName })[] }
+  // KpiSet = { revenue: Kpi<Money>, invoices: Kpi<number>, customers: Kpi<number>, aovPerCustomer: Kpi<Money | null> }
+  // Kpi<T> = { value, previousPeriod: { base, change, changePercent }, lastYear: { … } }  (changePercent null when base is 0)
+getDataFreshness(sql, { dateFrom?, dateTo?, branchIds? }?): Promise<{ branchId, branchName, dataAsOf: Date | null }[]>
+  // latest succeeded run covering the branch whose dates include least(dateTo, the day it started);
+  // no dateTo = "now" (runs that read the day they ran). An old month never makes today look fresh.
+METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); #17's MCP answers quote them
+```
+
+What counts as revenue is decided in ONE place: `revenueFacts(sql, scope)` in `facts.ts` (rows of
+`sale_date, branch_id, customer_id, invoice_id, revenue`; today active invoices' `net_amount`). #5
+switches its body to credited lines (adding a doctor column and the `doctorIds` filter, which is
+ignored until then); every metric built on those columns keeps working. Comparison periods:
+`comparisonPeriods()` (previous = same length immediately before; last year = same dates, 29 Feb →
+28 Feb). The Seam 1 test (`overview.test.ts`) documents the hand-computed fixture totals.
 
 ### Global filter
 
@@ -380,7 +515,7 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   (keeps page-specific params such as `?measure=aov`), `filterSearchParamsOnly(params)`,
   `resolveDatePreset(preset, now)`, `clinicToday(now)`, `formatDateRange(from, to)`.
 - Selector options come from `getFilterOptions()` in `@/filters/options` (server only):
-  `listBranchOptions()` returns `[]` until the `branches` table exists (#4 replaces its body);
+  `listBranchOptions()` lists the synced `branches` (id = `branches.id`), empty before the first sync;
   `listDoctorOptions()` returns `undefined`, which hides the doctor selector — return a list (#5)
   and the selector appears (the slot is already in `filter-bar-controls.tsx`).
 
@@ -407,7 +542,13 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   replace your slot's comment with its entry. The tabs and the e2e suite (`e2e/users.spec.ts`
   visits every tab) pick it up.
 - Timestamps for display: `formatClinicDateTime(date)` (`@/filters`) → `'28 Sep 2026, 09:05'` in
-  the clinic's time zone.
+  the clinic's time zone. Money: `formatRinggit("1234.50")` → `'RM 1,234.50'`,
+  `formatRinggitChange(…)` (`@/lib/money`); counts, % changes and durations in `@/lib/format`.
+- KPIs: `<KpiTile title kpi kind="money" | "count">` (`src/components/kpi-tile.tsx`) renders an
+  Analytics Service `Kpi` with its changes vs the previous period and last year. The Overview
+  (`src/app/(dashboard)/overview/page.tsx`) lays tiles out with a container query (`@container`),
+  so columns follow the space available rather than the window. An analytics page shows
+  `<NoSalesYet>` while nothing has been synced (`getDataFreshness(sql)` is empty).
 - Mobile first (the owner checks numbers on a phone): the shell switches to a top bar + slide-in
   menu below `md`, and the e2e suite asserts no horizontal scrolling at phone width.
 - UI components: shadcn/ui (`npx shadcn@latest add <component>` → `src/components/ui/`), Tailwind

@@ -75,9 +75,10 @@ export function findLoginForm(html: string): HtmlForm | null {
 }
 
 const ONE_TIME_CODE_FIELD = /^(code|otp|otpcode|pin|token2fa|twofactorcode|verificationcode|authenticatorcode|recoverycode|selectedprovider)$/i;
-const ONE_TIME_CODE_PATH = /(verifycode|sendcode|two-?factor|2fa|otp|mfa|loginwith2fa)/i;
+// Whole path segments only, so e.g. `/HotProducts` (which contains "otp") is not a code step.
+const ONE_TIME_CODE_PATH = /(?:^|\/)(?:verifycode|sendcode|two-?factor|2fa|otp|mfa|loginwith2fa)(?:\/|$)/i;
 
-/** A URL path such as `/Account/VerifyCode` or `/Account/SendCode`: a one-time-code / 2FA step. */
+/** A URL path with a segment such as `/Account/VerifyCode` or `/Account/SendCode`: a one-time-code / 2FA step. */
 export function isOneTimeCodePath(url: URL): boolean {
   return ONE_TIME_CODE_PATH.test(url.pathname);
 }

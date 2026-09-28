@@ -7,6 +7,7 @@ import { listLocations } from "@/kreloses";
 import { SYNTHETIC_ACCOUNTS, createFakeKreloses, type FakeKreloses } from "@/kreloses/testing/fake-kreloses";
 
 import { keyringFromEnv } from "./encryption";
+import { acquireConnectionLease, ConnectionBusy, releaseConnectionLease } from "./lock";
 import {
   ConnectionNotFound,
   deleteConnection,
@@ -210,6 +211,27 @@ describe("Kreloses connections", () => {
     expect(retested).toMatchObject({ status: "failed", lastErrorCode: "rate_limited", visibleLocations: [] });
     expect(retested!.lastTestedAt!.getTime()).toBeGreaterThanOrEqual(firstTestedAt.getTime());
     expect(await testConnection(context, "424242")).toBeNull();
+  });
+
+  it("never logs in while a sync is using the connection (no second Kreloses session)", async () => {
+    const created = await saveConnection(context, { label: "North", email: north.email, password: north.password });
+    const id = created.ok ? created.connection.id : "";
+    const sync = await acquireConnectionLease(db.sql, id, { purpose: "sync", ttlMs: 60_000, now: new Date() });
+    expect(sync.status).toBe("acquired");
+    const requestsBefore = fake.requests.length;
+
+    const busy = await testConnection(context, id).catch((error: unknown) => error);
+    expect(busy).toBeInstanceOf(ConnectionBusy);
+    expect(busy).toMatchObject({ heldFor: "sync" });
+
+    // Editing still saves, but the login test waits for the sync.
+    const edited = await saveConnection(context, { id, label: "North (main)", email: north.email, password: "" });
+    expect(edited).toMatchObject({ ok: true, loginTestSkipped: "busy", connection: { label: "North (main)", status: "untested" } });
+    expect(fake.requests.length).toBe(requestsBefore);
+
+    await releaseConnectionLease(db.sql, sync.status === "acquired" ? sync.lease : null!);
+    expect(await testConnection(context, id)).toMatchObject({ status: "ok" });
+    expect(await db.sql`select 1 from connection_locks`).toHaveLength(0);
   });
 
   it("fails closed when the encryption key is missing", async () => {

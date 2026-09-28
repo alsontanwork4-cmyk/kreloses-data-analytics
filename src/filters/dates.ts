@@ -50,6 +50,19 @@ export function addDays(date: IsoDate, days: number): IsoDate {
   return fromUtc(utc);
 }
 
+/** The same calendar date `years` later (negative: earlier); 29 February becomes the 28th in a non-leap year. */
+export function addYears(date: IsoDate, years: number): IsoDate {
+  const utc = toUtc(date);
+  const year = utc.getUTCFullYear() + years;
+  const lastDay = new Date(Date.UTC(year, utc.getUTCMonth() + 1, 0)).getUTCDate();
+  return fromUtc(new Date(Date.UTC(year, utc.getUTCMonth(), Math.min(utc.getUTCDate(), lastDay))));
+}
+
+/** Whole days from `from` to `to` (0 for the same date; negative if `to` is earlier). */
+export function daysBetween(from: IsoDate, to: IsoDate): number {
+  return Math.round((toUtc(to).getTime() - toUtc(from).getTime()) / 86_400_000);
+}
+
 /** Monday of the date's week (the clinic's weeks run Monday to Sunday). */
 export function startOfWeek(date: IsoDate): IsoDate {
   const dayOfWeek = toUtc(date).getUTCDay(); // 0 = Sunday

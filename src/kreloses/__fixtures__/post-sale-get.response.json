@@ -1,0 +1,9 @@
+{
+  "comment": "POST https://sea.kreloses.com/Sale/Get (signed in): one page of the Sale List. The body is built by the fake from sale-list-rows.json (filtered by the request's `filter`, newest first, paged by RequestingPage/PageSize) as {Columns, Results, TotalCount}.",
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": []
+}

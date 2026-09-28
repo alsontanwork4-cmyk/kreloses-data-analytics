@@ -76,7 +76,8 @@ describe("Kreloses Reader: listLocations", () => {
     const error = await failure(listLocations(session));
     expect(error).toBeInstanceOf(LayoutChanged);
     expect((error as LayoutChanged).shape).toBe(
-      "{reportDefinition: {id: number, sections: [{heading: string, controls: [{type: string, branches: [number] (2)}] (1)}] (1)}}",
+      // A single-key wrapper is collapsed (its key could be a name); the mixed-type objects inside are shown.
+      "{<1 key>: {id: number, sections: [{heading: string, controls: [{type: string, branches: [number] (2)}] (1)}] (1)}}",
     );
     expect((error as LayoutChanged).shape).not.toContain("1101");
   });

@@ -1,16 +1,26 @@
 import type { ReaderOptions } from "./config";
 import type { CookieChange, CookieSummary } from "./cookie-jar";
-import { AuthFailed, isKrelosesError, LayoutChanged } from "./errors";
+import { AuthFailed, LayoutChanged } from "./errors";
 import { describeJsonShape, fetchFilterTemplate, parseLocations, SALE_LIST_REPORT } from "./locations";
 import { login, type KrelosesCredentials } from "./login";
+import type { InvoiceDateRange } from "./sale-list";
+import {
+  defaultDiagnosticRange,
+  describeDiagnosticError,
+  formatSaleListDiagnostic,
+  probeSaleList,
+  type SaleListDiagnostic,
+} from "./sale-list-diagnostic";
 import type { HopEvent, KrelosesSession } from "./session";
 
 /**
  * A redacted account of one real login, for the opt-in live smoke test (`npm run test:live`).
  * It answers the spec's open questions about server-side login — is there a one-time-code step,
  * which host does the session cookie work on, what are the cookies' scopes and lifetimes, how
- * long does a session last — without recording anything secret or personal: no email, password,
- * cookie values, tokens, query strings or location names. The owner pastes it into the ticket.
+ * long does a session last — and reads one Sale List page to check the Reader's assumptions about
+ * its structure (`./sale-list-diagnostic.ts`), without recording anything secret or personal: no
+ * email, password, cookie values, tokens, query strings, names, amounts or ids. The owner pastes it
+ * into a public ticket.
  */
 export interface LoginDiagnostic {
   hops: HopEvent[];
@@ -21,6 +31,8 @@ export interface LoginDiagnostic {
   /** Null when the login failed (not checked). */
   locations: { ok: true; count: number } | { ok: false; error: string } | null;
   filterShape: string | null;
+  /** One page of the Sale List, structure only. Null when the login or GetFilter failed. */
+  saleList: SaleListDiagnostic | null;
   cookies: CookieSummary[];
   probes: { afterMinutes: number; ok: boolean; error?: string }[];
 }
@@ -31,6 +43,8 @@ export interface DiagnosticOptions {
   probeMinutes?: number;
   probeIntervalMinutes?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** The clinic days of the Sale List page to read. Default: the previous month up to today. */
+  saleListRange?: InvoiceDateRange;
 }
 
 export async function runLoginDiagnostic(
@@ -52,6 +66,7 @@ export async function runLoginDiagnostic(
     sessionWorksOn: null,
     locations: null,
     filterShape: null,
+    saleList: null,
     cookies: [],
     probes: [],
   };
@@ -67,14 +82,18 @@ export async function runLoginDiagnostic(
     return diagnostic;
   }
 
+  let template: unknown = undefined;
   try {
-    const template = await fetchFilterTemplate(session, SALE_LIST_REPORT);
+    template = await fetchFilterTemplate(session, SALE_LIST_REPORT);
     diagnostic.sessionWorksOn = session.appHost;
     diagnostic.filterShape = describeJsonShape(template);
     diagnostic.locations = { ok: true, count: parseLocations(template).length };
   } catch (error) {
     diagnostic.locations = { ok: false, error: describeError(error) };
     if (error instanceof LayoutChanged) diagnostic.filterShape = error.shape ?? null;
+  }
+  if (diagnostic.sessionWorksOn) {
+    diagnostic.saleList = await probeSaleList(session, template, options.saleListRange ?? defaultDiagnosticRange());
   }
 
   const probeMinutes = options.probeMinutes ?? 0;
@@ -99,7 +118,7 @@ export async function runLoginDiagnostic(
 
 export function formatLoginDiagnostic(diagnostic: LoginDiagnostic): string {
   const lines = [
-    "Kreloses live login check (redacted: no email, password, cookie values, tokens, query strings, names or ids)",
+    "Kreloses live check (redacted: no email, password, cookie values, tokens, query strings, names, amounts or ids)",
     "",
   ];
   lines.push("HTTP exchanges:");
@@ -125,6 +144,7 @@ export function formatLoginDiagnostic(diagnostic: LoginDiagnostic): string {
   else if (diagnostic.locations.ok) lines.push(`Visible locations: ${diagnostic.locations.count}`);
   else lines.push(`Visible locations: FAILED — ${diagnostic.locations.error}`);
   if (diagnostic.filterShape) lines.push(`GetFilter (report 14) JSON shape: ${diagnostic.filterShape}`);
+  if (diagnostic.saleList) lines.push(...formatSaleListDiagnostic(diagnostic.saleList));
   for (const probe of diagnostic.probes) {
     lines.push(
       probe.ok
@@ -182,13 +202,7 @@ function maskUrlPaths(report: string, diagnostic: LoginDiagnostic): string {
   return masked;
 }
 
-function describeError(error: unknown): string {
-  if (error instanceof AuthFailed) {
-    return `AuthFailed (${error.reason}${error.step ? `: ${error.step}` : ""})${error.detail && error.reason !== "bad_credentials" ? ` — ${error.detail}` : ""}`;
-  }
-  if (isKrelosesError(error)) return `${error.name} — ${error.message}`;
-  return `Unexpected ${error instanceof Error ? error.name : "error"}`;
-}
+const describeError = describeDiagnosticError;
 
 function describeCookieChange(change: CookieChange): string {
   if (change.action === "rejected") return `rejected ${change.name} (Domain=${change.domain} does not cover this host)`;

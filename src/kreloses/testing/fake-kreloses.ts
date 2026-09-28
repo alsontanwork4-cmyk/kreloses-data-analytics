@@ -20,8 +20,11 @@ import { SYNTHETIC_ACCOUNTS, type FakeAccount } from "./synthetic-accounts";
  * one, a page load is redirected to the www login page and an AJAX call (X-Requested-With) gets
  * ASP.NET Identity's HTTP 200 + `X-Responded-JSON` 401.
  *
- * Extending it (tickets #4, #5): add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in
- * a test), backed by fixture files; sea routes get the login check for free. Use `intercept()` in
+ * It also serves the Sale List (`POST /Sale/Get`, #4) from `__fixtures__/sale-list-rows.json`
+ * (filtered, newest first, paged; `saleRows` is mutable).
+ *
+ * Extending it (ticket #5): add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in a
+ * test), backed by fixture files; sea routes get the login check for free. Use `intercept()` in
  * a test to inject one-off responses (errors, odd shapes) and `expireSessions()` for expiry.
  */
 
@@ -65,6 +68,27 @@ export interface FakeKrelosesOptions {
    * ASP.NET Identity's cookie middleware does) or `redirect` (a plain 302 to the login page).
    */
   ajaxAuthFailure?: "x-responded-json" | "redirect";
+  /** The Sale List (`POST /Sale/Get`). */
+  saleList?: {
+    /** The rows to serve (default: `__fixtures__/sale-list-rows.json`). */
+    rows?: SaleListRow[];
+    /** Behave as if Kreloses ignored the filter's Date range (tests the Reader's own date check). */
+    ignoreDateFilter?: boolean;
+    /** Never return more rows per page than this, whatever `PageSize` asks for (a capped page size). */
+    maxPageSize?: number;
+    /** Always answer page 1, whatever `RequestingPage` asks for. */
+    ignoreRequestingPage?: boolean;
+    /** List the oldest sale first instead of the newest. */
+    oldestFirst?: boolean;
+  };
+}
+
+/** One raw Sale List row, as `/Sale/Get` returns it (see `__fixtures__/sale-list-rows.json`). */
+export type SaleListRow = Record<string, unknown>;
+
+/** The synthetic Sale List rows in `__fixtures__/sale-list-rows.json` (a fresh copy each call). */
+export function readSaleListRows(): SaleListRow[] {
+  return (JSON.parse(readFixture("sale-list-rows.json")) as { rows: SaleListRow[] }).rows;
 }
 
 export interface FakeKreloses {
@@ -77,6 +101,11 @@ export interface FakeKreloses {
   addRoute(route: FakeRoute): void;
   /** Invalidates every auth ticket, as if every session had expired. */
   expireSessions(): void;
+  /**
+   * The Sale List rows this fake serves. Mutable: change a row (e.g. cancel a sale) or push one,
+   * and the next `/Sale/Get` sees it.
+   */
+  saleRows: SaleListRow[];
 }
 
 /** The anti-forgery pair in the fixtures (the form value is HTML-encoded there: `&#x2B;` is `+`). */
@@ -93,6 +122,7 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
   const interceptors: Interceptor[] = [];
   const addedRoutes: FakeRoute[] = [];
   const sessions = new Map<string, FakeAccount>();
+  const saleRows: SaleListRow[] = options.saleList?.rows ?? readSaleListRows();
 
   function postLogin({ request, fixture }: FakeRouteContext): Response {
     const form = new URLSearchParams(request.body ?? "");
@@ -149,6 +179,59 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
     return new Response(JSON.stringify(template), { status: response.status, headers: response.headers });
   }
 
+  /**
+   * `POST /Sale/Get`: the Sale List, as Kreloses would answer it. The `filter` (the report-14
+   * template with selections) narrows the rows by Sale status (selected option texts), Location
+   * (selected option values; always only the login's own locations) and Date (`From`/`To`, as
+   * dd/MM/yyyy or ISO); no `filter` means the template's defaults (Active only, its default dates).
+   * Rows come newest first, paged by `RequestingPage` / `PageSize`.
+   */
+  function saleGet({ request, account, fixture }: FakeRouteContext): Response {
+    let body: { request?: Record<string, unknown>; filter?: unknown };
+    try {
+      body = JSON.parse(request.body ?? "") as typeof body;
+    } catch {
+      return new Response("Bad Request", { status: 400 });
+    }
+    const pageSize = Number(body.request?.PageSize);
+    const page = Number(body.request?.RequestingPage);
+    if (!Number.isInteger(pageSize) || pageSize < 1 || !Number.isInteger(page) || page < 1) {
+      return new Response("Bad Request", { status: 400 });
+    }
+    const template = (body.filter ?? JSON.parse(readFixture("report-14-filter.json"))) as { Filters?: FakeFilter[] };
+    const filters = template.Filters ?? [];
+    const selected = (name: string) =>
+      (filters.find((filter) => filter.Name === name)?.Options ?? []).filter((option) => option.Selected && option.Value !== "");
+    const statuses = selected("Sale status").map((option) => option.Text.toLowerCase());
+    const locations = selected("Location").map((option) => option.Value);
+    const date = filters.find((filter) => filter.Name === "Date");
+    const from = options.saleList?.ignoreDateFilter ? null : fakeFilterDate(date?.From);
+    const to = options.saleList?.ignoreDateFilter ? null : fakeFilterDate(date?.To);
+
+    const rows = saleRows
+      .filter((row) => {
+        const locationId = String(row.LocationId);
+        if (!account!.locationIds.includes(locationId)) return false;
+        if (locations.length > 0 && !locations.includes(locationId)) return false;
+        if (statuses.length > 0 && !statuses.includes(String(row.SaleStatusName).toLowerCase())) return false;
+        const day = fakeSaleDay(row.SaleDate);
+        return !day || ((!from || day >= from) && (!to || day <= to));
+      })
+      .sort((a, b) => fakeSaleTime(b.SaleDate) - fakeSaleTime(a.SaleDate) || Number(b.SaleId) - Number(a.SaleId));
+    if (options.saleList?.oldestFirst) rows.reverse();
+    const size = Math.min(pageSize, options.saleList?.maxPageSize ?? pageSize);
+    const served = options.saleList?.ignoreRequestingPage ? 1 : page;
+    const response = fixture("post-sale-get");
+    return new Response(
+      JSON.stringify({
+        Columns: SALE_LIST_COLUMNS,
+        Results: rows.slice((served - 1) * size, served * size),
+        TotalCount: rows.length,
+      }),
+      { status: response.status, headers: response.headers },
+    );
+  }
+
   const BUILT_IN_ROUTES: FakeRoute[] = [
     {
       host: "www",
@@ -161,6 +244,7 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
     { host: "sea", method: "GET", path: "/", handler: ({ fixture }) => fixture("get-sea-root") },
     { host: "sea", method: "GET", path: "/home/index", handler: ({ fixture }) => fixture("get-sea-home") },
     { host: "sea", method: "POST", path: "/report/getfilter", handler: getFilter },
+    { host: "sea", method: "POST", path: "/sale/get", handler: saleGet },
   ];
 
   function matches(route: FakeRoute, request: RecordedRequest): boolean {
@@ -214,7 +298,47 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
     intercept: (interceptor) => void interceptors.push(interceptor),
     addRoute: (added) => void addedRoutes.push(added),
     expireSessions: () => sessions.clear(),
+    saleRows,
   };
+}
+
+interface FakeFilter {
+  Name: string;
+  Options?: { Value: string; Text: string; Selected?: boolean }[];
+  From?: string;
+  To?: string;
+}
+
+/** Synthetic grid columns (the Reader does not use them). */
+const SALE_LIST_COLUMNS = [
+  { Field: "SaleName", Title: "Sale", Sortable: true },
+  { Field: "SaleDate", Title: "Date", Sortable: true },
+  { Field: "Location", Title: "Location", Sortable: true },
+  { Field: "CustomerName", Title: "Customer", Sortable: true },
+  { Field: "SaleStatusName", Title: "Status", Sortable: true },
+  { Field: "Total", Title: "Total", Sortable: false },
+];
+
+const KL_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** A row's `/Date(ms)/` as ms (0 if it is in another format). */
+function fakeSaleTime(value: unknown): number {
+  const match = /^\/Date\((-?\d+)/.exec(String(value));
+  return match ? Number(match[1]) : 0;
+}
+
+/** A row's clinic (UTC+8) date, or null if its SaleDate is not `/Date(ms)/`. */
+function fakeSaleDay(value: unknown): string | null {
+  const ms = fakeSaleTime(value);
+  return ms ? new Date(ms + KL_OFFSET_MS).toISOString().slice(0, 10) : null;
+}
+
+/** A filter date (`dd/MM/yyyy` or ISO) as `YYYY-MM-DD`, or null. */
+function fakeFilterDate(value: string | undefined): string | null {
+  const dayFirst = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value ?? "");
+  if (dayFirst) return `${dayFirst[3]}-${dayFirst[2]}-${dayFirst[1]}`;
+  const iso = /^(\d{4}-\d{2}-\d{2})/.exec(value ?? "");
+  return iso ? iso[1]! : null;
 }
 
 

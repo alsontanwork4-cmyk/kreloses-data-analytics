@@ -1,5 +1,8 @@
 import { LayoutChanged } from "./errors";
+import { describeJsonShape, firstArray, firstIdentifier, firstString, isRecord } from "./json";
 import type { KrelosesSession } from "./session";
+
+export { describeJsonShape } from "./json";
 
 /** A Kreloses location (one clinic branch) that a login can see. */
 export interface KrelosesLocation {
@@ -19,21 +22,50 @@ export function fetchFilterTemplate(session: KrelosesSession, report: number): P
   return session.postJson("/Report/GetFilter", { report });
 }
 
+const saleListTemplates = new WeakMap<KrelosesSession, Promise<unknown>>();
+
+/**
+ * The Sale List's filter template, fetched once per session (it only changes when Kreloses does):
+ * `listLocations` and every `listInvoices` page share it. A failed fetch is not remembered.
+ */
+export function saleListFilterTemplate(session: KrelosesSession): Promise<unknown> {
+  let template = saleListTemplates.get(session);
+  if (!template) {
+    template = fetchFilterTemplate(session, SALE_LIST_REPORT);
+    saleListTemplates.set(session, template);
+    template.catch(() => saleListTemplates.delete(session));
+  }
+  return template;
+}
+
 /** The Kreloses locations (branches) this session's login can see, from the Sale List's Location filter. */
 export async function listLocations(session: KrelosesSession): Promise<KrelosesLocation[]> {
-  return parseLocations(await fetchFilterTemplate(session, SALE_LIST_REPORT));
+  return parseLocations(await saleListFilterTemplate(session));
 }
 
 // The exact JSON of GetFilter has not been recorded yet (see src/kreloses/__fixtures__/README.md),
 // so the parser accepts the usual ASP.NET spellings for each part and fails loudly otherwise.
 const WRAPPER_KEYS = ["Data", "data", "Result", "result"];
 const FILTER_LIST_KEYS = ["Filters", "filters", "Items", "items", "Fields", "fields"];
-const FILTER_LABEL_KEYS = ["Name", "name", "Title", "title", "Label", "label", "DisplayName", "displayName", "Caption", "caption", "FieldName", "fieldName"];
-const OPTION_LIST_KEYS = ["Options", "options", "Items", "items", "Values", "values", "Choices", "choices"];
-const OPTION_ID_KEYS = ["Id", "id", "Value", "value", "Key", "key", "LocationId", "locationId"];
-const OPTION_NAME_KEYS = ["Name", "name", "Text", "text", "Label", "label", "DisplayName", "displayName"];
-const LOCATION_LABEL = /\blocations?\b/i;
+export const FILTER_LABEL_KEYS = ["Name", "name", "Title", "title", "Label", "label", "DisplayName", "displayName", "Caption", "caption", "FieldName", "fieldName"];
+export const OPTION_LIST_KEYS = ["Options", "options", "Items", "items", "Values", "values", "Choices", "choices"];
+export const OPTION_ID_KEYS = ["Id", "id", "Value", "value", "Key", "key", "LocationId", "locationId"];
+export const OPTION_NAME_KEYS = ["Name", "name", "Text", "text", "Label", "label", "DisplayName", "displayName"];
+export const LOCATION_LABEL = /\blocations?\b/i;
 const ALL_OPTION = /^\s*all(\s+locations?)?\s*$/i;
+
+/**
+ * The list of filters in a GetFilter response (the array itself, so changes to its items change
+ * `payload`), unwrapping one `{data: …}`-style envelope. Null if there is none.
+ */
+export function findFilterList(payload: unknown): unknown[] | null {
+  let root = payload;
+  if (isRecord(payload) && !firstArray(payload, FILTER_LIST_KEYS)) {
+    const wrapped = WRAPPER_KEYS.map((key) => payload[key]).find((inner) => isRecord(inner) || Array.isArray(inner));
+    if (wrapped !== undefined) root = wrapped;
+  }
+  return Array.isArray(root) ? root : isRecord(root) ? firstArray(root, FILTER_LIST_KEYS) : null;
+}
 
 /** Extracts the Location filter's options from a GetFilter response. Raises `LayoutChanged` if absent. */
 export function parseLocations(payload: unknown): KrelosesLocation[] {
@@ -41,13 +73,7 @@ export function parseLocations(payload: unknown): KrelosesLocation[] {
     throw new LayoutChanged(`GetFilter: ${message}`, { shape: describeJsonShape(payload) });
   };
 
-  // Unwrap `{data: …}`-style envelopes once.
-  let root = payload;
-  if (isRecord(payload) && !firstArray(payload, FILTER_LIST_KEYS)) {
-    const wrapped = WRAPPER_KEYS.map((key) => payload[key]).find((inner) => isRecord(inner) || Array.isArray(inner));
-    if (wrapped !== undefined) root = wrapped;
-  }
-  const filters = Array.isArray(root) ? root : isRecord(root) ? firstArray(root, FILTER_LIST_KEYS) : null;
+  const filters = findFilterList(payload);
   if (!filters) return fail("no list of filters in the response");
 
   const location = filters.find((filter) => isRecord(filter) && LOCATION_LABEL.test(firstString(filter, FILTER_LABEL_KEYS) ?? ""));
@@ -69,55 +95,4 @@ export function parseLocations(payload: unknown): KrelosesLocation[] {
   // A working login always sees at least one location; none means the filter is not what we think.
   if (locations.length === 0) return fail("the Location filter lists no locations");
   return locations;
-}
-
-const SCHEMA_KEY = /^[A-Za-z_$][A-Za-z0-9_$]{0,40}$/;
-const MAX_SCHEMA_KEYS = 20;
-
-/**
- * The structure of a JSON value — keys and value types, never the values — for error reports
- * and the live diagnostic (which the owner pastes into a public issue). Arrays show their first
- * element and their length. An object is shown key by key only if it looks like a schema
- * (identifier-like keys, at most 20); anything else is a dictionary whose keys may be data —
- * staff, customer or branch names, emails, ids — and is shown as `{<n keys>: <shape of first value>}`.
- */
-export function describeJsonShape(value: unknown, depth = 0): string {
-  if (depth > 8) return "…";
-  if (value === null) return "null";
-  if (Array.isArray(value)) {
-    return value.length === 0 ? "[]" : `[${describeJsonShape(value[0], depth + 1)}] (${value.length})`;
-  }
-  if (isRecord(value)) {
-    const entries = Object.entries(value);
-    if (entries.length > MAX_SCHEMA_KEYS || entries.some(([key]) => !SCHEMA_KEY.test(key))) {
-      const first = entries[0];
-      const count = `<${entries.length} ${entries.length === 1 ? "key" : "keys"}>`;
-      return `{${count}${first ? `: ${describeJsonShape(first[1], depth + 1)}` : ""}}`;
-    }
-    return `{${entries.map(([key, inner]) => `${key}: ${describeJsonShape(inner, depth + 1)}`).join(", ")}}`;
-  }
-  return typeof value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function firstArray(record: Record<string, unknown>, keys: string[]): unknown[] | null {
-  for (const key of keys) if (Array.isArray(record[key])) return record[key] as unknown[];
-  return null;
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) if (typeof record[key] === "string") return record[key] as string;
-  return null;
-}
-
-function firstIdentifier(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string") return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return null;
 }
