@@ -4,7 +4,7 @@ import { AuthFailed, LayoutChanged } from "./errors";
 import { describeJsonShape, fetchFilterTemplate, parseLocations, SALE_LIST_REPORT } from "./locations";
 import { login, type KrelosesCredentials } from "./login";
 import type { InvoiceDateRange } from "./sale-list";
-import { formatSaleOverviewDiagnostic, probeSaleOverview, type SaleOverviewDiagnostic } from "./sale-overview-diagnostic";
+import { formatSaleOverviewDiagnostic, probeSaleOverviews, type SaleOverviewDiagnostic } from "./sale-overview-diagnostic";
 import { parseStaff } from "./staff";
 import {
   defaultDiagnosticRange,
@@ -38,7 +38,7 @@ export interface LoginDiagnostic {
   saleList: SaleListDiagnostic | null;
   /** How many staff the Sale List filter lists (never their names). Null when not checked. */
   staff: { ok: true; count: number } | { ok: false; error: string } | null;
-  /** ONE invoice's Sale Overview page, structure only. Null when the Sale List was not read. */
+  /** A few invoices' Sale Overview pages, structure only (ids redacted). Null when the Sale List was not read. */
   saleOverview: SaleOverviewDiagnostic | null;
   cookies: CookieSummary[];
   probes: { afterMinutes: number; ok: boolean; error?: string }[];
@@ -108,7 +108,7 @@ export async function runLoginDiagnostic(
       diagnostic.staff = { ok: false, error: describeError(error) };
     }
     diagnostic.saleList = await probeSaleList(session, template, options.saleListRange ?? defaultDiagnosticRange());
-    diagnostic.saleOverview = await probeSaleOverview(session, diagnostic.saleList.sample ?? null);
+    diagnostic.saleOverview = await probeSaleOverviews(session, diagnostic.saleList.samples ?? []);
   }
 
   const probeMinutes = options.probeMinutes ?? 0;

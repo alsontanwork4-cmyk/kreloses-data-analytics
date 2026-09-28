@@ -32,7 +32,7 @@ describe.skipIf(!email || !password)("live Kreloses login (opt-in)", () => {
       expect(diagnostic.locations).toMatchObject({ ok: true });
       expect(diagnostic.saleList?.page?.parse, "the Reader should parse the Sale List (see above)").toMatch(/^OK/);
       expect(diagnostic.staff, "the Sale List filter should have a Staff filter (see above)").toMatchObject({ ok: true });
-      expect(diagnostic.saleOverview?.page?.parse, "the Reader should parse one invoice's line items (see above)").toMatch(/^OK/);
+      expect(diagnostic.saleOverview?.structure?.parseFailures, "the Reader should parse the invoice pages (see above)").toEqual([]);
     },
     (probeMinutes + 3) * 60_000,
   );

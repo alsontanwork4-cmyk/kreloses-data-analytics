@@ -321,13 +321,21 @@ describe("live login diagnostic (redacted)", () => {
     });
   });
 
-  describe("Sale Overview page and staff list (structure only, #5)", () => {
+  describe("Sale Overview pages and staff list (structure only, #5)", () => {
     const SEPTEMBER = { from: "2026-09-01", to: "2026-09-30" };
-    // Anything that identifies a sale, a line, a person or an amount (700105 is the first active sale).
+    // Anything that identifies a sale, a line, a person or an amount. The pages opened: 700105 (the
+    // first active sale), 700104 (the first with a discount), 700202 (the first with a refund).
     const DATA = [
       "700105",
+      "700104",
+      "700202",
       "7001051",
       "INV-N-0105",
+      "INV-N-0104",
+      "INV-S-0202",
+      "Synthetic partial refund",
+      "100.00",
+      "1,100.00",
       "Nail clipping",
       "Ear cleaner",
       "Charlie",
@@ -349,81 +357,91 @@ describe("live login diagnostic (redacted)", () => {
     const report = async (fake = createFakeKreloses()) =>
       formatLoginDiagnostic(await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport }, saleListRange: SEPTEMBER }));
 
-    it("opens the first active sale's page and prints its structure and the Reader's checks — never names, amounts or ids", async () => {
+    it("opens three sales' pages (first active, first discounted, first refunded) and prints their structure as counts — never names, amounts or ids", async () => {
       const text = await report();
       expect(text).toMatch(/7\. GET sea\.kreloses\.com\/Sale\/Overview\/<number> -> 200/);
+      expect(text).toMatch(/9\. GET sea\.kreloses\.com\/Sale\/Overview\/<number> -> 200/);
       expect(text).toContain("Staff filter (report 14): 5 staff members (names not shown)");
-      expect(text).toContain("Sale Overview (GET /Sale/Overview/<sale>, the first active sale of the page above):");
-      expect(text).toContain("  var model found: yes");
+      expect(text).toContain("Sale Overview pages (GET /Sale/Overview/<sale>, structure only):");
+      expect(text).toContain("  Pages opened: 3 (first active sale, first sale with a discount, first sale with a refund or a negative net)");
+      expect(text).toContain("  var model found: 3 of 3 pages");
       expect(text).toContain(
-        "  Model shape: {Sale: {SaleId: number, SaleName: string, SaleDate: string, LocationId: number, Location: string, SaleStatusName: string, InvoiceCategory: string, Notes: null}, " +
+        "  Model shape (first page): {Sale: {SaleId: number, SaleName: string, SaleDate: string, LocationId: number, Location: string, SaleStatusName: string, InvoiceCategory: string, Notes: null}, " +
           "Customer: {CustomerId: number, Name: string, Phone: string, Email: null}, " +
           "Items: [{SaleItemId: number, Name: string, Quantity: string, UnitPrice: string, Amount: string, StaffName: string, ItemType: number, DiscountName: null, DiscountAmount: string}] (2), " +
           "Totals: {GrossAmount: string, Discounts: string, NetAmount: string, TaxAmount: string, Total: string, TotalPayments: string, TotalRefunds: string, Balance: string}, " +
           "Transactions: [], RefundInfo: null, CreditNoteInfo: null}",
       );
-      expect(text).toContain("  Line items: 2");
+      expect(text).toContain("  Same top-level model keys on every page: yes");
+      expect(text).toContain("  Line items: 9 on 3 pages");
       expect(text).toContain("  Expected item fields present: Name, Quantity, UnitPrice, Amount, StaffName, ItemType, DiscountName, DiscountAmount");
       expect(text).toContain("  Expected item fields missing: none");
       expect(text).toContain("  Other item fields: SaleItemId");
-      expect(text).toContain("  ItemType values (count of lines): 4 × 1, 1 × 1");
-      expect(text).toContain(
-        "  Numbers: strings; thousand separators: no; negatives in parentheses: no; minus signs: no; currency prefix: no; fractional quantities: no",
-      );
-      expect(text).toContain("  StaffName: on 1 of 2 lines (names not shown)");
-      expect(text).toContain("  Item-level discounts (DiscountAmount not zero): 0 of 2 lines");
-      expect(text).toContain("  Sold lines with Amount = Quantity × UnitPrice − DiscountAmount: 2 of 2");
-      expect(text).toContain("  Discount lines (ItemType 55) Amount sign: no discount lines");
-      expect(text).toContain("  All line Amounts add up to Totals.NetAmount: yes");
-      expect(text).toContain("  Totals.NetAmount equals the Sale List's NetAmount: yes");
-      expect(text).toContain("  Sale.SaleId is the sale asked for: yes");
-      expect(text).toContain("  Reader parse: OK (2 lines)");
-      for (const secret of [...DATA, ...SECRETS]) expect(text, secret).not.toContain(secret);
-    });
-
-    it("reports discount lines, item discounts, fractions and mismatches as counts and yes/no", async () => {
-      const fake = createFakeKreloses();
-      // Serve 700104's busier page (discount line, item discount, 0.5 quantity) as 700105's.
-      const busy = structuredClone(fake.saleOverviews["700104"]!) as { Sale: Record<string, unknown> };
-      busy.Sale.SaleId = 700105;
-      fake.saleOverviews["700105"] = busy;
-      const text = await report(fake);
-      expect(text).toContain("  ItemType values (count of lines): 4 × 2, 1 × 2, 55 × 1");
+      expect(text).toContain("  ItemType values (count of lines): 4 × 5, 1 × 3, 55 × 1");
       expect(text).toContain(
         "  Numbers: strings, empty; thousand separators: yes; negatives in parentheses: yes; minus signs: no; currency prefix: no; fractional quantities: yes",
       );
-      expect(text).toContain("  StaffName: on 3 of 5 lines (names not shown)");
-      expect(text).toContain("  Item-level discounts (DiscountAmount not zero): 2 of 5 lines");
-      expect(text).toContain("  Sold lines with Amount = Quantity × UnitPrice − DiscountAmount: 4 of 4");
+      expect(text).toContain("  StaffName: on 6 of 9 lines (names not shown)");
+      expect(text).toContain("  Item-level discounts (DiscountAmount not zero): 2 of 9 lines");
+      expect(text).toContain("  Sold lines with Amount = Quantity × UnitPrice − DiscountAmount: 8 of 8");
       expect(text).toContain("  Discount lines (ItemType 55) Amount sign: negative 1, positive 0, zero 0, unreadable 0");
-      expect(text).toContain("  All line Amounts add up to Totals.NetAmount: yes");
-      expect(text).toContain("  Totals.NetAmount equals the Sale List's NetAmount: no");
-      expect(text).toContain("  Reader parse: OK (5 lines)");
+      expect(text).toContain("  Pages whose line Amounts add up to Totals.NetAmount: 3 of 3");
+      expect(text).toContain("  Pages whose line Amounts add up to the Sale List's NetAmount: 3 of 3");
+      expect(text).toContain("  Pages whose Totals.NetAmount equals the Sale List's NetAmount: 3 of 3");
+      expect(text).toContain("  Pages whose Sale.SaleId is the sale asked for: 3 of 3");
+      expect(text).toContain("  RefundInfo: on 1 of 3 pages; shape {RefundId: number, Amount: string, Reason: string, RefundDate: string}");
+      expect(text).toContain("  CreditNoteInfo: on 0 of 3 pages");
+      expect(text).toContain("  Reader parse: OK on 3 of 3 pages");
       for (const secret of [...DATA, ...SECRETS]) expect(text, secret).not.toContain(secret);
     });
 
-    it("says so when the page has no model or the Reader cannot parse it, still without values", async () => {
+    it("counts pages whose lines do not add up (the gap monitor) and totals that differ from the Sale List", async () => {
+      const fake = createFakeKreloses();
+      const refunded = fake.saleOverviews["700202"] as { Items: Record<string, unknown>[] };
+      refunded.Items.push({ ...refunded.Items[1]!, Quantity: "1", UnitPrice: "50.00", Amount: "50.00" });
+      (fake.saleOverviews["700105"] as { Totals: Record<string, string> }).Totals.NetAmount = "90.00";
+      const text = await report(fake);
+      expect(text).toContain("  Pages whose line Amounts add up to Totals.NetAmount: 1 of 3");
+      expect(text).toContain("  Pages whose line Amounts add up to the Sale List's NetAmount: 2 of 3");
+      expect(text).toContain("  Pages whose Totals.NetAmount equals the Sale List's NetAmount: 2 of 3");
+      for (const secret of [...DATA, ...SECRETS, "90.00", "50.00"]) expect(text, secret).not.toContain(secret);
+    });
+
+    it("never prints a sale id, even when a page is missing or sent elsewhere", async () => {
+      const fake = createFakeKreloses();
+      fake.intercept((request) => {
+        if (request.url.pathname === "/Sale/Overview/700105") return new Response("not here 700105", { status: 404, headers: { "Content-Type": "text/html" } });
+        if (request.url.pathname === "/Sale/Overview/700104") return new Response(null, { status: 302, headers: { Location: "/Sale/Detail/700104" } });
+        return undefined;
+      });
+      const text = await report(fake);
+      expect(text).toContain(
+        '  Page "first active sale": FAILED — PageMissing — GET sea.kreloses.com/Sale/Overview/<sale> returned HTTP 404',
+      );
+      expect(text).toContain(
+        '  Page "first sale with a discount": FAILED — PageMissing — GET sea.kreloses.com/Sale/Overview/<sale> redirected to sea.kreloses.com/Sale/Detail/<sale> instead of answering',
+      );
+      expect(text).toContain("  var model found: 1 of 1 page");
+      expect(text).toContain("  Reader parse: OK on 1 of 1 page");
+      for (const secret of [...DATA, ...SECRETS]) expect(text, secret).not.toContain(secret);
+    });
+
+    it("says so when a page has no model or the Reader cannot parse it, still without values", async () => {
       const fake = createFakeKreloses();
       fake.intercept((request) =>
         request.url.pathname === "/Sale/Overview/700105"
           ? new Response(readFixture("sale-overview-no-model.html"), { headers: { "Content-Type": "text/html" } })
-          : undefined,
+          : request.url.pathname === "/Sale/Overview/700104"
+            ? new Response(readFixture("sale-overview-changed.html").replace("700101", "700104"), { headers: { "Content-Type": "text/html" } })
+            : undefined,
       );
       const text = await report(fake);
-      expect(text).toContain("  var model found: no (LayoutChanged — Sale/Overview: no `var model = {…}` in the page)");
-      expect(text).toContain("  Reader parse: not attempted (no model)");
-
-      const changed = createFakeKreloses();
-      changed.intercept((request) =>
-        request.url.pathname === "/Sale/Overview/700105"
-          ? new Response(readFixture("sale-overview-changed.html").replace("700101", "700105"), { headers: { "Content-Type": "text/html" } })
-          : undefined,
+      expect(text).toContain("  var model found: 2 of 3 pages");
+      expect(text).toContain(
+        '  Reader parse: OK on 1 of 3 pages; page "first active sale": FAILED — LayoutChanged — Sale/Overview: no `var model = {…}` in the page; ' +
+          'page "first sale with a discount": FAILED — LayoutChanged — Sale/Overview: no Items list in the page model',
       );
-      const changedText = await report(changed);
-      expect(changedText).toContain("  var model found: yes");
-      expect(changedText).toContain("  Line items: 0");
-      expect(changedText).toContain("  Reader parse: FAILED — LayoutChanged — Sale/Overview: no Items list in the page model");
-      for (const secret of [...DATA, "Consultation", "150.00"]) expect(changedText, secret).not.toContain(secret);
+      for (const secret of [...DATA, "Consultation", "150.00"]) expect(text, secret).not.toContain(secret);
     });
   });
 });

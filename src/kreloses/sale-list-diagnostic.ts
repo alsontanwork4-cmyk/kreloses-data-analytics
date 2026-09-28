@@ -33,8 +33,11 @@ export interface SaleListDiagnostic {
   /** Null when the request failed (see `error`). */
   page: SaleListPageStructure | null;
   error?: string;
-  /** The first active sale on the page, for the Sale Overview check. NEVER printed. */
-  sample?: { saleId: string; netSen: number } | null;
+  /**
+   * Sales on the page to open for the Sale Overview check (the first active one, the first with a
+   * discount, the first with a refund or a negative net; no sale twice). Their ids are NEVER printed.
+   */
+  samples?: { saleId: string; netSen: number; label: string }[];
 }
 
 export interface SaleListPageStructure {
@@ -75,11 +78,22 @@ export async function probeSaleList(session: KrelosesSession, template: unknown,
   }
   diagnostic.page = describePage(payload, range);
   try {
-    const parsed = parseSaleListPage(payload, { page: 1, dateRange: range, includeCancelled: true }, SALE_LIST_PAGE_SIZE);
-    const active = parsed.invoices.find((invoice) => invoice.status === "active");
-    diagnostic.sample = active ? { saleId: active.saleId, netSen: active.netSen } : null;
+    const active = parseSaleListPage(payload, { page: 1, dateRange: range, includeCancelled: true }, SALE_LIST_PAGE_SIZE).invoices.filter(
+      (invoice) => invoice.status === "active",
+    );
+    const choices = [
+      { label: "first active sale", invoice: active[0] },
+      { label: "first sale with a discount", invoice: active.find((invoice) => invoice.discountsSen !== 0) },
+      { label: "first sale with a refund or a negative net", invoice: active.find((invoice) => invoice.totalRefundsSen !== 0 || invoice.netSen < 0) },
+    ];
+    const seen = new Set<string>();
+    diagnostic.samples = choices.flatMap(({ label, invoice }) => {
+      if (!invoice || seen.has(invoice.saleId)) return [];
+      seen.add(invoice.saleId);
+      return [{ saleId: invoice.saleId, netSen: invoice.netSen, label }];
+    });
   } catch {
-    diagnostic.sample = null;
+    diagnostic.samples = [];
   }
   return diagnostic;
 }
