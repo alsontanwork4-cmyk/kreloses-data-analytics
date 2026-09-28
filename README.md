@@ -71,6 +71,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
 | `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
 | `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page) |
+| `CLINIC_NOW` | Tests only: freezes `clinicNow()` (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
 | `MCP_BEARER_TOKEN` | Server only. The secret Claude sends to the MCP server (`openssl rand -base64 32`; at least 32 characters). Unset, blank or shorter → `/api/mcp` refuses every request. It grants read access to ALL clinic data: treat it like a password (see [Connect Claude](#connect-claude-to-the-mcp-server)) |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
@@ -286,6 +287,11 @@ spec that creates connections must leave the table empty (the shell spec expects
 spec that syncs must also empty the synced tables (`clearSyncedData()`). The fake serves the
 synthetic Sale List (`sale-list-rows.json`: Aug–Sep 2026 and Sep–Oct 2025) and every sale's
 invoice page (`sale-overviews.json`), so a spec can "Sync now" September 2026 and get doctors.
+A spec that needs other sales (e.g. dated relative to today) builds them with `syntheticSales([...])`
+(`src/kreloses/testing/synthetic-sales.ts`: Sale List rows + invoice pages from a short description)
+and makes the fake serve exactly those with `serveSales(...)`; it must call `restoreFixtureSales()` in
+`afterAll` (`e2e/support/fake-kreloses-control.ts`, test-only `POST /__e2e/sales[/reset]` on the fake).
+Unit tests pass the same builder's output to `createSyncHarness(sql, { fake: { saleList: { rows }, saleOverviews } })`.
 
 ### Kreloses Reader (`src/kreloses/`)
 
@@ -745,6 +751,44 @@ ITEM_GROUP_MEASURES_AVAILABLE                // false until #9's surgery/consult
   2024 → early 2026, sales at 23:30 KL on 31 Dec and 00:30 KL on the 1st) to the shared fixtures in
   its own fake Kreloses, and documents every hand-computed month and year.
 
+#### Daily sales (#11: `src/analytics/daily.ts`, `/daily`)
+
+```ts
+getDailySales(sql, day: IsoDate, filter?: { branchIds?, doctorIds? }): Promise<DailySales>
+  // { day, comparisonDays: { lastWeek, lastYear }, total: DailyFigures,
+  //   branches: (DailyFigures & { branchId, branchName })[]            every branch in the filter, by name (zeros included)
+  //   doctors: (DailyFigures & { staffId, name, source })[]            credited lines on the day OR a comparison day; by revenue on the day
+  //   groups: (DailyFigures & { group: "other" | "generic" | "noStaff" | "pending" })[] }   same rule; empty under a doctor filter
+  // DailyFigures = { revenue: DailyMetric<Money>, invoices: DailyMetric<number>, customers: DailyMetric<number>, aovPerCustomer: DailyMetric<Money | null> }
+  // DailyMetric<T> = { value, lastWeek: KpiChange<T>, lastYear: KpiChange<T> }   (KpiChange: { base, change, changePercent }; % null when base is 0)
+dailyComparisonDays(day)       // { lastWeek: day − 7, lastYear: same date a year earlier (29 Feb → 28 Feb) }
+defaultDailyDay(now?)          // yesterday at the clinic (Asia/Kuala_Lumpur), whatever the server's time zone
+resolveDailyDay(value, now?)   // value (e.g. ?day=, first if repeated) if a real date from 2000-01-01 up to today
+                               // at the clinic (today allowed), else defaultDailyDay
+clinicNow()                    // @/lib/clinic-clock (server only): "now" for clinic-relative defaults; CLINIC_NOW
+                               // (ISO instant with zone) freezes it outside production (the e2e suite sets it)
+```
+
+- Built on `revenueFacts`, so revenue, invoices, customers and AOV per customer mean exactly what they
+  mean on the Overview and Doctors pages (AOV per customer = revenue ÷ distinct customers with ≥ 1
+  credited line in scope that day). The global filter's branches and doctors apply; its **date range
+  does not** (the day does). Sales whose line items are not synced yet count in the total and branches
+  and as the `pending` group (never under a doctor filter — show `<PendingLineItemsNote>` from
+  `getPendingLineItems(sql, {dateFrom: day, dateTo: day, branchIds})`).
+- Definitions for pages and MCP: `METRIC_DEFINITIONS.dailySales`, `sameWeekdayLastWeek`,
+  `sameDateLastYear` (+ the usual revenue / invoices / customers / aovPerCustomer / change).
+- The page: `/daily?day=YYYY-MM-DD` (none = yesterday), a day picker (`next/form` GET form + previous /
+  next day links, other params kept), totals tiles, "By branch" (with each branch's "data as of" for the
+  day) and "By doctor" `<DataTable>`s. On screen each metric shows its value and its change vs last
+  week and last year (percentage + amount, arrow + sign + colour); the CSV has, per metric, the value,
+  each comparison day's value, the change and the change % (`daily-branches_<day>.csv`,
+  `daily-doctors_<day>.csv`).
+- MCP `daily_sales` (#17/#18): `getDailySales(sql, resolveDailyDay(input.day, clinicNow()), { branchIds, doctorIds })`.
+- Tests: `src/analytics/daily.test.ts` (Seam 1, hand-computed figures for the synthetic scenario in
+  `src/analytics/testing/daily-scenario.ts`, dates relative to the day), `e2e/daily.spec.ts` (the same
+  scenario around yesterday, with the app's clock fixed by `CLINIC_NOW` = `E2E_CLINIC_NOW` from
+  `playwright.config.ts`: yesterday is 27 Sep 2026).
+
 ### Global filter
 
 The one filter every dashboard page and Analytics Service query takes lives in `@/filters`
@@ -848,6 +892,10 @@ const columns: DataTableColumn<Row>[] = [
 - Server-renderable (pass column functions from a Server Component). Rows come from the Analytics
   Service already computed. The first column is the row header and stays put when the table
   scrolls sideways on a phone; `priority: "secondary"` hides a column below `sm` (the CSV keeps it).
+- `exportOnly: true` keeps a column in the CSV only (e.g. a percentage the page shows inside another
+  column's `cell`); `label` is a shorter on-screen header (the CSV always uses `header`).
+- The download button makes sure the file starts with exactly one byte-order mark
+  (`withByteOrderMark`): React drops it from a long CSV string on its way to the browser.
 - e2e: rows are `data-testid="data-table-row"`, cells `[data-column="<key>"]`, the button "Export CSV".
 
 ### Charts (`src/components/charts/`)

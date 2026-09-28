@@ -43,6 +43,11 @@ export const METRIC_DEFINITIONS = {
   previousPeriod:
     "Previous period: the same number of days immediately before the selected period (e.g. 1–30 Sep is compared with 2–31 Aug).",
   lastYear: "Same period last year: the same calendar dates one year earlier (29 Feb becomes 28 Feb).",
+  dailySales:
+    "Daily sales: revenue, invoices, customers and AOV per customer for one clinic day (Asia/Kuala_Lumpur: a sale at 00:30 belongs to that day), in total, per branch and per doctor — other staff, generic accounts, no staff on line and line items not synced yet as separate groups — each compared with the same weekday last week and the same date last year. Every figure means what it means for a longer period (same revenue, invoice, customer and AOV definitions). A doctor is listed when they had credited lines on the day or on either comparison day. The global filter's branches and doctors apply; its date range does not (the day is chosen on its own, yesterday by default).",
+  sameWeekdayLastWeek: "Same weekday last week: the day seven days earlier (Sunday 27 Sep 2026 is compared with Sunday 20 Sep 2026).",
+  sameDateLastYear:
+    "Same date last year: the same calendar date one year earlier (27 Sep 2026 is compared with 27 Sep 2025, usually another weekday); 29 Feb is compared with 28 Feb of the previous year.",
   change:
     "Change: the value minus the comparison value; the percentage is the change divided by the comparison value, rounded to one decimal place, and absent when the comparison value is zero.",
   dataAsOf:

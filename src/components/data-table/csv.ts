@@ -85,6 +85,17 @@ export function toCsv<Row>(columns: readonly TableColumn<Row>[], rows: readonly 
   return `﻿${lines.map((line) => line.join(",")).join("\r\n")}\r\n`;
 }
 
+const BYTE_ORDER_MARK = "﻿";
+
+/**
+ * The CSV as saved: exactly one UTF-8 byte-order mark in front. `toCsv` writes one, but React's
+ * RSC transport drops it from a long string prop (sent as a text chunk, decoded on its own), so
+ * the download button restores it — otherwise Excel misreads non-ASCII names.
+ */
+export function withByteOrderMark(csv: string): string {
+  return csv.startsWith(BYTE_ORDER_MARK) ? csv : `${BYTE_ORDER_MARK}${csv}`;
+}
+
 /** `doctors_2026-09-01_to_2026-09-30.csv`: the page (or table) name and the filter's date range. */
 export function csvFileName(name: string, filter: Pick<GlobalFilter, "dateFrom" | "dateTo">): string {
   const slug = name

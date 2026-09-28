@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { csvFileName, formatCell, toCsv, type TableColumn } from "./csv";
+import { csvFileName, formatCell, toCsv, withByteOrderMark, type TableColumn } from "./csv";
 
 /** The CSV a table exports (spec story 55): the same rows and columns the table shows, for Excel. */
 interface Row {
@@ -73,5 +73,17 @@ describe("csvFileName", () => {
   it("names the file after the page and the date range", () => {
     expect(csvFileName("doctors", { dateFrom: "2026-09-01", dateTo: "2026-09-30" })).toBe("doctors_2026-09-01_to_2026-09-30.csv");
     expect(csvFileName("Doctors by branch!", { dateFrom: "2026-09-01", dateTo: "2026-09-01" })).toBe("doctors-by-branch_2026-09-01.csv");
+  });
+});
+
+describe("withByteOrderMark", () => {
+  // React's RSC transport drops the leading byte-order mark of a long string prop (it arrives as a
+  // text chunk decoded on its own), so the download button puts it back: without it, Excel
+  // misreads non-ASCII names.
+  it("gives the saved file exactly one UTF-8 byte-order mark", () => {
+    const csv = toCsv(COLUMNS, [{ name: "Dr Bravo Brown", revenue: "3351.72", invoices: 1234, items: 1.5, share: 57.2 }]);
+    expect(withByteOrderMark(csv)).toBe(csv);
+    expect(withByteOrderMark(csv.slice(1))).toBe(csv);
+    expect(withByteOrderMark("")).toBe("﻿");
   });
 });
