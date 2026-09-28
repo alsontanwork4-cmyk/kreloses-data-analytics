@@ -27,7 +27,7 @@ import type { SyncCounts, SyncErrorCode } from "./runs";
  *    completes with time and budget left, goes on to the next one — reusing the Kreloses session,
  *    so one chunk logs in once.
  * 4. Stops at the time limit, the request budget, when the nightly sync or Sync now asks for the
- *    connection (the run steps aside, docs/adr/0010), on a failure, or when every month is done
+ *    connection (the run steps aside, docs/adr/0011), on a failure, or when every month is done
  *    (the backfill becomes `complete`).
  *
  * A month is DONE once any complete sync run of this connection — succeeded, or read its whole

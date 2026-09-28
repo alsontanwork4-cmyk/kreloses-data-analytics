@@ -94,7 +94,7 @@ export const NO_COUNTS: SyncCounts = {
  * - `backfill_request_budget` — (backfill, #8) tonight's request budget for this login was used up:
  *   the run stopped with its checkpoint and the backfill carries on the next night;
  * - `backfill_yielded` — (backfill) the run stopped with its checkpoint so the nightly sync or Sync
- *   now could use the login (docs/adr/0010); the next chunk carries on.
+ *   now could use the login (docs/adr/0011); the next chunk carries on.
  */
 export interface SyncWarning {
   code:

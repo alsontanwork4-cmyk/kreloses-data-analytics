@@ -92,7 +92,7 @@ export function requestBudgetWarning(): SyncWarning {
   };
 }
 
-/** The warning for a backfill run that stepped aside for the nightly sync or Sync now (docs/adr/0010). */
+/** The warning for a backfill run that stepped aside for the nightly sync or Sync now (docs/adr/0011). */
 export function yieldedWarning(): SyncWarning {
   return {
     code: "backfill_yielded",

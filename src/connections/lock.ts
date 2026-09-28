@@ -27,7 +27,7 @@ export interface ConnectionLease {
   /**
    * A backfill lease only: another sync (nightly, Sync now) asked it to step aside
    * (`requestBackfillYield`). Updated by every `renewConnectionLease`; the backfill run stops at its
-   * next request and releases the lease (docs/adr/0010).
+   * next request and releases the lease (docs/adr/0011).
    */
   yieldRequested?: boolean;
 }
@@ -102,7 +102,7 @@ export async function renewConnectionLease(sql: Queryable, lease: ConnectionLeas
 
 /**
  * Asks the history backfill holding this connection's lease (if one does and its lease has not
- * expired) to step aside: it stops at its next request and releases the lease (docs/adr/0010).
+ * expired) to step aside: it stops at its next request and releases the lease (docs/adr/0011).
  * True if a backfill holds it. The nightly sync and Sync now call this, then wait for the lease.
  */
 export async function requestBackfillYield(sql: Sql, connectionId: string): Promise<boolean> {

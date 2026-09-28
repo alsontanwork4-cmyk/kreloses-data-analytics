@@ -537,7 +537,7 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   At most one `running` run per connection (unique partial index).
 - `connection_locks` — the per-connection lease (above; database clock, renewed by every write of a
   sync, ADR 0009). Holders are `sync:…`, `backfill:…` (#8) or `login-test:…`; `yield_requested_at`
-  is set when the nightly sync or Sync now asks a backfill holder to step aside (ADR 0010).
+  is set when the nightly sync or Sync now asks a backfill holder to step aside (ADR 0011).
 - `connection_backfills` (#8) — one per connection: `status` (`active` | `paused` | `complete`),
   `date_from` (2024-01-01), `date_to` (fixed by its first chunk: the clinic day it ran; null before),
   `requested_at`, `started_at`, `paused_at`, `completed_at`. Month progress is not stored: see
@@ -767,7 +767,7 @@ spread over several nights at a gentle rate, with progress on Sync status. Code:
 (`runBackfill`, `runBackfillChunk`, `backfillMonths`, `completedMonths`), `backfill-config.ts` (settings,
 night window), `backfill-store.ts` (`connection_backfills`), `backfill-progress.ts`
 (`getBackfillProgress`), the endpoint `src/app/api/cron/backfill/route.ts` (`handleBackfillCron` in
-`cron.ts`) and the trigger `.github/workflows/backfill.yml`. ADR 0010.
+`cron.ts`) and the trigger `.github/workflows/backfill.yml`. ADR 0011.
 
 - **Starts by itself** the first time a connection's login test works (`ensureBackfill` in
   `runLoginTest`, `src/connections/service.ts`; the migration also starts one for connections already
@@ -807,7 +807,7 @@ night window), `backfill-store.ts` (`connection_backfills`), `backfill-progress.
   run holds it as `backfill:…`; when the nightly sync (or Sync now) finds it held by a backfill it asks
   it to step aside (`requestBackfillYield`) and waits up to 60 s: the backfill sees the request at its
   next lease renewal, stops cleanly before its next request (`partial`, checkpoint kept, warning
-  `backfill_yielded`) and releases the lease (ADR 0010). A chunk that finds the connection held by
+  `backfill_yielded`) and releases the lease (ADR 0011). A chunk that finds the connection held by
   another sync exits at once (`busy`, no run). The nightly's sweep may read line items of sales the
   backfill has listed but not read yet (older sales "not synced yet") — no page is read twice.
 - **"Data as of"** is unchanged: a completed month counts for periods within it from its run (or, for

@@ -115,7 +115,7 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * or manual run that finds the connection held by a backfill asks it to yield
  * (`requestBackfillYield`) and waits up to `backfillYieldWaitMs` for the lease; the backfill sees
  * the request at its next write and stops cleanly (`partial`, checkpoint kept, `stopReason:
- * "yielded"`) at its next request (docs/adr/0010). Every run counts the HTTP requests it sends to
+ * "yielded"`) at its next request (docs/adr/0011). Every run counts the HTTP requests it sends to
  * Kreloses (`counts.requests`); `maxRequests` stops a run cleanly once it reaches that many (the
  * backfill's per-night budget).
  */
@@ -286,7 +286,7 @@ export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMo
   const purpose: LeasePurpose = mode === "backfill" ? "backfill" : "sync";
   let attempt = await acquireConnectionLease(deps.sql, connectionId, { purpose, ttlMs: LEASE_TTL_MS });
   if (attempt.status === "busy" && attempt.heldFor === "backfill" && mode !== "backfill") {
-    // The nightly sync and Sync now come first: the backfill steps aside (docs/adr/0010).
+    // The nightly sync and Sync now come first: the backfill steps aside (docs/adr/0011).
     attempt = await waitForBackfillToYield(deps, connectionId, purpose, options.backfillYieldWaitMs ?? BACKFILL_YIELD_WAIT_MS);
   }
   if (attempt.status !== "acquired") return attempt;

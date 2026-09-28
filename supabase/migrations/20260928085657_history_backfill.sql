@@ -55,7 +55,7 @@ on conflict (connection_id) do nothing;
 create index sync_runs_connection_id_mode_started_at_idx on public.sync_runs (connection_id, mode, started_at desc);
 
 -- ---------------------------------------------------------------------------------------------
--- 2. The backfill steps aside for other syncs (docs/adr/0010).
+-- 2. The backfill steps aside for other syncs (docs/adr/0011).
 --
 -- A backfill run holds the connection's lease like any sync (holder "backfill:…"). When the
 -- nightly sync or Sync now finds the connection held by a backfill, it sets yield_requested_at;
