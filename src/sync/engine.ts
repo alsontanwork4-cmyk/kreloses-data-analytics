@@ -161,6 +161,8 @@ async function execute(run: RunContext): Promise<SyncResult> {
   const pageSize = options.pageSize ?? SALE_LIST_PAGE_SIZE;
   let counts: SyncCounts = { ...NO_COUNTS };
   let page = options.startPage ?? 1;
+  // Handed back to the Reader with the next page, so paging that does not advance fails loudly.
+  let previous: InvoicePage | undefined;
   const checkpoint = (): SyncCheckpoint => ({ nextPage: page, pageSize });
   const client = new KrelosesClient(run);
 
@@ -175,7 +177,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
         return { status: "partial", runId, counts };
       }
       const result = await client.call((session) =>
-        reader.listInvoices(session, { page, dateRange: range, includeCancelled: true, pageSize }),
+        reader.listInvoices(session, { page, dateRange: range, includeCancelled: true, pageSize, previous }),
       );
       await deps.sql.begin(async (tx) => {
         const written = await saveInvoicePage(tx, { runId, connectionId, invoices: result.invoices, fetchedAt: now() });
@@ -189,6 +191,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
         await recordProgress(tx, runId, counts, result.hasMore ? { nextPage: page + 1, pageSize } : null);
       });
       if (!result.hasMore) break;
+      previous = result;
       page += 1;
     }
 

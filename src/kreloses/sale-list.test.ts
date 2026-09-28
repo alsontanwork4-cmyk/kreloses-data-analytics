@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AuthFailed, LayoutChanged, listInvoices, listLocations, login, type InvoiceListQuery, type KrelosesInvoice } from "./index";
+import { AuthFailed, LayoutChanged, listInvoices, listLocations, login, type InvoiceListQuery, type InvoicePage, type KrelosesInvoice } from "./index";
 import { SYNTHETIC_ACCOUNTS, createFakeKreloses, readFixture, type FakeKreloses } from "./testing/fake-kreloses";
 
 /**
@@ -37,9 +37,9 @@ async function failure(promise: Promise<unknown>): Promise<unknown> {
 
 /** Every page of a listing, in order. */
 async function allPages(session: Awaited<ReturnType<typeof signedIn>>["session"], query: Omit<InvoiceListQuery, "page">) {
-  const pages = [];
+  const pages: InvoicePage[] = [];
   for (let page = 1; ; page += 1) {
-    const result = await listInvoices(session, { ...query, page });
+    const result = await listInvoices(session, { ...query, page, previous: pages.at(-1) });
     pages.push(result);
     if (!result.hasMore) return pages;
     if (page > 20) throw new Error("runaway paging");
@@ -257,6 +257,70 @@ describe("Kreloses Reader: listInvoices", () => {
     expect(body.filter.Filters.find((filter) => filter.Name === "Date")).toMatchObject({
       From: "2026-08-01T00:00:00",
       To: "2026-08-31T23:59:59",
+    });
+  });
+
+  describe("never ends a listing early by mistake (paging it does not understand fails loudly)", () => {
+    it("fails when a page is short but TotalCount says there is more (Kreloses capping the page size)", async () => {
+      const { session } = await signedIn(both, createFakeKreloses({ saleList: { maxPageSize: 3 } }));
+      const error = await failure(listInvoices(session, { page: 1, dateRange: SEPTEMBER, includeCancelled: true, pageSize: 4 }));
+      expect(error).toBeInstanceOf(LayoutChanged);
+      expect((error as Error).message).toMatch(/page 1 has 3 rows where 4 were asked for, yet TotalCount is 11/);
+    });
+
+    it("fails when a page is empty or has more rows than asked for, while TotalCount disagrees", async () => {
+      const empty = await signedIn();
+      answerSaleGet(empty.fake, () => Response.json({ Columns: [], Results: [], TotalCount: 5 }));
+      expect(await failure(listInvoices(empty.session, { page: 1, includeCancelled: true }))).toBeInstanceOf(LayoutChanged);
+
+      const tooMany = await signedIn();
+      const rows = (JSON.parse(readFixture("sale-list-rows.json")) as { rows: unknown[] }).rows.slice(0, 5);
+      answerSaleGet(tooMany.fake, () => Response.json({ Columns: [], Results: rows, TotalCount: 20 }));
+      const error = await failure(listInvoices(tooMany.session, { page: 1, includeCancelled: true, pageSize: 4 }));
+      expect(error).toBeInstanceOf(LayoutChanged);
+      expect((error as Error).message).toMatch(/page 1 has 5 rows where 4 were asked for/);
+    });
+
+    it("fails when a page repeats the previous one (Kreloses ignoring RequestingPage)", async () => {
+      const { session } = await signedIn(both, createFakeKreloses({ saleList: { ignoreRequestingPage: true } }));
+      const query = { dateRange: SEPTEMBER, includeCancelled: true, pageSize: 4 };
+      const first = await listInvoices(session, { ...query, page: 1 });
+      expect(first.hasMore).toBe(true);
+      const error = await failure(listInvoices(session, { ...query, page: 2, previous: first }));
+      expect(error).toBeInstanceOf(LayoutChanged);
+      expect((error as Error).message).toMatch(/page 2 repeats page 1/);
+    });
+
+    it("keeps paging to TotalCount when rows are not newest first, rather than stopping at the first old page", async () => {
+      const fake = createFakeKreloses({ saleList: { ignoreDateFilter: true, oldestFirst: true } });
+      const { session } = await signedIn(both, fake);
+      const pages = await allPages(session, { dateRange: SEPTEMBER, includeCancelled: true, pageSize: 4 });
+      expect(pages).toHaveLength(5); // all 20 rows, 4 per page: page 1 (all 2025) did not end the listing
+      expect(pages.flatMap((page) => ids(page.invoices)).sort()).toEqual([
+        "700101", "700102", "700103", "700104", "700105", "700201", "700202", "700203", "700204", "700205", "700206",
+      ]);
+    });
+
+    it("once pages have been seen out of order, never stops early at an all-old page", async () => {
+      // Each page is newest first on its own, but page 2 is newer than the end of page 1, so the
+      // listing is not in date order: page 3 (all before September) must not end it.
+      const order = [
+        [700105, 700205, 700093, 600001],
+        [700204, 700104, 700203, 700202],
+        [700094, 600004, 600003, 600002],
+        [700103, 700206, 700102, 700201],
+        [700101, 700090, 700092, 700091],
+      ];
+      const { fake, session } = await signedIn();
+      const bySaleId = new Map(fake.saleRows.map((row) => [row.SaleId, row]));
+      fake.intercept((request) => {
+        if (request.url.pathname !== "/Sale/Get") return undefined;
+        const page = (JSON.parse(request.body!) as { request: { RequestingPage: number } }).request.RequestingPage;
+        return Response.json({ Columns: [], Results: (order[page - 1] ?? []).map((id) => bySaleId.get(id)), TotalCount: 20 });
+      });
+      const pages = await allPages(session, { dateRange: SEPTEMBER, includeCancelled: true, pageSize: 4 });
+      expect(pages).toHaveLength(5);
+      expect(pages.flatMap((page) => ids(page.invoices))).toHaveLength(11);
     });
   });
 

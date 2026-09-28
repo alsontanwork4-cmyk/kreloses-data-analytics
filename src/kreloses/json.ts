@@ -43,7 +43,8 @@ const MAX_SCHEMA_KEYS = 20;
  * element and their length.
  *
  * An object is shown key by key only if it looks like a schema: identifier-like keys, at most 20,
- * and values of more than one shape. Anything else may be a dictionary whose keys are data —
+ * and non-null values of more than one shape (nulls are ignored when comparing). Anything else may
+ * be a dictionary whose keys are data —
  * staff, customer or branch names (even single words such as `{Ong: 1}`), emails, ids — and is
  * shown as `{<n keys>: <shape of first value>}`. The price is that a genuine schema whose values
  * all share one shape (e.g. `{From: string, To: string}`) is collapsed too.
@@ -58,9 +59,11 @@ export function describeJsonShape(value: unknown, depth = 0): string {
     const entries = Object.entries(value);
     if (entries.length === 0) return "{}";
     const shapes = entries.map(([, inner]) => describeJsonShape(inner, depth + 1));
-    const uniform = shapes.every((shape) => shape === shapes[0]);
+    // A null value says nothing about the shape (`{Ong: 1, Tan: null}` is still a dictionary).
+    const nonNull = shapes.filter((shape) => shape !== "null");
+    const uniform = nonNull.every((shape) => shape === nonNull[0]);
     if (uniform || entries.length > MAX_SCHEMA_KEYS || entries.some(([key]) => !SCHEMA_KEY.test(key))) {
-      return `{<${entries.length} ${entries.length === 1 ? "key" : "keys"}>: ${shapes[0]}}`;
+      return `{<${entries.length} ${entries.length === 1 ? "key" : "keys"}>: ${nonNull[0] ?? shapes[0]}}`;
     }
     return `{${entries.map(([key], index) => `${key}: ${shapes[index]}`).join(", ")}}`;
   }

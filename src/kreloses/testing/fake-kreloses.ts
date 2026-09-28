@@ -74,6 +74,12 @@ export interface FakeKrelosesOptions {
     rows?: SaleListRow[];
     /** Behave as if Kreloses ignored the filter's Date range (tests the Reader's own date check). */
     ignoreDateFilter?: boolean;
+    /** Never return more rows per page than this, whatever `PageSize` asks for (a capped page size). */
+    maxPageSize?: number;
+    /** Always answer page 1, whatever `RequestingPage` asks for. */
+    ignoreRequestingPage?: boolean;
+    /** List the oldest sale first instead of the newest. */
+    oldestFirst?: boolean;
   };
 }
 
@@ -212,11 +218,14 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
         return !day || ((!from || day >= from) && (!to || day <= to));
       })
       .sort((a, b) => fakeSaleTime(b.SaleDate) - fakeSaleTime(a.SaleDate) || Number(b.SaleId) - Number(a.SaleId));
+    if (options.saleList?.oldestFirst) rows.reverse();
+    const size = Math.min(pageSize, options.saleList?.maxPageSize ?? pageSize);
+    const served = options.saleList?.ignoreRequestingPage ? 1 : page;
     const response = fixture("post-sale-get");
     return new Response(
       JSON.stringify({
         Columns: SALE_LIST_COLUMNS,
-        Results: rows.slice((page - 1) * pageSize, page * pageSize),
+        Results: rows.slice((served - 1) * size, served * size),
         TotalCount: rows.length,
       }),
       { status: response.status, headers: response.headers },

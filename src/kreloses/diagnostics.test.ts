@@ -104,6 +104,25 @@ describe("live login diagnostic (redacted)", () => {
     for (const name of ["Ong", "Tan", "Lim"]) expect(report).not.toContain(name);
   });
 
+  it("still collapses a dictionary when some of its values are null", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.url.pathname === "/Report/GetFilter"
+        ? Response.json({
+            Filters: [{ Name: "Location", Options: [{ Value: "1101", Text: "Branch North" }] }],
+            Staff: { Ong: 1, Tan: null },
+            Leads: { Lim: null, Wong: { Visits: 2, Active: true } },
+            Absent: { Chua: null },
+          })
+        : undefined,
+    );
+    const report = formatLoginDiagnostic(await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport } }));
+    expect(report).toContain("Staff: {<2 keys>: number}");
+    expect(report).toContain("Leads: {<2 keys>: {Visits: number, Active: boolean}}");
+    expect(report).toContain("Absent: {<1 key>: null}");
+    for (const name of ["Ong", "Tan", "Lim", "Wong", "Chua"]) expect(report).not.toContain(name);
+  });
+
   it("does not leak names through the shape when GetFilter's layout changed", async () => {
     const fake = createFakeKreloses();
     fake.intercept((request) =>
@@ -235,7 +254,38 @@ describe("live login diagnostic (redacted)", () => {
       expect(report).toContain("  Payment statuses seen: Paid, Partially paid, Refunded, Unpaid");
       expect(report).toContain("  Filter template: Sale status options Active, Cancelled (selected via option flag Selected); Date filter From/To like 99/99/9999");
       expect(report).toContain("  Reader parse: OK (11 invoices)");
+      // Checks of the Reader's own assumptions, as counts only.
+      expect(report).toContain(
+        "  Sale times by KL hour (as the Reader reads SaleDate): 00-03 1, 03-06 0, 06-09 0, 09-12 4, 12-15 3, 15-18 2, 18-21 0, 21-24 1; unreadable 0",
+      );
+      expect(report).toContain("  Rows newest first: yes");
+      expect(report).toContain("  Rows outside 2026-09-01..2026-09-30: 0");
       for (const secret of [...DATA, ...SECRETS]) expect(report, secret).not.toContain(secret);
+    });
+
+    it("shows when the listing is not newest first or ignores the date range", async () => {
+      const fake = createFakeKreloses({ saleList: { ignoreDateFilter: true, oldestFirst: true } });
+      const diagnostic = await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport }, saleListRange: SEPTEMBER });
+      const report = formatLoginDiagnostic(diagnostic);
+      expect(report).toContain("  TotalCount: 20; rows on the page: 20");
+      expect(report).toContain("  Rows newest first: no");
+      expect(report).toContain("  Rows outside 2026-09-01..2026-09-30: 9");
+      expect(report).toContain(
+        "  Sale times by KL hour (as the Reader reads SaleDate): 00-03 2, 03-06 0, 06-09 0, 09-12 7, 12-15 5, 15-18 3, 18-21 1, 21-24 2; unreadable 0",
+      );
+    });
+
+    it("would expose SaleDate holding KL wall-clock time labelled as UTC (sales at night)", async () => {
+      const fake = createFakeKreloses();
+      // Every sale's /Date(ms)/ shifted by +8 h, as if KL wall-clock time had been sent as UTC.
+      for (const row of fake.saleRows) {
+        const ms = Number(/\d+/.exec(String(row.SaleDate))![0]);
+        row.SaleDate = `/Date(${ms + 8 * 3_600_000})/`;
+      }
+      const report = formatLoginDiagnostic(
+        await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport }, saleListRange: SEPTEMBER }),
+      );
+      expect(report).toMatch(/Sale times by KL hour \(as the Reader reads SaleDate\): 00-03 [1-9]\d*, 03-06 \d+, 06-09 [1-9]/);
     });
 
     it("reports a Sale List the Reader cannot parse, still without values", async () => {

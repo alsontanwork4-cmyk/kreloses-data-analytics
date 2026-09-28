@@ -34,6 +34,13 @@ function monthNumber(name: string): number {
   return MONTHS.findIndex((month) => month.startsWith(lower)) + 1;
 }
 
+const hourFormat = new Intl.DateTimeFormat("en-US", { timeZone: CLINIC_TIME_ZONE, hour: "2-digit", hourCycle: "h23" });
+
+/** The hour (0-23) of an instant on the clinic's clock. */
+export function clinicHour(instant: Date): number {
+  return Number(hourFormat.format(instant));
+}
+
 export function parseClinicInstant(value: unknown): ClinicInstant | null {
   if (typeof value !== "string") return null;
   const text = value.trim();

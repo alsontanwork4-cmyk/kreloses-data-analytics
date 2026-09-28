@@ -188,6 +188,24 @@ describe("Sync Engine", () => {
       expect((await listConnections(db.sql))[0]).toMatchObject({ status: "ok" });
     });
 
+    it.each([
+      ["Kreloses caps the page size (3 rows for 4 asked, TotalCount 11)", { maxPageSize: 3 }],
+      ["Kreloses ignores RequestingPage (page 2 = page 1)", { ignoreRequestingPage: true }],
+    ])("paging it does not understand fails the run instead of succeeding with sales missing: %s", async (_label, saleList) => {
+      h = createSyncHarness(db.sql, { fake: { saleList } });
+      const id = await h.connect(both);
+      const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER, pageSize: 4 }));
+      expect(result).toMatchObject({ status: "failed", error: { code: "layout_changed" } });
+      expect(await listSyncRuns(db.sql)).toMatchObject([{ status: "failed", errorCode: "layout_changed", coveredLocationIds: [] }]);
+    });
+
+    it("reads every sale when Kreloses lists oldest first and ignores the date filter (no early stop)", async () => {
+      h = createSyncHarness(db.sql, { fake: { saleList: { ignoreDateFilter: true, oldestFirst: true } } });
+      const id = await h.connect(both);
+      const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER, pageSize: 4 }));
+      expect(result).toMatchObject({ status: "succeeded", counts: { pages: 5, invoicesSeen: 11, inserted: 11 } });
+    });
+
     it("a rejected login fails the run and marks the connection failed", async () => {
       const id = await h.connect(both);
       h.fake.intercept((request) =>

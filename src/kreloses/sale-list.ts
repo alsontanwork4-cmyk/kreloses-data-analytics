@@ -22,8 +22,10 @@ import type { KrelosesSession } from "./session";
  *
  * UNVERIFIED (no real traffic recorded yet — the live smoke test prints what to check): how the
  * real template expresses selections and dates, and the listing's sort order. So the Reader does
- * not rely on the server-side date filter: it drops rows outside the range itself and, because
- * the list comes newest first, reports `hasMore: false` once a whole page is older than the range.
+ * not rely on the server-side date filter: it drops rows outside the range itself and, while the
+ * pages it has seen are newest first, reports `hasMore: false` once a whole page is older than
+ * the range. Paging that does not add up (a short page while TotalCount says more, more rows than
+ * asked for, a page repeating the previous one) raises `LayoutChanged` rather than losing sales.
  */
 
 /** Rows per page the Kreloses web UI asks for. */
@@ -101,6 +103,22 @@ export interface InvoiceListQuery {
   includeCancelled: boolean;
   /** Rows per page (1–500). Default 500, what the Kreloses UI uses; tests use small pages. */
   pageSize?: number;
+  /**
+   * The page before this one, as `listInvoices` returned it. Pass it for every page after the
+   * first: the Reader then fails loudly if paging does not really advance (a repeated page), and
+   * only ends a listing early while every page so far has been in date order.
+   */
+  previous?: Pick<InvoicePage, "page" | "span">;
+}
+
+/** What one page's rows (all of them, before the date check) cover, for checking the next page. */
+export interface PageSpan {
+  firstSaleId: string;
+  lastSaleId: string;
+  newestAt: Date;
+  oldestAt: Date;
+  /** This page is newest first, and so was every page before it that the Reader was shown. */
+  newestFirstSoFar: boolean;
 }
 
 export interface InvoicePage {
@@ -111,8 +129,14 @@ export interface InvoicePage {
   page: number;
   /** Rows Kreloses returned on this page, before the Reader's own date/status check. */
   rowCount: number;
-  /** False on the last page, or when this whole page is older than `dateRange.from`. */
+  /**
+   * False on the last page (by TotalCount), or when this whole page is older than `dateRange.from`
+   * AND the listing has been newest first so far (the only case where later pages cannot hold
+   * sales in the range).
+   */
   hasMore: boolean;
+  /** Null for an empty page. Pass the page back as `previous` with the next request. */
+  span: PageSpan | null;
 }
 
 /** Used when no date range is asked for, so a template's default range (e.g. month to date) never applies. */
@@ -286,10 +310,27 @@ export function parseSaleListPage(payload: unknown, query: InvoiceListQuery, pag
   const totalCount = readCount(payload.TotalCount ?? payload.totalCount);
   if (totalCount === null) return fail("no TotalCount in the response");
 
+  // Paging that does not add up would silently lose sales: fail instead (spec story 17).
+  const { page } = query;
+  if (results.length > pageSize) fail(`page ${page} has ${results.length} rows where ${pageSize} were asked for`);
+  if (results.length < pageSize && (page - 1) * pageSize + results.length < totalCount) {
+    fail(
+      `page ${page} has ${results.length} rows where ${pageSize} were asked for, yet TotalCount is ${totalCount}: Kreloses may be capping the page size, and sales would be missed`,
+    );
+  }
+
   const invoices = results.map((row, index) => parseSaleRow(row, index + 1));
+  const previous = query.previous && query.previous.page === page - 1 ? query.previous.span : null;
+  const span = spanOf(invoices, previous);
+  if (span && previous && (span.firstSaleId === previous.firstSaleId || span.lastSaleId === previous.lastSaleId)) {
+    fail(`page ${page} repeats page ${page - 1} (the same first or last sale): Kreloses may be ignoring RequestingPage, and sales would be missed`);
+  }
+
   const range = query.dateRange;
-  const lastPage = results.length === 0 || results.length < pageSize || query.page * pageSize >= totalCount;
-  const olderThanRange = range !== undefined && invoices.length > 0 && invoices.every((invoice) => invoice.saleDate < range.from);
+  const lastPage = results.length === 0 || results.length < pageSize || page * pageSize >= totalCount;
+  // Ending early is only safe if the listing really is newest first; otherwise read to TotalCount.
+  const olderThanRange =
+    range !== undefined && span !== null && span.newestFirstSoFar && invoices.every((invoice) => invoice.saleDate < range.from);
   return {
     invoices: invoices.filter(
       (invoice) =>
@@ -300,6 +341,24 @@ export function parseSaleListPage(payload: unknown, query: InvoiceListQuery, pag
     page: query.page,
     rowCount: results.length,
     hasMore: !lastPage && !olderThanRange,
+    span,
+  };
+}
+
+function spanOf(invoices: KrelosesInvoice[], previous: PageSpan | null): PageSpan | null {
+  if (invoices.length === 0) return null;
+  const times = invoices.map((invoice) => invoice.saleAt.getTime());
+  const newestFirst = times.every((time, index) => index === 0 || time <= times[index - 1]!);
+  const newestAt = Math.max(...times);
+  // A sale added while paging shifts rows down by one, so a page may start with the previous
+  // page's last sale: equal times still count as in order.
+  const continuesInOrder = !previous || (previous.newestFirstSoFar && previous.oldestAt.getTime() >= newestAt);
+  return {
+    firstSaleId: invoices[0]!.saleId,
+    lastSaleId: invoices.at(-1)!.saleId,
+    newestAt: new Date(newestAt),
+    oldestAt: new Date(Math.min(...times)),
+    newestFirstSoFar: newestFirst && continuesInOrder,
   };
 }
 

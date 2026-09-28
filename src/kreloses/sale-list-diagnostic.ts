@@ -1,5 +1,7 @@
 import { addDays, clinicToday, startOfMonth } from "../filters/dates";
 
+import { clinicHour, parseClinicInstant } from "./dates";
+
 import { AuthFailed, isKrelosesError } from "./errors";
 import { describeJsonShape, firstArray, isRecord } from "./json";
 import { OPTION_LIST_KEYS, OPTION_NAME_KEYS } from "./locations";
@@ -41,6 +43,12 @@ export interface SaleListPageStructure {
   missingFields: string[];
   otherFields: string[];
   saleDateFormats: string[];
+  /** Rows per 3-hour slot of the clinic's day, as the Reader reads `SaleDate` (counts only). */
+  saleTimesByHour: string;
+  /** Whether the rows come newest first (the Reader's early stop relies on it). */
+  newestFirst: "yes" | "no" | "unknown";
+  /** Rows whose clinic day is outside the requested range (the server ignoring the date filter). */
+  outsideRange: number;
   amounts: string;
   statuses: string[];
   cancelledSeen: boolean;
@@ -80,6 +88,9 @@ export function formatSaleListDiagnostic(diagnostic: SaleListDiagnostic): string
     `  Expected fields missing: ${list(page.missingFields)}`,
     `  Other fields: ${list(page.otherFields)}`,
     `  SaleDate formats: ${list(page.saleDateFormats)}`,
+    `  Sale times by KL hour (as the Reader reads SaleDate): ${page.saleTimesByHour} (most sales at 00-06 would mean SaleDate holds KL time sent as UTC)`,
+    `  Rows newest first: ${page.newestFirst}`,
+    `  Rows outside ${range.from}..${range.to}: ${page.outsideRange}`,
     `  Amounts: ${page.amounts}`,
     `  Sale statuses seen: ${list(page.statuses)} (cancelled sales present: ${page.cancelledSeen ? "yes" : "no"})`,
     `  Payment statuses seen: ${list(page.paymentStatuses)}`,
@@ -113,6 +124,19 @@ function describePage(payload: unknown, range: InvoiceDateRange): SaleListPageSt
       .filter((value, index, all) => all.indexOf(value) === index)
       .sort();
 
+  const instants = rows.map((row) => parseClinicInstant(row.SaleDate));
+  const readable = instants.filter((instant) => instant !== null);
+  const slots = Array.from({ length: 8 }, () => 0);
+  for (const { instant } of readable) slots[Math.floor(clinicHour(instant) / 3)]! += 1;
+  const hour = (value: number) => String(value).padStart(2, "0");
+  const saleTimesByHour = `${slots.map((count, slot) => `${hour(slot * 3)}-${hour(slot * 3 + 3)} ${count}`).join(", ")}; unreadable ${instants.length - readable.length}`;
+  const newestFirst =
+    readable.length < instants.length
+      ? "unknown"
+      : readable.every((current, index) => index === 0 || current.instant <= readable[index - 1]!.instant)
+        ? "yes"
+        : "no";
+
   let parse: string;
   try {
     const page = parseSaleListPage(payload, { page: 1, dateRange: range, includeCancelled: true }, SALE_LIST_PAGE_SIZE);
@@ -129,6 +153,9 @@ function describePage(payload: unknown, range: InvoiceDateRange): SaleListPageSt
     missingFields: SALE_LIST_FIELDS.filter((field) => !inEveryRow(field)),
     otherFields: [...otherKeys.filter((key) => SCHEMA_KEY.test(key)).sort(), ...(unprintable > 0 ? [`<${unprintable} unprintable>`] : [])],
     saleDateFormats: [...new Set(rows.map((row) => datePattern(row.SaleDate)))].slice(0, 5),
+    saleTimesByHour,
+    newestFirst,
+    outsideRange: readable.filter(({ clinicDate }) => clinicDate < range.from || clinicDate > range.to).length,
     amounts: describeAmounts(rows),
     statuses: labels("SaleStatusName"),
     cancelledSeen: rows.some((row) => typeof row.SaleStatusName === "string" && saleStatusOf(row.SaleStatusName) === "cancelled"),

@@ -17,6 +17,7 @@ export {
   type InvoiceListQuery,
   type InvoicePage,
   type KrelosesInvoice,
+  type PageSpan,
   type SaleStatus,
 } from "./sale-list";
 export type { KrelosesSession, HopEvent } from "./session";
