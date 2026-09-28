@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
+import { formatDayWithWeekday } from "../src/filters/dates";
 import { SYNTHETIC_ACCOUNTS } from "../src/kreloses/testing/synthetic-accounts";
 
 import { signIn } from "./support/auth";
@@ -14,7 +15,8 @@ import { run } from "./support/run";
  * refused without the bearer token (a dashboard session does not open it either), then — after
  * "Sync now" of September 2026 from the fake Kreloses — `doctor_performance` returns exactly the
  * numbers the Doctors page exports, `search_sales` finds a customer's sales, and every answer states
- * the data as of per branch.
+ * the data as of per branch; `daily_sales`, `item_mix`, `retention` and `discounts` (#18) return
+ * exactly what the Daily, Mix, Retention and Discounts pages export as CSV.
  */
 const { both } = SYNTHETIC_ACCOUNTS;
 const TOKEN = process.env.E2E_MCP_BEARER_TOKEN!;
@@ -63,7 +65,17 @@ test.describe("MCP server for Claude", () => {
     expect(initialize.status()).toBe(200);
     expect(await initialize.json()).toMatchObject({ result: { serverInfo: { name: "kreloses-analytics" } } });
     const list = (await (await rpc(request, "tools/list", {})).json()) as { result: { tools: { name: string; annotations: { readOnlyHint: boolean } }[] } };
-    expect(list.result.tools.map((tool) => tool.name).sort()).toEqual(["data_freshness", "doctor_performance", "search_sales"]);
+    expect(list.result.tools.map((tool) => tool.name).sort()).toEqual([
+      "daily_sales",
+      "data_freshness",
+      "discounts",
+      "doctor_performance",
+      "item_mix",
+      "retention",
+      "search_sales",
+    ]);
+    // A new tool is behind the token too.
+    expect((await rpc(request, "tools/call", { name: "daily_sales", arguments: {} }, null)).status()).toBe(401);
     expect(list.result.tools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
 
     // Sync September 2026 through the app, as the owner would.
@@ -115,4 +127,153 @@ test.describe("MCP server for Claude", () => {
     expect(ambiguous.result.isError).toBe(true);
     expect(ambiguous.result.content[0]!.text).toContain('Branch "Branch" matches more than one branch: Branch North');
   });
+
+  test("daily_sales, item_mix, retention and discounts answer with exactly their pages' numbers", async ({ page, request }) => {
+    await signIn(page, run.ownerEmail);
+    const card = await addConnection(page, { label: "Both branches", email: both.email, password: both.password });
+    await syncMonth(card, "September 2026");
+
+    // daily_sales = the Daily page's "By doctor" CSV for 20 Sep 2026 (doctors, then the groups by name).
+    const daily = (await callTool(request, "daily_sales", { day: "2026-09-20" })).structuredContent.daily as DailyAnswer;
+    expect(daily.day).toBe("2026-09-20");
+    await page.goto("/daily?day=2026-09-20");
+    const dailyCsv = await downloadCsv(page, page.getByTestId("daily-doctors"));
+    const dailyColumns = ["Doctor", "Revenue (RM)", "Revenue vs last week (RM)", "Invoices", "Customers", "AOV per customer (RM)"];
+    expect(pick(dailyCsv, dailyColumns)).toEqual(
+      [...daily.doctors, ...daily.groups.map((group) => ({ ...group, name: group.label }))].map((row) => [
+        row.name,
+        row.revenue.value,
+        row.revenue.lastWeek.change,
+        String(row.invoices.value),
+        String(row.customers.value),
+        row.aovPerCustomer.value ?? "",
+      ]),
+    );
+    expect(dailyCsv.length).toBeGreaterThanOrEqual(3);
+    // No day: yesterday at the clinic, as on the Daily page (the app's clock is CLINIC_NOW).
+    const yesterday = (await callTool(request, "daily_sales", {})).structuredContent.daily as DailyAnswer;
+    await page.goto("/daily");
+    await expect(page.getByTestId("daily-day")).toContainText(formatDayWithWeekday(yesterday.day));
+
+    // item_mix = the Mix page's "Revenue by service group" CSV (doctors, all doctors, whole clinic).
+    const mixResult = (await callTool(request, "item_mix", SEPTEMBER)).structuredContent;
+    const mix = mixResult.mix as { doctors: MixRow[]; allDoctors: MixRow; clinic: MixRow };
+    const groups = Object.keys(mix.allDoctors.groups);
+    const labels = mixResult.groupLabels as Record<string, string>;
+    await page.goto(`/mix?from=${SEPTEMBER.dateFrom}&to=${SEPTEMBER.dateTo}`);
+    const mixCsv = await downloadCsv(page, page.getByTestId("mix-revenue"));
+    expect(pick(mixCsv, ["Doctor", "Revenue (RM)", ...groups.map((group) => `${labels[group]} (RM)`)])).toEqual(
+      [...mix.doctors, { ...mix.allDoctors, name: "All doctors (clinic average)" }, { ...mix.clinic, name: "Whole clinic" }].map((row) => [
+        row.name!,
+        row.revenue,
+        ...groups.map((group) => row.groups[group]!.revenue),
+      ]),
+    );
+    expect(mix.doctors).toHaveLength(3);
+
+    // retention = the Retention page's "New vs returning" CSV (the whole clinic, then doctors with customers).
+    const retention = (await callTool(request, "retention", SEPTEMBER)).structuredContent.retention as {
+      clinic: { newVsReturning: NewVsReturning };
+      doctors: { name: string; newVsReturning: NewVsReturning }[];
+    };
+    await page.goto(`/retention?from=${SEPTEMBER.dateFrom}&to=${SEPTEMBER.dateTo}`);
+    const retentionCsv = await downloadCsv(page, page.getByTestId("new-vs-returning"));
+    expect(pick(retentionCsv, ["Doctor", "Customers seen", "New", "New share (%)", "Returning", "Returning share (%)"])).toEqual(
+      [{ name: "Whole clinic (all staff)", newVsReturning: retention.clinic.newVsReturning }, ...retention.doctors]
+        .filter((row) => row.newVsReturning.customers > 0)
+        .map(({ name, newVsReturning: n }) => [name, String(n.customers), String(n.newCustomers), fixed(n.newPercent), String(n.returningCustomers), fixed(n.returningPercent)]),
+    );
+    expect(retention.clinic.newVsReturning.customers).toBeGreaterThan(0);
+
+    // discounts = the Discounts page's per-doctor and discount-type CSVs.
+    const discountsResult = (await callTool(request, "discounts", SEPTEMBER)).structuredContent;
+    const discounts = discountsResult.discounts as { total: { discount: string }; doctors: DiscountRow[] };
+    const types = discountsResult.types as { types: { label: string; amount: string; invoices: number }[] };
+    expect(discounts.total.discount).toBe("280.00");
+    await page.goto(`/discounts?from=${SEPTEMBER.dateFrom}&to=${SEPTEMBER.dateTo}`);
+    const byDoctor = await downloadCsv(page, page.getByTestId("doctor-discounts"));
+    expect(pick(byDoctor, ["Doctor", "Discount (RM)", "Discount rate (%)", "Invoices discounted (%)", "Invoices"])).toEqual(
+      discounts.doctors.map((row) => [row.name, row.discount, fixed(row.discountRatePercent), fixed(row.discountedInvoicesPercent), String(row.invoices)]),
+    );
+    const byType = await downloadCsv(page, page.getByTestId("discount-types"));
+    expect(pick(byType, ["Discount", "Amount (RM)", "Invoices"])).toEqual(types.types.map((row) => [row.label, row.amount, String(row.invoices)]));
+  });
 });
+
+interface Metric<T> {
+  value: T;
+  lastWeek: { base: T; change: T; changePercent: number | null };
+}
+interface DailyRow {
+  name: string;
+  revenue: Metric<string>;
+  invoices: Metric<number>;
+  customers: Metric<number>;
+  aovPerCustomer: Metric<string | null>;
+}
+interface DailyAnswer {
+  day: string;
+  doctors: DailyRow[];
+  groups: (Omit<DailyRow, "name"> & { label: string })[];
+}
+interface MixRow {
+  name?: string;
+  revenue: string;
+  groups: Record<string, { revenue: string } | undefined>;
+}
+interface NewVsReturning {
+  customers: number;
+  newCustomers: number;
+  returningCustomers: number;
+  newPercent: number | null;
+  returningPercent: number | null;
+}
+interface DiscountRow {
+  name: string;
+  discount: string;
+  discountRatePercent: number | null;
+  discountedInvoicesPercent: number | null;
+  invoices: number;
+}
+
+/** A percentage as the CSV writes it ("50.0"; empty for none). */
+const fixed = (value: number | null) => (value === null ? "" : value.toFixed(1));
+
+/** A table's CSV export, parsed (RFC 4180: quoted cells, doubled quotes), one record per row keyed by header. */
+async function downloadCsv(page: Page, table: Locator): Promise<Record<string, string>[]> {
+  const [download] = await Promise.all([page.waitForEvent("download"), table.getByRole("button", { name: "Export CSV" }).first().click()]);
+  const [header, ...rows] = (await readFile((await download.path())!, "utf8"))
+    .replace(/^﻿/, "")
+    .trim()
+    .split("\r\n")
+    .map(splitCsvLine);
+  return rows.map((row) => Object.fromEntries(header!.map((name, index) => [name, row[index] ?? ""])));
+}
+
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index]!;
+    if (quoted) {
+      if (char === '"' && line[index + 1] === '"') {
+        cell += '"';
+        index++;
+      } else if (char === '"') quoted = false;
+      else cell += char;
+    } else if (char === '"') quoted = true;
+    else if (char === ",") {
+      cells.push(cell);
+      cell = "";
+    } else cell += char;
+  }
+  cells.push(cell);
+  return cells;
+}
+
+/** The given columns of every CSV row (failing clearly when the page has no such column). */
+function pick(rows: Record<string, string>[], columns: string[]): string[][] {
+  for (const column of columns) expect(rows[0] ?? {}, `CSV column "${column}"`).toHaveProperty([column]);
+  return rows.map((row) => columns.map((column) => row[column]!));
+}

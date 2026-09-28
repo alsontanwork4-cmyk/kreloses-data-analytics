@@ -6,7 +6,7 @@ import { syntheticSales, type SyntheticSale } from "@/kreloses/testing/synthetic
 import { runSync } from "@/sync/engine";
 import { clearSyncTables, createSyncHarness, type SyncHarness } from "@/sync/test-support";
 
-import { dailyComparisonDays, defaultDailyDay, getDailySales, getPendingLineItems, resolveDailyDay, type DailyMetric } from "./index";
+import { dailyComparisonDays, dailyDayProblem, defaultDailyDay, getDailySales, getPendingLineItems, resolveDailyDay, type DailyMetric } from "./index";
 import { dailyScenario } from "./testing/daily-scenario";
 
 /**
@@ -327,5 +327,21 @@ describe("The day the Daily page shows", () => {
     expect(resolveDailyDay("0100-06-15", now)).toBe("2026-09-27");
     // "Today" is the clinic's: at 00:30 on the 29th in KL (still the 28th in UTC), the 29th is allowed.
     expect(resolveDailyDay("2026-09-29", new Date("2026-09-28T16:30:00Z"))).toBe("2026-09-29");
+  });
+
+  it("says why a day cannot be shown (the MCP daily_sales tool refuses such a day instead of falling back to yesterday)", () => {
+    const now = new Date("2026-09-28T02:00:00Z"); // 28 Sep 2026, 10:00 in KL
+    expect(dailyDayProblem("2026-09-28", now)).toBeNull();
+    expect(dailyDayProblem("2026-09-01", now)).toBeNull();
+    expect(dailyDayProblem("2000-01-01", now)).toBeNull();
+    expect(dailyDayProblem("2026-09-29", now)).toBe("in_the_future");
+    expect(dailyDayProblem("2099-01-01", now)).toBe("in_the_future");
+    expect(dailyDayProblem("1999-12-31", now)).toBe("too_early");
+    expect(dailyDayProblem("0100-06-15", now)).toBe("too_early");
+    expect(dailyDayProblem("2026-02-30", now)).toBe("not_a_date");
+    expect(dailyDayProblem("yesterday", now)).toBe("not_a_date");
+    expect(dailyDayProblem("", now)).toBe("not_a_date");
+    // Today is the clinic's: at 00:30 on the 29th in KL (still the 28th in UTC), the 29th is not in the future.
+    expect(dailyDayProblem("2026-09-29", new Date("2026-09-28T16:30:00Z"))).toBeNull();
   });
 });

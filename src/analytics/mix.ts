@@ -195,10 +195,19 @@ export const MAX_TOP_ITEMS = 50;
  * Each doctor's top items by revenue in the filter (items with positive revenue only; ties by
  * name), at most `limit` per doctor (default `DEFAULT_TOP_ITEMS`, capped at `MAX_TOP_ITEMS`).
  * Doctors in the same order as the mix (revenue, then name).
+ *
+ * `groups` (the MCP `item_mix` tool's group filter): rank only items in these buckets — a doctor's
+ * top diagnostics items, say. Each item's share is still of the doctor's WHOLE revenue, and every
+ * doctor with revenue is still listed (with no items if they sold nothing in the groups).
  */
-export async function getTopItemsByDoctor(sql: Sql, filter: GlobalFilter, options: { limit?: number } = {}): Promise<{ period: DateRange; limit: number; doctors: DoctorTopItems[] }> {
+export async function getTopItemsByDoctor(
+  sql: Sql,
+  filter: GlobalFilter,
+  options: { limit?: number; groups?: readonly MixBucket[] } = {},
+): Promise<{ period: DateRange; limit: number; doctors: DoctorTopItems[] }> {
   const period: DateRange = { dateFrom: filter.dateFrom, dateTo: filter.dateTo };
   const limit = Math.min(MAX_TOP_ITEMS, Math.max(1, Math.trunc(options.limit ?? DEFAULT_TOP_ITEMS)));
+  const inGroups = options.groups ? sql`i.mix_group = any(${[...options.groups]}::text[])` : sql`true`;
   const rows = await sql<
     { staffId: string; itemKey: string; name: string; mixGroup: MixBucket; revenue: string; doctorRevenue: string; share: string | null; lines: number; invoices: number }[]
   >`
@@ -211,10 +220,15 @@ export async function getTopItemsByDoctor(sql: Sql, filter: GlobalFilter, option
         and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
       group by f.staff_id, f.item_key
     ),
+    totals as (
+      select i.staff_id, sum(i.revenue) as doctor_revenue from items i group by i.staff_id
+    ),
     ranked as (
-      select i.*, sum(i.revenue) over (partition by i.staff_id) as doctor_revenue,
+      select i.*, t.doctor_revenue,
         row_number() over (partition by i.staff_id order by i.revenue desc, lower(i.name), i.item_key) as rank
       from items i
+      join totals t on t.staff_id = i.staff_id
+      where ${inGroups}
     )
     select staff_id::text as staff_id, item_key, name, mix_group, revenue::text as revenue, doctor_revenue::text as doctor_revenue,
       case when doctor_revenue > 0 then round(100 * revenue / doctor_revenue, 1)::text end as share, lines, invoices

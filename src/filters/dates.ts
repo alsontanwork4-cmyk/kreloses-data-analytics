@@ -100,6 +100,18 @@ export function formatIsoDate(date: IsoDate): string {
   return `${d} ${MONTHS[m - 1]} ${y}`;
 }
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** `'2026-09-27'` → `'Sunday 27 Sep 2026'` (`short`: `'Sun 27 Sep 2026'`). Deterministic, no locale data. */
+export function formatDayWithWeekday(day: IsoDate, style: "long" | "short" = "long"): string {
+  if (!isIsoDate(day)) return day;
+  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+  const date = new Date(0);
+  date.setUTCFullYear(y, m - 1, d); // not Date.UTC: it reads years 0–99 as 19xx
+  const weekday = WEEKDAYS[date.getUTCDay()]!;
+  return `${style === "short" ? weekday.slice(0, 3) : weekday} ${formatIsoDate(day)}`;
+}
+
 /** `'1 Sep 2026 – 28 Sep 2026'`, or a single date when both ends match. */
 export function formatDateRange(dateFrom: IsoDate, dateTo: IsoDate): string {
   return dateFrom === dateTo

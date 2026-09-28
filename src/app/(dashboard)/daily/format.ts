@@ -1,21 +1,11 @@
 import type { KpiChange } from "@/analytics";
-import { formatIsoDate, isIsoDate, type IsoDate } from "@/filters";
 import { formatCountChange, formatPercentChange } from "@/lib/format";
 import { formatRinggitChange, moneyToSen, type Money } from "@/lib/money";
 
 /** Display only (the Daily page): the numbers arrive computed by the Analytics Service (`getDailySales`). */
 
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-/** `'2026-09-27'` → `'Sunday 27 Sep 2026'` (`short`: `'Sun 27 Sep 2026'`). Deterministic, no locale data. */
-export function formatDayWithWeekday(day: IsoDate, style: "long" | "short" = "long"): string {
-  if (!isIsoDate(day)) return day;
-  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
-  const date = new Date(0);
-  date.setUTCFullYear(y, m - 1, d); // not Date.UTC: it reads years 0–99 as 19xx
-  const weekday = WEEKDAYS[date.getUTCDay()]!;
-  return `${style === "short" ? weekday.slice(0, 3) : weekday} ${formatIsoDate(day)}`;
-}
+// Shared with the MCP `daily_sales` tool, so it lives with the other date formats.
+export { formatDayWithWeekday } from "@/filters";
 
 export type ComparisonName = "last week" | "last year";
 

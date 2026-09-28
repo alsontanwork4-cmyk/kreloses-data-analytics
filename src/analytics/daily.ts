@@ -61,6 +61,14 @@ export interface DailyDoctorRow extends DailyFigures {
  */
 export type DailyGroup = "other" | "generic" | "noStaff" | "pending";
 
+/** What each group is called on the Daily page and in the MCP `daily_sales` tool's answers. */
+export const DAILY_GROUP_LABELS: Record<DailyGroup, string> = {
+  other: "Other staff",
+  generic: "Generic accounts",
+  noStaff: "No staff on line",
+  pending: "Line items not synced yet",
+};
+
 export interface DailyGroupRow extends DailyFigures {
   group: DailyGroup;
 }
@@ -104,13 +112,25 @@ export function defaultDailyDay(now: Date = new Date()): IsoDate {
 export const EARLIEST_DAILY_DAY: IsoDate = "2000-01-01";
 
 /**
- * The day asked for (e.g. the page's `?day=YYYY-MM-DD`; the first one if repeated) if it is a real
- * date from `EARLIEST_DAILY_DAY` up to today at the clinic (today allowed: a day in progress), else
- * `defaultDailyDay(now)` — a future day has no sales, and would still show "data as of".
+ * Why `value` cannot be the Daily day, or null when it can: a day is a real date from
+ * `EARLIEST_DAILY_DAY` up to today at the clinic (today allowed: a day in progress) — a future day
+ * has no sales, and would still show "data as of". The page falls back to yesterday
+ * (`resolveDailyDay`); the MCP `daily_sales` tool refuses the day and says why.
+ */
+export function dailyDayProblem(value: unknown, now: Date = new Date()): "not_a_date" | "too_early" | "in_the_future" | null {
+  if (!isIsoDate(value)) return "not_a_date";
+  if (value < EARLIEST_DAILY_DAY) return "too_early";
+  if (value > clinicToday(now)) return "in_the_future";
+  return null;
+}
+
+/**
+ * The day asked for (e.g. the page's `?day=YYYY-MM-DD`; the first one if repeated) if it can be
+ * shown (`dailyDayProblem`), else `defaultDailyDay(now)`.
  */
 export function resolveDailyDay(value: string | readonly string[] | undefined, now: Date = new Date()): IsoDate {
   const first = typeof value === "string" ? value : value?.[0];
-  return isIsoDate(first) && first >= EARLIEST_DAILY_DAY && first <= clinicToday(now) ? first : defaultDailyDay(now);
+  return first !== undefined && dailyDayProblem(first, now) === null ? first : defaultDailyDay(now);
 }
 
 type Period = "day" | "lastWeek" | "lastYear";

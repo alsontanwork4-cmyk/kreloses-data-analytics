@@ -73,7 +73,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page and the cron route). The nightly cron shares 250 s between all connections, each capped at this |
 | `SYNC_NIGHTLY_WINDOW_DAYS` | Optional: how many days back the nightly sync re-reads the Sale List to notice edits, cancellations and refunds (1–366, default 45) |
 | `CRON_SECRET` | Server only, **required for the nightly sync**: at least 16 random characters (`openssl rand -hex 32`). Vercel Cron sends it as `Authorization: Bearer …` to `/api/cron/nightly`; without it (or with a shorter one) the endpoint refuses every request |
-| `CLINIC_NOW` | Tests only: freezes `clinicNow()` (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
+| `CLINIC_NOW` | Tests only: freezes `clinicNow()` — "today" for the Daily page and the MCP server (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
 | `MCP_BEARER_TOKEN` | Server only. The secret Claude sends to the MCP server (`openssl rand -base64 32`; at least 32 characters). Unset, blank or shorter → `/api/mcp` refuses every request. It grants read access to ALL clinic data: treat it like a password (see [Connect Claude](#connect-claude-to-the-mcp-server)) |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
@@ -856,8 +856,11 @@ getDailySales(sql, day: IsoDate, filter?: { branchIds?, doctorIds? }): Promise<D
   // DailyMetric<T> = { value, lastWeek: KpiChange<T>, lastYear: KpiChange<T> }   (KpiChange: { base, change, changePercent }; % null when base is 0)
 dailyComparisonDays(day)       // { lastWeek: day − 7, lastYear: same date a year earlier (29 Feb → 28 Feb) }
 defaultDailyDay(now?)          // yesterday at the clinic (Asia/Kuala_Lumpur), whatever the server's time zone
-resolveDailyDay(value, now?)   // value (e.g. ?day=, first if repeated) if a real date from 2000-01-01 up to today
-                               // at the clinic (today allowed), else defaultDailyDay
+dailyDayProblem(value, now?)   // (#18) null if value is a real date from 2000-01-01 (EARLIEST_DAILY_DAY) up to today at
+                               // the clinic (today allowed), else "not_a_date" | "too_early" | "in_the_future"
+resolveDailyDay(value, now?)   // value (e.g. ?day=, first if repeated) if dailyDayProblem says it is fine, else defaultDailyDay
+DAILY_GROUP_LABELS             // (#18) group → name ("Other staff", …): the page's row names and daily_sales's `label`
+formatDayWithWeekday(day, style?)  // @/filters: "Sunday 27 Sep 2026" (moved there from the page for daily_sales)
 clinicNow()                    // @/lib/clinic-clock (server only): "now" for clinic-relative defaults; CLINIC_NOW
                                // (ISO instant with zone) freezes it outside production (the e2e suite sets it)
 ```
@@ -876,7 +879,9 @@ clinicNow()                    // @/lib/clinic-clock (server only): "now" for cl
   week and last year (percentage + amount, arrow + sign + colour); the CSV has, per metric, the value,
   each comparison day's value, the change and the change % (`daily-branches_<day>.csv`,
   `daily-doctors_<day>.csv`).
-- MCP `daily_sales` (#17/#18): `getDailySales(sql, resolveDailyDay(input.day, clinicNow()), { branchIds, doctorIds })`.
+- MCP `daily_sales` (#18): `getDailySales(sql, day, { branchIds, doctorIds })` with `day` = the
+  argument or `defaultDailyDay(now)`; unlike the page it refuses a day `dailyDayProblem` rejects
+  (saying why) instead of answering for yesterday.
 - Tests: `src/analytics/daily.test.ts` (Seam 1, hand-computed figures for the synthetic scenario in
   `src/analytics/testing/daily-scenario.ts`, dates relative to the day), `e2e/daily.spec.ts` (the same
   scenario around yesterday, with the app's clock fixed by `CLINIC_NOW` = `E2E_CLINIC_NOW` from
@@ -1036,11 +1041,13 @@ getServiceMix(sql, filter): Promise<ServiceMix>
   // MixShare = { revenue: Money, sharePercent: number | null }  (1 dp; null when the row's total ≤ 0)
   // MixComparison = MixShare & { averageSharePercent, differencePoints (doctor − all doctors, pp, 1 dp),
   //                              comparison: "above" | "below" | "in_line" | null }  (above/below when |difference| ≥ 5.0)
-getTopItemsByDoctor(sql, filter, { limit? }): Promise<{ period, limit, doctors: { staffId, name, revenue, items: TopItem[] }[] }>
+getTopItemsByDoctor(sql, filter, { limit?, groups? }): Promise<{ period, limit, doctors: { staffId, name, revenue, items: TopItem[] }[] }>
   // limit default 5, max 50; TopItem = { itemKey, name (most frequent spelling), group, revenue, sharePercent (of the doctor's revenue), lines, invoices }; positive revenue only
+  // groups (#18, MCP item_mix): rank only items in these MixBuckets; shares stay of the doctor's WHOLE revenue; every doctor still listed
 getItemRevenue(sql, filter): Promise<Record<itemKey, Money>>   // dates + branches, doctor filter ignored (Settings → Items)
 getServiceLinesByDoctor(sql, filter): Promise<{ period, total: ServiceLineFigures, doctors: (ServiceLineFigures & { staffId, name, source })[] }>
-  // ServiceLineFigures = { revenue, surgeryRevenue, consultRevenue, surgerySharePercent, consultSharePercent }; total = the whole filter (doctor filter applies)
+  // ServiceLineFigures = { revenue, surgeryRevenue, consultRevenue, surgerySharePercent, consultSharePercent }; total = the whole filter (doctor filter applies);
+  // a period without sales: total all "0.00" (shares null), no doctors
 getMonthlyServiceLineRevenue(sql, filter, line: "surgery" | "consult"): Promise<{ month: "YYYY-MM"; staffId; revenue: Money }[]>
   // per doctor (kind doctor) per month, by month then doctor name — for the Trends measure switch (#10)
 serviceLineCondition(sql, line)   // the SQL fragment `f.is_surgery` / `f.is_consult`, for a query over revenueFacts aliased f
@@ -1225,25 +1232,41 @@ itself first (`checkMcpBearerToken`, `src/mcp/auth.ts`):
 everything (fail closed); missing/wrong token → 401 + `WWW-Authenticate: Bearer`. Never log the
 token or the `Authorization` header.
 
-**Tools are one file each** in `src/mcp/tools/`, listed once in `MCP_TOOLS` (`tools/index.ts`).
-Today: `doctor_performance` (`getDoctorRanking` + `getPendingLineItems`), `search_sales`
-(`searchSales`), `data_freshness` (`getConnectionSyncStatus`). To add one (#18: `daily_sales`,
-`item_mix`, `retention`, `discounts`):
+**Tools are one file each** in `src/mcp/tools/`, listed once in `MCP_TOOLS` (`tools/index.ts`), each
+a thin wrapper over the Analytics Service calls its dashboard page makes:
+
+| Tool (`src/mcp/tools/<kebab-name>.ts`) | Wraps | Notes |
+| --- | --- | --- |
+| `doctor_performance` | `getDoctorRanking` + `getPendingLineItems` | `splitByBranch` |
+| `daily_sales` (#18) | `getDailySales(sql, day, { branchIds, doctorIds })` + `getPendingLineItems` for the day | `day` (default `defaultDailyDay`, yesterday) instead of a period; a day the page would replace (`dailyDayProblem`: not a date, before 2000, in the future) is REFUSED with the reason, never swapped for yesterday; groups carry `label` (`DAILY_GROUP_LABELS`, shared with the page); freshness for the day |
+| `search_sales` | `searchSales` | customer / item / amount criteria, paged (≤ 50) |
+| `item_mix` (#18) | `getServiceMix` + `getTopItemsByDoctor` + `getServiceLinesByDoctor` + `getPendingLineItems` | `groups` (keys of `MIX_BUCKETS`) narrows every mix row to those buckets (a projection) and ranks top items within them (`getTopItemsByDoctor`'s `groups` option); `topItems` 1–20 (default 5); `groupLabels` names the buckets shown |
+| `retention` (#18) | `getRetention` | freshness for EVERY branch (returns count at any branch) |
+| `discounts` (#18) | `getDoctorDiscounts` + `getDiscountTypes` | |
+| `data_freshness` | `getConnectionSyncStatus` | |
+
+To add one:
 
 ```ts
-export const dailySalesTool = defineTool({          // src/mcp/tools/daily-sales.ts
-  name: "daily_sales", title: "Daily sales",
+export const myTool = defineTool({                   // src/mcp/tools/my-tool.ts
+  name: "my_tool", title: "My tool",
   description: "… ≤ 2,048 characters (Claude Code cuts longer ones) … quote the key METRIC_DEFINITIONS verbatim",
   input: { ...filterInput, /* tool-specific zod fields */ },   // dates/preset, branches, doctors by id or name
-  output: { covers: filterOutput, daily: dailySchema /* satisfies z.ZodType<YourAnalyticsType> */ },
+  output: { covers: filterOutput, figures: figuresSchema /* satisfies z.ZodType<YourAnalyticsType> */ },
   definitions: ["revenue", "aovPerCustomer", …],               // MetricName[]: returned verbatim in every result
   async run(context, input) {
     const { filter, covers } = await resolveFilter(context, input);   // throws ToolInputError with a helpful message
-    const daily = await getDailySales(context.sql, filter);          // Analytics Service ONLY — no SQL here
-    return { data: { covers, daily }, summary: "One or two sentences…", freshness: { dateFrom: filter.dateFrom, dateTo: filter.dateTo, branchIds: filter.branchIds } };
+    const figures = await getMyFigures(context.sql, filter);         // Analytics Service ONLY — no SQL here
+    return { data: { covers, figures }, summary: "One or two sentences…", freshness: { dateFrom: filter.dateFrom, dateTo: filter.dateTo, branchIds: filter.branchIds } };
   },
 });
 ```
+
+A definition too long for the 2,048 characters (e.g. `yearlyCohort`, 1,131 on its own) is quoted by
+its opening sentences with `definitionExcerpt(name, sentences)` (`tools/text.ts`: verbatim, cut at a
+sentence end, " …" appended); every result still carries it in full. Summaries only word the
+service's figures (`formatRinggit`, `percent`, `plural`, `describeCoverage`, `formatDayWithWeekday`):
+they choose what to mention, never compute a metric.
 
 The registry (`tools/registry.ts`) does the rest for every tool alike: read-only annotations;
 strict input (unknown arguments are refused, so a misspelt filter never widens an answer); a
@@ -1254,24 +1277,45 @@ sentence and the same JSON in `content` (Claude Code shows the model only `struc
 both are present, other clients only the text, so both carry everything — keep results small, e.g.
 `search_sales` pages hold at most 50 sales); turns `ToolInputError` into its message and anything
 else into a generic error (logged server-side). Shared pieces: `filterInput` / `periodInput` / `branchesInput` /
-`doctorsInput`, `resolveFilter`, `filterOutput` (`tools/filter.ts`); name matching (`tools/names.ts`:
+`doctorsInput`, `resolveFilter`, `filterOutput`, `isoDate` (`tools/filter.ts`); name matching (`tools/names.ts`:
 id, exact name, or every typed word starting a word of the name — ambiguous → an error listing the
 candidates); `money`, `pendingLineItemsOutput` (`tools/schemas.ts`); `clinicTimestamp` (ISO with
-`+08:00`); `describeCoverage` / `plural` (`tools/text.ts`). Tests: `src/mcp/mcp.test.ts` drives the
-real handler with the SDK's client over a synced throwaway database — add each new tool to its
-"lists exactly the read-only tools", "never writes" and "every result states data as of" tests, and
-assert its output equals the Analytics Service function's for the same filter.
+`+08:00`); `describeCoverage` / `describeScope` / `plural` / `percent` / `joinAnd` / `definitionExcerpt`
+(`tools/text.ts`). The route passes `clinicNow()` as the clock, so "today" (month to date,
+`daily_sales`'s yesterday) is the dashboard's, and `CLINIC_NOW` freezes both in tests. Output schemas
+are checked by the SDK on every call, so an Analytics Service result that breaks its own type (e.g. a
+null where `Money` is promised) fails loudly instead of reaching Claude — that is how #18 found
+`getServiceLinesByDoctor` returning a null total for a period without sales. Tests: `src/mcp/mcp.test.ts`
+drives the real handler with the SDK's client over a synced throwaway database — add each new tool to
+`TOOLS` (and to `PERIODS` if it does not take a period), which the "every tool is behind the token",
+"lists exactly the read-only tools", "never writes" and "every result states data as of" tests loop
+over, and assert its output equals the Analytics Service function's for the same filter;
+`e2e/mcp.spec.ts` compares each tool's answer with its page's CSV export.
 
 ## Connect Claude to the MCP server
 
 The app includes a **read-only** MCP server, so Claude can answer questions about the clinic's sales
 ("which doctor's AOV dropped last month?", "show me Customer 0001's visits in September") with
 exactly the dashboard's numbers and definitions. It never changes anything, has no raw SQL tool and
-never contacts Kreloses. Tools: `doctor_performance` (the Doctors page: revenue, AOV per customer,
-invoices, items per invoice, share, optionally split by branch), `search_sales` (individual sales by
-date, branch, doctor, customer, item and amount, paged, with each sale's revenue split per staff
-member) and `data_freshness` (data as of per branch, and each Kreloses connection's latest sync).
-Every answer states how fresh the data is per branch, and dates are clinic days (Asia/Kuala_Lumpur).
+never contacts Kreloses. Its tools (all read-only):
+
+- `doctor_performance` — the Doctors page: each doctor's revenue, AOV per customer, invoices, items
+  per invoice and share of revenue, optionally split by branch.
+- `daily_sales` — the Daily page: one day's revenue, invoices, customers and AOV per customer by
+  branch and doctor, compared with the same weekday last week and the same date last year
+  (default yesterday; a future day is refused).
+- `search_sales` — individual sales by date, branch, doctor, customer, item and amount, paged, with
+  each sale's revenue split per staff member.
+- `item_mix` — the Mix page: each doctor's revenue per service group compared with the clinic
+  average, their top items and their surgery and consult revenue (optionally for some groups only).
+- `retention` — the Retention page: new vs returning customers, the 90-day return rate and yearly
+  cohorts (any doctor / same doctor), per doctor and for the whole clinic.
+- `discounts` — the Discounts page: each doctor's discount total, discount rate and share of
+  invoices discounted, and the discount types used.
+- `data_freshness` — data as of per branch, and each Kreloses connection's latest sync.
+
+Every answer states how fresh the data is per branch and carries the definitions of its numbers,
+and dates are clinic days (Asia/Kuala_Lumpur).
 
 1. **Create a token** and set it on the server as `MCP_BEARER_TOKEN` (Vercel: Project → Settings →
    Environment Variables, marked sensitive, Production only; then redeploy):
@@ -1309,7 +1353,7 @@ deployments keep the environment they were built with, so their own URLs
 (`<project>-<hash>.vercel.app`) still accept the old token — keep Vercel **Deployment Protection**
 on (it guards every deployment URL except the production domain) or delete the old deployments.
 
-Check it by hand (`tools/list` with the token → the three tools; without it → `401`). Step 3
+Check it by hand (`tools/list` with the token → the seven tools; without it → `401`). Step 3
 cleared the variable, so read the token again first:
 
 ```bash

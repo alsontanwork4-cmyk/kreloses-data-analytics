@@ -10,7 +10,9 @@
  */
 export { getOverviewKpis, type BranchKpis, type Kpi, type KpiChange, type KpiSet, type OverviewKpis } from "./overview";
 export {
+  DAILY_GROUP_LABELS,
   dailyComparisonDays,
+  dailyDayProblem,
   EARLIEST_DAILY_DAY,
   defaultDailyDay,
   getDailySales,

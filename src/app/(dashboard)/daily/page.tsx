@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import {
+  DAILY_GROUP_LABELS,
   defaultDailyDay,
   getDailySales,
   getDataFreshness,
@@ -10,7 +11,6 @@ import {
   METRIC_DEFINITIONS,
   resolveDailyDay,
   type DailyFigures,
-  type DailyGroup,
   type DailyMetric,
   type MetricName,
 } from "@/analytics";
@@ -47,13 +47,6 @@ const DEFINITIONS: MetricName[] = [
   "pendingLineItems",
   "dataAsOf",
 ];
-
-const GROUP_LABELS: Record<DailyGroup, string> = {
-  other: "Other staff",
-  generic: "Generic accounts",
-  noStaff: "No staff on line",
-  pending: "Line items not synced yet",
-};
 
 /** A row of the "By branch" table. */
 interface BranchRow extends DailyFigures {
@@ -127,7 +120,7 @@ export default async function DailyPage({ searchParams }: PageProps<"/daily">) {
 
   const staffRows: StaffRow[] = [
     ...daily.doctors.map((doctor) => ({ ...doctor, key: doctor.staffId, staffId: doctor.staffId, aliasOnly: doctor.source === "alias_only" })),
-    ...daily.groups.map((group) => ({ ...group, key: group.group, name: GROUP_LABELS[group.group], staffId: null, aliasOnly: false })),
+    ...daily.groups.map((group) => ({ ...group, key: group.group, name: DAILY_GROUP_LABELS[group.group], staffId: null, aliasOnly: false })),
   ];
   const staffColumns: DataTableColumn<StaffRow>[] = [
     {
