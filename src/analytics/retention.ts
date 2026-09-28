@@ -1,37 +1,41 @@
 import type { Sql } from "@/db/sql";
 import type { GlobalFilter, IsoDate } from "@/filters";
 
-import { branchCondition, branchScope, revenueFacts, staffScope, type BranchScope, type StaffScope } from "./facts";
+import { branchCondition, branchScope, staffCondition, staffScope, type BranchScope } from "./facts";
 import type { DateRange } from "./periods";
+import { serviceVisitLines, syncedThrough } from "./service-visits";
 
 /**
  * Retention (spec stories 48–50): new vs returning customers, yearly cohorts and the 90-day return
  * rate, per doctor and for the whole clinic. Everything is built on SERVICE VISITS
- * (`METRIC_DEFINITIONS.serviceVisit`), derived from the credited lines (`revenueFacts`), so staff
- * remaps and kind changes apply at once, like every revenue figure. Counting, first visits, "next
- * visit" (a window function) and percentages all happen in SQL.
+ * (`METRIC_DEFINITIONS.serviceVisit`, ./service-visits.ts), derived from the credited lines, so
+ * staff remaps and kind changes apply at once, like every revenue figure. Counting, first visits,
+ * "next visit" (a window function) and percentages all happen in SQL.
  *
- * Filters: the BRANCH filter decides which visits exist at all — only visits at the selected
- * branches, for everything (cohort membership, first visits, returns). The DOCTOR filter only
- * decides which doctors are listed: "any doctor" returns and first visits never depend on it, and
- * the whole-clinic figures ignore it. The date range picks the period for new vs returning and the
- * 90-day return rate; cohorts are by calendar year and ignore it.
+ * Filters (`METRIC_DEFINITIONS.retentionFilters`):
+ * - BRANCH: decides which visits put a customer IN a period or a cohort (visits at the selected
+ *   branches: who is counted, the denominators). Whether that customer is new, came back the next
+ *   year, or returned within 90 days is judged across ALL branches — a customer who moves branch
+ *   is neither new nor lost (orchestrator decision on #13).
+ * - DOCTOR: only decides which doctors are listed. "Any doctor" returns and first visits never
+ *   depend on it, and the whole-clinic figures ignore it.
+ * - DATE RANGE: the period for new vs returning and the 90-day return rate; cohorts are by calendar
+ *   year and ignore it.
  */
 
-/** Kreloses ItemType of a service line (1 = product, 55 = discount line). */
-const SERVICE_ITEM_TYPE = 4;
 /** Days after a visit within which another visit counts as a return (and until it is mature). */
 const RETURN_WINDOW_DAYS = 90;
 /** A period starting less than this many days after the synced history begins gets `limitedHistory`. */
 const LIMITED_HISTORY_DAYS = 90;
+const ALL_BRANCHES: BranchScope = { all: true };
 
 /** New vs returning customers in the period (`METRIC_DEFINITIONS.newVsReturning`). */
 export interface NewVsReturning {
-  /** Distinct customers with a service visit in the period (for a doctor: attributed to them). */
+  /** Distinct customers with a service visit at the selected branches in the period (for a doctor: attributed to them). */
   customers: number;
-  /** Of those, customers whose first service visit in the synced history (any doctor) is in the period. */
+  /** Of those, customers whose first service visit in the synced history (any doctor, any branch) is in the period. */
   newCustomers: number;
-  /** Of those, customers who had a service visit before the period. */
+  /** Of those, customers who had a service visit (any branch) before the period. */
   returningCustomers: number;
   /** newCustomers ÷ customers × 100, one decimal; null without customers. */
   newPercent: number | null;
@@ -41,13 +45,13 @@ export interface NewVsReturning {
 
 /** The 90-day return rate over the period's service visits (`METRIC_DEFINITIONS.returnRate90`). */
 export interface NinetyDayReturns {
-  /** Service visits in the period (for a doctor: attributed to them; one per customer and day). */
+  /** Service visits at the selected branches in the period (for a doctor: attributed to them; one per customer and day). */
   visits: number;
   /** Visits whose 90 days have not passed in the synced data yet (visit day + 90 > `syncedThrough`): left out of the rate. */
   notYetMature: number;
   /** visits − notYetMature: the rate's denominator. */
   mature: number;
-  /** Mature visits followed by another service visit of the same customer (any doctor) 1–90 days later. */
+  /** Mature visits followed by another service visit of the same customer (any doctor, any branch) 1–90 days later. */
   returned: number;
   /** returned ÷ mature × 100, one decimal; null without mature visits. */
   returnPercent: number | null;
@@ -59,13 +63,15 @@ export interface YearCohort {
   year: number;
   /** True until the synced data reaches 31 Dec of Y+1: more customers may still come back. */
   accruing: boolean;
-  /** Cohort size: customers with a service visit in Y (for a doctor: attributed to them). */
+  /** The synced history (`historyFrom`) starts after 1 Jan of Y: customers seen earlier in Y are missing from the cohort. */
+  partialYear: boolean;
+  /** Cohort size: customers with a service visit at the selected branches in Y (for a doctor: attributed to them). */
   customers: number;
-  /** Of those, customers with any service visit in Y+1 (whoever it was credited to). */
+  /** Of those, customers with any service visit in Y+1 (whoever it was credited to, at any branch). */
   retainedAnyDoctor: number;
   /** retainedAnyDoctor ÷ customers × 100, one decimal. */
   retainedAnyDoctorPercent: number | null;
-  /** Of those, customers with a service visit attributed to the same doctor in Y+1; null for the whole clinic. */
+  /** Of those, customers with a service visit attributed to the same doctor in Y+1 (any branch); null for the whole clinic. */
   retainedSameDoctor: number | null;
   /** retainedSameDoctor ÷ customers × 100, one decimal; null for the whole clinic. */
   retainedSameDoctorPercent: number | null;
@@ -94,7 +100,7 @@ export interface Retention {
   period: DateRange;
   /** Earliest clinic day with a synced sale at the selected branches; null when nothing is synced. */
   historyFrom: IsoDate | null;
-  /** Latest clinic day with a synced sale at the selected branches: returns and cohorts are seen up to this day. */
+  /** Latest clinic day with a synced sale at the selected branches (`syncedThrough`): returns and cohorts are seen up to this day. */
   syncedThrough: IsoDate | null;
   /** Latest visit day whose 90 days have passed (`syncedThrough` − 90): later visits are not yet mature. */
   matureThrough: IsoDate | null;
@@ -132,6 +138,7 @@ interface CohortRow {
   staffId: string | null;
   year: number;
   accruing: boolean;
+  partialYear: boolean;
   customers: number;
   retainedAny: number;
   retainedAnyPercent: string | null;
@@ -146,7 +153,7 @@ const NO_RETURNS: NinetyDayReturns = { visits: 0, notYetMature: 0, mature: 0, re
  * Retention for the global filter: new vs returning customers and the 90-day return rate in the
  * period, and yearly cohorts, for the whole clinic and each doctor. Definitions:
  * `METRIC_DEFINITIONS.serviceVisit`, `newVsReturning`, `yearlyCohort`, `returnRate90`,
- * `syncedThrough`. Pages and the MCP `retention` tool only render this.
+ * `retentionFilters`, `syncedThrough`. Pages and the MCP `retention` tool only render this.
  */
 export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Retention> {
   const period: DateRange = { dateFrom: filter.dateFrom, dateTo: filter.dateTo };
@@ -154,34 +161,37 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
   const doctors = staffScope(filter);
 
   const [bounds] = await sql<Pick<Retention, "historyFrom" | "syncedThrough" | "matureThrough" | "limitedHistory" | "pendingInvoices">[]>`
+    with through as (select ${syncedThrough(sql, branches)} as day)
     select
       min(i.sale_date) as history_from,
-      max(i.sale_date) as synced_through,
-      max(i.sale_date) - ${RETURN_WINDOW_DAYS}::int as mature_through,
+      (select day from through) as synced_through,
+      (select day from through) - ${RETURN_WINDOW_DAYS}::int as mature_through,
       coalesce(${period.dateFrom}::date < min(i.sale_date) + ${LIMITED_HISTORY_DAYS}::int, false) as limited_history,
       count(*) filter (where i.status = 'active' and not i.lines_current)::int as pending_invoices
     from invoices i
     where ${branchCondition(sql, branches, sql`i.branch_id`)}
   `;
-  const { historyFrom, syncedThrough, matureThrough, limitedHistory, pendingInvoices } = bounds!;
+  const { historyFrom, syncedThrough: through, matureThrough, limitedHistory, pendingInvoices } = bounds!;
 
   const [periodRows, cohortRows] = await Promise.all([
     sql<PeriodRow[]>`
-      with lines as (${serviceLines(sql, branches)}),
-      visits as (select distinct customer_id, sale_date from lines),
-      -- Each visit with the customer's first visit ever and their next visit (a later day).
+      with lines as (${scopedServiceLines(sql, branches)}),
+      -- Every service visit (any branch), and whether it was at a selected branch.
+      visits as (select customer_id, sale_date, bool_or(in_scope) as in_scope from lines group by customer_id, sale_date),
+      -- Each visit with the customer's first visit ever and their next visit (a later day), at any branch.
       visit_history as (
         select customer_id, sale_date,
           min(sale_date) over (partition by customer_id) as first_day,
           lead(sale_date) over (partition by customer_id order by sale_date) as next_day
         from visits
       ),
-      -- Who each visit counts for: the whole clinic (staff_id null), and each doctor credited with one of its service lines.
+      -- Who each visit at the selected branches counts for: the whole clinic (staff_id null), and each doctor
+      -- credited there with one of its service lines.
       attributed as (
-        select null::bigint as staff_id, customer_id, sale_date from visits
+        select null::bigint as staff_id, customer_id, sale_date from visits where in_scope
         union all
         select distinct staff_id, customer_id, sale_date from lines
-        where credit_group = 'doctor' and ${staffCondition(sql, doctors, sql`staff_id`)}
+        where in_scope and credit_group = 'doctor' and ${staffCondition(sql, doctors, sql`staff_id`)}
       ),
       figures as (
         select
@@ -189,9 +199,9 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
           count(distinct a.customer_id)::int as customers,
           count(distinct a.customer_id) filter (where h.first_day >= ${period.dateFrom}::date)::int as new_customers,
           count(*)::int as visits,
-          count(*) filter (where a.sale_date + ${RETURN_WINDOW_DAYS}::int > ${syncedThrough}::date)::int as not_yet_mature,
+          count(*) filter (where a.sale_date + ${RETURN_WINDOW_DAYS}::int > ${through}::date)::int as not_yet_mature,
           count(*) filter (
-            where a.sale_date + ${RETURN_WINDOW_DAYS}::int <= ${syncedThrough}::date
+            where a.sale_date + ${RETURN_WINDOW_DAYS}::int <= ${through}::date
               and h.next_day - a.sale_date <= ${RETURN_WINDOW_DAYS}::int
           )::int as returned
         from attributed a
@@ -207,23 +217,28 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
       from figures
     `,
     sql<CohortRow[]>`
-      with lines as (${serviceLines(sql, branches)}),
-      -- Customers with a service visit in a year (anyone), and with one attributed to a doctor.
-      any_years as (select distinct customer_id, extract(year from sale_date)::int as year from lines),
-      doctor_years as (
-        select distinct staff_id, customer_id, extract(year from sale_date)::int as year from lines
-        where credit_group = 'doctor' and ${staffCondition(sql, doctors, sql`staff_id`)}
+      with lines as (${scopedServiceLines(sql, branches)}),
+      -- Customers with a service visit in a year (anyone), and with one attributed to a doctor — at any
+      -- branch, and whether any of them was at a selected branch.
+      any_years as (
+        select customer_id, extract(year from sale_date)::int as year, bool_or(in_scope) as in_scope
+        from lines group by customer_id, year
       ),
+      doctor_years as (
+        select staff_id, customer_id, extract(year from sale_date)::int as year, bool_or(in_scope) as in_scope
+        from lines where credit_group = 'doctor' group by staff_id, customer_id, year
+      ),
+      -- Cohort members (from visits at the selected branches) and whether they came back the next year (any branch).
       members as (
         select null::bigint as staff_id, c.year,
           exists (select 1 from any_years n where n.customer_id = c.customer_id and n.year = c.year + 1) as retained_any,
           null::boolean as retained_same
-        from any_years c
+        from any_years c where c.in_scope
         union all
         select c.staff_id, c.year,
           exists (select 1 from any_years n where n.customer_id = c.customer_id and n.year = c.year + 1),
           exists (select 1 from doctor_years n where n.staff_id = c.staff_id and n.customer_id = c.customer_id and n.year = c.year + 1)
-        from doctor_years c
+        from doctor_years c where c.in_scope and ${staffCondition(sql, doctors, sql`c.staff_id`)}
       ),
       figures as (
         select staff_id, year,
@@ -232,12 +247,13 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
           case when staff_id is not null then count(*) filter (where retained_same)::int end as retained_same
         from members
         -- Listed once Y+1 has started in the synced data.
-        where make_date(year + 1, 1, 1) <= ${syncedThrough}::date
+        where make_date(year + 1, 1, 1) <= ${through}::date
         group by staff_id, year
       )
       select
         staff_id::text as staff_id, year, customers, retained_any, retained_same,
-        ${syncedThrough}::date < make_date(year + 1, 12, 31) as accruing,
+        ${through}::date < make_date(year + 1, 12, 31) as accruing,
+        ${historyFrom}::date > make_date(year, 1, 1) as partial_year,
         round(100.0 * retained_any / nullif(customers, 0), 1)::text as retained_any_percent,
         round(100.0 * retained_same / nullif(customers, 0), 1)::text as retained_same_percent
       from figures
@@ -278,6 +294,7 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
         .map((cohort) => ({
           year: cohort.year,
           accruing: cohort.accruing,
+          partialYear: cohort.partialYear,
           customers: cohort.customers,
           retainedAnyDoctor: cohort.retainedAny,
           retainedAnyDoctorPercent: percent(cohort.retainedAnyPercent),
@@ -290,7 +307,7 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
   return {
     period,
     historyFrom,
-    syncedThrough,
+    syncedThrough: through,
     matureThrough,
     limitedHistory,
     pendingInvoices,
@@ -300,25 +317,15 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
 }
 
 /**
- * The service lines that make service visits: sold service lines (item type 4, quantity above zero)
- * of active sales whose line items are synced, with a customer, at the scope's branches — one row
- * per credited line, with its clinic day, the staff it is credited to NOW and their credit group
- * (`revenueFacts`). Pending rows and unitemised remainders have no line, so they drop out here.
+ * Every service-visit line at ANY branch (`serviceVisitLines`), with `in_scope`: whether its sale
+ * was at one of the selected branches. One scan serves both who is counted (in scope) and whether
+ * they are new / came back (any branch).
  */
-function serviceLines(sql: Sql, branches: BranchScope) {
+function scopedServiceLines(sql: Sql, branches: BranchScope) {
   return sql`
-    select f.customer_id, f.sale_date, f.staff_id, f.credit_group
-    from (${revenueFacts(sql, { branches, staff: { all: true } })}) f
-    join invoice_lines l on l.id = f.invoice_line_id
-    where f.customer_id is not null and l.item_type = ${SERVICE_ITEM_TYPE}::int and l.quantity > 0
+    select v.*, ${branchCondition(sql, branches, sql`v.branch_id`)} as in_scope
+    from (${serviceVisitLines(sql, ALL_BRANCHES)}) v
   `;
-}
-
-/** A boolean SQL condition restricting `column` (a staff id) to the doctor filter. */
-function staffCondition(sql: Sql, scope: StaffScope, column: ReturnType<Sql>) {
-  if (scope.all) return sql`true`;
-  if (scope.ids.length === 0) return sql`false`;
-  return sql`${column} = any(${scope.ids}::bigint[])`;
 }
 
 function percent(value: string | null): number | null {

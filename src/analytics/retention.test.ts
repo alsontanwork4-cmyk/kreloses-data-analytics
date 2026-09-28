@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { useTestDatabase } from "@/db/testing";
 import { SYNTHETIC_ACCOUNTS } from "@/kreloses/testing/fake-kreloses";
 import { runSync } from "@/sync/engine";
-import { clearSyncTables, createSyncHarness, type SyncHarness } from "@/sync/test-support";
+import { clearSyncTables, createSyncHarness } from "@/sync/test-support";
 
 import { getRetention, type DoctorRetention, type NewVsReturning, type NinetyDayReturns, type Retention, type YearCohort } from "./index";
 import { retentionFakeData } from "./retention-fixture";
@@ -23,13 +23,17 @@ import { retentionFakeData } from "./retention-fixture";
  *   C1007  2026-02-02 B S · 2026-05-04 B S                       (back after 91 days)
  *   C1008  2026-03-02 D N (two invoices the same day: one visit, never a return)
  *   C1009  2025-04-07 A N · 2026-02-09 — N ("Charlie", other staff: a visit, no doctor)
- *   C1010  2025-05-05 B N · 2026-01-19 B S
+ *   C1010  2025-05-05 B N · 2026-01-19 B S                       (first visit at North, later only at South)
  *   C1011  2025-08-04 A N — 2026-03-09 returned service (quantity (1)): NO visit; 2026-03-16 page missing (line
  *          items not synced yet): NO visit
  *   C1012  2026-08-03 A S · 2026-08-10 — S (no staff on the line)
  *   C1013  2026-07-02 B N · 2026-09-30 D N                       (exactly 90 days, ending on the last synced day)
- *   Walk-in 2026-01-26 A N: no customer, NO visit.
+ *   C1014  2025-10-06 A N · 2025-11-03 B S                       (back 28 days later, at the other branch)
+ *   Walk-ins 2025-12-30 A N and 2026-01-26 A N (a service, no customer): NO visit; 2025-12-31 S (a product): no visit.
  * Synced history: 2024-01-08 → 2026-09-30 (North the same; South 2024-10-07 → 2026-08-10).
+ *
+ * Branch filter: only visits at the selected branches put a customer in a period or cohort, but new vs
+ * returning, "came back" and 90-day returns are judged across BOTH branches (orchestrator decision on #13).
  */
 const { both } = SYNTHETIC_ACCOUNTS;
 const Q1_2026 = { dateFrom: "2026-01-01", dateTo: "2026-03-31" };
@@ -49,9 +53,11 @@ const returns = (visits: number, notYetMature: number, returned: number, returnP
   returned,
   returnPercent,
 });
-const cohort = (year: number, accruing: boolean, customers: number, any: [number, number], same: [number, number] | null): YearCohort => ({
+type CohortStatus = "accruing" | "complete" | "accruing, partial year" | "complete, partial year";
+const cohort = (year: number, status: CohortStatus, customers: number, any: [number, number], same: [number, number] | null): YearCohort => ({
   year,
-  accruing,
+  accruing: status.startsWith("accruing"),
+  partialYear: status.endsWith("partial year"),
   customers,
   retainedAnyDoctor: any[0],
   retainedAnyDoctorPercent: any[1],
@@ -63,29 +69,31 @@ const NO_VISITS_RETURNS = returns(0, 0, 0, null);
 
 describe("Analytics Service: retention (fed by the Sync Engine)", () => {
   const db = useTestDatabase();
-  let h: SyncHarness;
   let branch: { north: string; south: string };
   let staff: Record<string, string>;
 
   const doctor = (report: Retention, name: string): DoctorRetention | undefined => report.doctors.find((row) => row.name === name);
+  const harness = (now: string) => {
+    const { rows, overviews } = retentionFakeData();
+    return createSyncHarness(db.sql, { fake: { saleList: { rows }, saleOverviews: overviews }, now: new Date(now) });
+  };
 
   beforeAll(async () => {
     await clearSyncTables(db.sql);
-    const { rows, overviews } = retentionFakeData();
-    h = createSyncHarness(db.sql, { fake: { saleList: { rows }, saleOverviews: overviews }, now: new Date("2026-10-01T02:00:00Z") });
+    const h = harness("2026-10-01T02:00:00Z");
     const connectionId = await h.connect(both, "Both branches");
     // 800024's invoice page is missing: the run reads everything else and ends "partial".
     expect(await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2024-01-01", to: "2026-09-30" } })).toMatchObject({
       status: "partial",
-      counts: { invoicesSeen: 32, inserted: 32, lineItemsRead: 30, lineItemsFailed: 1 },
+      counts: { invoicesSeen: 36, inserted: 36, lineItemsRead: 34, lineItemsFailed: 1 },
     });
     const branches = await db.sql<{ id: string; krelosesLocationId: string }[]>`select id::text, kreloses_location_id from branches`;
     branch = {
       north: branches.find((row) => row.krelosesLocationId === "1101")!.id,
       south: branches.find((row) => row.krelosesLocationId === "1102")!.id,
     };
-    const rows2 = await db.sql<{ id: string; fullName: string }[]>`select id::text, full_name from staff`;
-    staff = Object.fromEntries(rows2.map((row) => [row.fullName, row.id]));
+    const rows = await db.sql<{ id: string; fullName: string }[]>`select id::text, full_name from staff`;
+    staff = Object.fromEntries(rows.map((row) => [row.fullName, row.id]));
   });
 
   it("returns the synced history's bounds and the sales whose line items are not synced yet", async () => {
@@ -132,21 +140,22 @@ describe("Analytics Service: retention (fed by the Sync Engine)", () => {
   it("builds yearly cohorts: retained with any doctor and with the same doctor; the latest one still accruing", async () => {
     const report = await getRetention(db.sql, Q1_2026); // cohorts ignore the date range
     // 2026's cohort is not listed: 2027 has not started in the synced data (through 2026-09-30).
-    // 2024 (complete): C1001 C1002 C1003 back in 2025; C1004 only bought a product, C1005's visit was cancelled.
+    // 2024 (complete; a partial year: the synced sales start on 8 Jan 2024): C1001 C1002 C1003 back in 2025;
+    // C1004 only bought a product, C1005's visit was cancelled.
     // 2025 (still accruing: 2026 is not over): C1001 C1003 C1009 (non-doctor staff counts) C1010 back; C1002, C1011 (a
-    // returned service and an unsynced sale) not.
-    expect(report.clinic.cohorts).toEqual([cohort(2025, true, 6, [4, 66.7], null), cohort(2024, false, 5, [3, 60], null)]);
+    // returned service and an unsynced sale) and C1014 not. The 2025 walk-in is nobody.
+    expect(report.clinic.cohorts).toEqual([cohort(2025, "accruing", 7, [4, 57.1], null), cohort(2024, "complete, partial year", 5, [3, 60], null)]);
     // Dr Alpha 2024: C1001 C1003 C1004 — any: C1001 C1003; same: C1001 (C1003 went back to Dr Bravo).
-    // Dr Alpha 2025: C1001 C1002 C1009 C1011 — any: C1001 C1009; same: C1001.
+    // Dr Alpha 2025: C1001 C1002 C1009 C1011 C1014 — any: C1001 C1009; same: C1001.
     expect(doctor(report, "Dr Alpha Anderson")!.cohorts).toEqual([
-      cohort(2025, true, 4, [2, 50], [1, 25]),
-      cohort(2024, false, 3, [2, 66.7], [1, 33.3]),
+      cohort(2025, "accruing", 5, [2, 40], [1, 20]),
+      cohort(2024, "complete, partial year", 3, [2, 66.7], [1, 33.3]),
     ]);
     // Dr Bravo 2024: C1002 C1003 C1005 (not C1004: a product only) — any: C1002 C1003; same: C1003 (C1002 went to Dr Alpha).
-    // Dr Bravo 2025: C1003 C1010 — both back to him in 2026.
+    // Dr Bravo 2025: C1003 C1010 C1014 — C1003 and C1010 back to him in 2026.
     expect(doctor(report, "Dr Bravo Brown")!.cohorts).toEqual([
-      cohort(2025, true, 2, [2, 100], [2, 100]),
-      cohort(2024, false, 3, [2, 66.7], [1, 33.3]),
+      cohort(2025, "accruing", 3, [2, 66.7], [2, 66.7]),
+      cohort(2024, "complete, partial year", 3, [2, 66.7], [1, 33.3]),
     ]);
     expect(doctor(report, "Dr Delta")!.cohorts).toEqual([]);
   });
@@ -170,29 +179,38 @@ describe("Analytics Service: retention (fed by the Sync Engine)", () => {
     expect(doctor(q1, "Dr Delta")!.returns90).toEqual(returns(1, 0, 0, 0));
   });
 
-  it("with a branch filter, only visits at the selected branches exist (first visits and returns included)", async () => {
+  it("with a branch filter, only visits at the selected branches count people in; new, returned and came back are judged at any branch", async () => {
+    // North, October 2025: C1014's visit, followed 28 days later by one at South — a 90-day return.
+    const northOctober = await getRetention(db.sql, { dateFrom: "2025-10-01", dateTo: "2025-10-31", branchIds: [branch.north] });
+    expect(northOctober.clinic.returns90).toEqual(returns(1, 0, 1, 100));
+    expect(doctor(northOctober, "Dr Alpha Anderson")!.returns90).toEqual(returns(1, 0, 1, 100));
+
     const north = await getRetention(db.sql, { ...Q1_2026, branchIds: [branch.north] });
-    // North cohorts: C1003's 2025 visit and C1010's 2026 visit were at South.
-    expect(north.clinic.cohorts).toEqual([cohort(2025, true, 5, [2, 40], null), cohort(2024, false, 4, [2, 50], null)]);
+    // North cohorts: members are customers with a North visit in the year; coming back counts at either branch
+    // (C1003's 2025 visit and C1010's 2026 visit were at South). 2024 is a partial year (sales from 8 Jan).
+    //   2024: C1001 C1002 C1003 C1004 — back: C1001 C1002 C1003.   2025: C1001 C1002 C1009 C1010 C1011 C1014 — back: C1001 C1009 C1010.
+    expect(north.clinic.cohorts).toEqual([cohort(2025, "accruing", 6, [3, 50], null), cohort(2024, "complete, partial year", 4, [3, 75], null)]);
     expect(doctor(north, "Dr Alpha Anderson")!.cohorts).toEqual([
-      cohort(2025, true, 4, [2, 50], [1, 25]),
-      cohort(2024, false, 3, [1, 33.3], [1, 33.3]),
+      cohort(2025, "accruing", 5, [2, 40], [1, 20]),
+      cohort(2024, "complete, partial year", 3, [2, 66.7], [1, 33.3]),
     ]);
+    // Dr Bravo at North: 2024 C1002 C1003 (C1003 back to him at South in 2025); 2025 C1010 (back to him at South).
     expect(doctor(north, "Dr Bravo Brown")!.cohorts).toEqual([
-      cohort(2025, true, 1, [0, 0], [0, 0]),
-      cohort(2024, false, 2, [1, 50], [0, 0]),
+      cohort(2025, "accruing", 1, [1, 100], [1, 100]),
+      cohort(2024, "complete, partial year", 2, [2, 100], [1, 50]),
     ]);
     // No North visit for Dr Bravo in Q1 2026, but he has North cohorts: listed with empty period figures.
     expect(doctor(north, "Dr Bravo Brown")!.newVsReturning).toEqual(NO_VISITS_NVR);
     expect(doctor(north, "Dr Bravo Brown")!.returns90).toEqual(NO_VISITS_RETURNS);
 
-    // South, Q1 2026: C1010 had only been to North before, so is new to South.
+    // South, Q1 2026: C1006 and C1007 are new; C1003 and C1010 are returning — C1010 had only been to North before.
     const south = await getRetention(db.sql, { ...Q1_2026, branchIds: [branch.south] });
-    expect(south.clinic.newVsReturning).toEqual(nvr(4, 3, 75, 25)); // C1006 C1010 C1007 new; C1003 returning
+    expect(south.clinic.newVsReturning).toEqual(nvr(4, 2, 50, 50));
     expect(south.doctors.map((row) => row.name)).toEqual(["Dr Alpha Anderson", "Dr Bravo Brown"]);
-    expect(doctor(south, "Dr Bravo Brown")!.newVsReturning).toEqual(nvr(3, 2, 66.7, 33.3));
-    // South is synced through 2026-08-10 (its latest sale): 2025's cohort is still accruing, 2024's is complete.
-    expect(south.clinic.cohorts).toEqual([cohort(2025, true, 1, [1, 100], null), cohort(2024, false, 1, [0, 0], null)]);
+    expect(doctor(south, "Dr Bravo Brown")!.newVsReturning).toEqual(nvr(3, 1, 33.3, 66.7));
+    // South is synced through 2026-08-10 (its latest sale) and from 2024-10-07 (so 2024 is a partial year):
+    // 2025 (C1003 C1014; C1003 back) is still accruing, 2024 (C1005, whose return was cancelled) is complete.
+    expect(south.clinic.cohorts).toEqual([cohort(2025, "accruing", 2, [1, 50], null), cohort(2024, "complete, partial year", 1, [0, 0], null)]);
   });
 
   it("with a doctor filter, lists only those doctors; the whole-clinic figures do not change", async () => {
@@ -205,6 +223,24 @@ describe("Analytics Service: retention (fed by the Sync Engine)", () => {
     // Non-doctor staff are never listed as doctors; ids that match nobody list nobody.
     expect((await getRetention(db.sql, { ...YEAR_2026, doctorIds: [staff["Charlie Chen"]!] })).doctors).toEqual([]);
     expect((await getRetention(db.sql, { ...YEAR_2026, doctorIds: ["999999", "not-an-id"] })).doctors).toEqual([]);
+  });
+
+  it("keeps a cohort accruing until the synced sales reach 31 December of the next year", async () => {
+    await clearSyncTables(db.sql);
+    const h = harness("2026-01-02T02:00:00Z");
+    const connectionId = await h.connect(both, "Both branches");
+    // Synced through 30 Dec 2025 (the walk-in): 2024's cohort is still accruing.
+    expect(await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2024-01-01", to: "2025-12-30" } })).toMatchObject({ status: "succeeded" });
+    const before = await getRetention(db.sql, Q1_2026);
+    expect(before.syncedThrough).toBe("2025-12-30");
+    expect(before.clinic.cohorts).toEqual([cohort(2024, "accruing, partial year", 5, [3, 60], null)]);
+
+    // 31 Dec 2025 synced too: complete.
+    h.clock.advance(3_600_000);
+    expect(await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2025-12-31", to: "2025-12-31" } })).toMatchObject({ status: "succeeded" });
+    const after = await getRetention(db.sql, Q1_2026);
+    expect(after.syncedThrough).toBe("2025-12-31");
+    expect(after.clinic.cohorts).toEqual([cohort(2024, "complete, partial year", 5, [3, 60], null)]);
   });
 
   it("returns empty figures when nothing is synced", async () => {

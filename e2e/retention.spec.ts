@@ -84,22 +84,23 @@ test.describe("Retention page", () => {
     await expect(manager.getByRole("img", { name: "90-day return rate by doctor: Dr Alpha Anderson 0.0%; Dr Bravo Brown 100.0%" })).toBeVisible();
     await expect(manager.getByTestId("return-rate-chart").locator(".recharts-bar-rectangle")).toHaveCount(2);
 
-    // Yearly cohorts (the date range does not apply): 2025's cohort is still accruing; 2026's has no next year yet.
+    // Yearly cohorts (the date range does not apply): 2025's cohort is still accruing, and a partial year (the
+    // synced sales start on 3 Sep 2025); 2026's has no next year yet.
     const cohorts = manager.getByTestId("cohorts");
     const cohortColumns = ["doctor", "year", "status", "customers", "retained-any-percent", "retained-same-percent", "retained-any", "retained-same"];
     const cohortTable = [
-      ["Whole clinic (all staff)", "2025", "Still accruing", "3", "100.0%", "—", "3", "—"],
-      ["Dr Alpha Anderson", "2025", "Still accruing", "2", "100.0%", "50.0%", "2", "1"],
-      ["Dr Bravo Brown", "2025", "Still accruing", "1", "100.0%", "100.0%", "1", "1"],
+      ["Whole clinic (all staff)", "2025", "Partial year Still accruing", "3", "100.0%", "—", "3", "—"],
+      ["Dr Alpha Anderson", "2025", "Partial year Still accruing", "2", "100.0%", "50.0%", "2", "1"],
+      ["Dr Bravo Brown", "2025", "Partial year Still accruing", "1", "100.0%", "100.0%", "1", "1"],
     ];
     expect(await tableText(cohorts, cohortColumns)).toEqual(cohortTable);
     const csv = await downloadCsv(manager, cohorts);
     expect(csv.name).toBe("retention-cohorts_2025-09-01_to_2025-10-31.csv");
     expect(csv.text).toBe(
       "﻿Doctor,Cohort year,Status,Cohort size,Retention (any doctor) (%),Retention (same doctor) (%),Back next year (any doctor),Back next year (same doctor)\r\n" +
-        "Whole clinic (all staff),2025,Still accruing,3,100.0,,3,\r\n" +
-        "Dr Alpha Anderson,2025,Still accruing,2,100.0,50.0,2,1\r\n" +
-        "Dr Bravo Brown,2025,Still accruing,1,100.0,100.0,1,1\r\n",
+        "Whole clinic (all staff),2025,Partial year; Still accruing,3,100.0,,3,\r\n" +
+        "Dr Alpha Anderson,2025,Partial year; Still accruing,2,100.0,50.0,2,1\r\n" +
+        "Dr Bravo Brown,2025,Partial year; Still accruing,1,100.0,100.0,1,1\r\n",
     );
 
     // September 2026: mostly returning customers; every visit is too recent for its 90 days to have passed.

@@ -803,28 +803,48 @@ getRetention(sql, filter): Promise<Retention>
   //   doctors: (RetentionFigures & { staffId, name, source })[] }   // kind doctor now, within the doctor filter, by name
   // RetentionFigures = { newVsReturning: { customers, newCustomers, returningCustomers, newPercent, returningPercent },
   //                      returns90: { visits, notYetMature, mature, returned, returnPercent },
-  //                      cohorts: { year, accruing, customers, retainedAnyDoctor, retainedAnyDoctorPercent,
+  //                      cohorts: { year, accruing, partialYear, customers, retainedAnyDoctor, retainedAnyDoctorPercent,
   //                                 retainedSameDoctor, retainedSameDoctorPercent }[] }   // newest year first; same-doctor null for the clinic
   // Percentages: numbers to one decimal, null when the denominator is 0.
 ```
 
-- **Service visit** = (customer, clinic day) with ≥ 1 credited line of item type 4 and quantity > 0
-  on an active invoice whose lines are current (`revenueFacts` joined to `invoice_lines`). Products,
+- **Service visit** — defined ONCE in `src/analytics/service-visits.ts`; every visit-based metric
+  (#15's 14-day post-op follow-up included) builds on it rather than re-deriving visits:
+
+  ```ts
+  SERVICE_ITEM_TYPE                     // 4 (Kreloses ItemType of a service line)
+  serviceVisitLines(sql, branches)      // SQL: one row per credited service line that makes a visit:
+                                        //   customer_id, sale_date, branch_id, invoice_id, invoice_line_id, staff_id, credit_group
+  serviceVisits(sql, branches)          // SQL: distinct customer_id, sale_date
+  syncedThrough(sql, branches)          // SQL scalar date: latest clinic day with a synced sale (any status) at the branches
+  // branches: BranchScope (branchScope(filter), or { all: true }); a doctor visit = a line with credit_group 'doctor'
+  ```
+
+  A visit = (customer, clinic day) with ≥ 1 credited line of item type 4 and quantity > 0 on an
+  active invoice whose lines are current (`revenueFacts` joined to `invoice_lines`). Products,
   discount lines, returned (negative-quantity) lines, cancelled and pending sales and walk-ins never
   make a visit. A visit counts for every doctor credited with one of its service lines; visits
   credited only to other staff / generic / no staff count for the clinic and as returns.
-- **Filters**: the branch filter decides which visits exist (cohorts, first visits and returns all
-  use only the selected branches: "new" = new to those branches); the doctor filter only picks the
-  doctors listed; the date range applies to new vs returning and the 90-day rate, never to cohorts.
+- **Filters** (`METRIC_DEFINITIONS.retentionFilters`, orchestrator decision): the branch filter
+  decides which visits put a customer IN a period or cohort (the denominators); whether they are
+  new, came back the next year, or returned within 90 days is judged across ALL branches (a customer
+  who moves branch is neither new nor lost). The doctor filter only picks the doctors listed (the
+  whole-clinic rows and "any doctor" never depend on it). The date range applies to new vs
+  returning and the 90-day rate, never to cohorts.
 - **Synced history**: `historyFrom` / `syncedThrough` are the earliest / latest clinic day of any
   synced sale at the selected branches. A visit is mature once visit day + 90 ≤ `syncedThrough`; a
-  cohort Y is listed once `syncedThrough` reaches 1 Jan Y+1 and is `accruing` until 31 Dec Y+1;
-  `limitedHistory` = the period starts less than 90 days after `historyFrom`.
+  cohort Y is listed once `syncedThrough` reaches 1 Jan Y+1, is `accruing` until it reaches 31 Dec
+  Y+1, and is a `partialYear` when `historyFrom` is after 1 Jan Y; `limitedHistory` = the period
+  starts less than 90 days after `historyFrom`. Caveat: when branches were synced from different
+  dates, a customer's earlier visits at a branch whose history starts later are not seen.
 - SQL does everything (a `lead()` window for "next visit", `min()` over the customer for "first
-  visit"); ~100 ms for 35k invoices / 105k lines on the local stack, so no extra index.
-- Tests: `retention.test.ts` syncs `retention-fixture.ts` (hand-built customers 2024–2026 written
-  compactly and emitted in Kreloses's Sale List / Sale Overview shapes) through the fake Kreloses;
-  `e2e/retention.spec.ts` syncs the shared fixture months and checks the page.
+  visit", one scan of every branch's visit lines with an `in_scope` flag); ~100 ms for 35k invoices
+  / 105k lines on the local stack, so no extra index.
+- Tests: `retention.test.ts` and `service-visits.test.ts` sync `retention-fixture.ts` (hand-built
+  customers 2024–2026 written compactly and emitted in Kreloses's Sale List / Sale Overview shapes)
+  through the fake Kreloses; `e2e/retention.spec.ts` syncs the shared fixture months and checks the page.
+- `staffCondition(sql, staffScope(filter), column)` is exported from `facts.ts` (the doctor
+  filter as a SQL condition), next to `branchCondition`.
 - Charts: `<HorizontalBarChart>` now draws a zero value as a 2px stub (`minPointSize`), so a 0.0%
   rate (or RM 0.00) keeps its bar label.
 

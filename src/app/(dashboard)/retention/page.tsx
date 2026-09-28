@@ -38,7 +38,16 @@ type NewVsReturningRow = Who & NewVsReturning;
 type ReturnsRow = Who & NinetyDayReturns;
 type CohortRow = Who & YearCohort;
 
-const DEFINITIONS: MetricName[] = ["serviceVisit", "newVsReturning", "returnRate90", "yearlyCohort", "syncedThrough", "doctor", "pendingLineItems"];
+const DEFINITIONS: MetricName[] = [
+  "serviceVisit",
+  "newVsReturning",
+  "returnRate90",
+  "yearlyCohort",
+  "retentionFilters",
+  "syncedThrough",
+  "doctor",
+  "pendingLineItems",
+];
 
 /** Retention (spec stories 48–50) from the Analytics Service; no maths here. */
 export default async function RetentionPage({ searchParams }: PageProps<"/retention">) {
@@ -127,15 +136,27 @@ export default async function RetentionPage({ searchParams }: PageProps<"/retent
       key: "status",
       header: "Status",
       kind: "text",
-      value: (row) => (row.accruing ? "Still accruing" : "Complete"),
-      cell: (row) =>
-        row.accruing ? (
-          <Badge variant="secondary" className="font-normal" title={`${row.year + 1} is not over in the synced sales yet: more customers may still come back`}>
-            Still accruing
-          </Badge>
-        ) : (
-          "Complete"
-        ),
+      value: (row) => [row.partialYear ? "Partial year" : null, row.accruing ? "Still accruing" : "Complete"].filter(Boolean).join("; "),
+      cell: (row) => (
+        <span className="flex items-center gap-1 whitespace-nowrap">
+          {row.partialYear ? (
+            <Badge
+              variant="outline"
+              className="font-normal"
+              title={`The synced sales start on ${report.historyFrom ? formatIsoDate(report.historyFrom) : "?"}: customers seen earlier in ${row.year} are missing`}
+            >
+              Partial year
+            </Badge>
+          ) : null}
+          {row.accruing ? (
+            <Badge variant="secondary" className="font-normal" title={`${row.year + 1} is not over in the synced sales yet: more customers may still come back`}>
+              Still accruing
+            </Badge>
+          ) : (
+            <span>Complete</span>
+          )}
+        </span>
+      ),
     },
     { key: "customers", header: "Cohort size", kind: "count", value: (row) => row.customers },
     { key: "retained-any-percent", header: "Retention (any doctor)", kind: "percent", value: (row) => row.retainedAnyDoctorPercent },
@@ -178,7 +199,7 @@ export default async function RetentionPage({ searchParams }: PageProps<"/retent
             ) : null}
             <DataTable
               caption="New vs returning customers"
-              description="Customers seen for a service visit in the period. New = their first service visit in the synced history (with any doctor) is in the period."
+              description="Customers seen for a service visit in the period. New = their first service visit in the synced history (any doctor, any branch) is in the period."
               columns={newVsReturningColumns}
               rows={newVsReturningRows}
               rowKey={(row) => row.key}
@@ -208,7 +229,7 @@ export default async function RetentionPage({ searchParams }: PageProps<"/retent
               caption="90-day return rate"
               description={
                 <>
-                  Share of the period&apos;s service visits followed by another service visit (any doctor) 1–90 days later.
+                  Share of the period&apos;s service visits followed by another service visit (any doctor, any branch) 1–90 days later.
                   {report.matureThrough ? ` Visits after ${formatIsoDate(report.matureThrough)} are not yet mature and are left out.` : ""}
                 </>
               }
@@ -223,7 +244,7 @@ export default async function RetentionPage({ searchParams }: PageProps<"/retent
 
           <DataTable
             caption="Yearly cohorts"
-            description="Customers seen for a service in a calendar year who came back for a service visit the next year. By calendar year: the date range does not apply; branch and doctor filters do."
+            description="Customers seen for a service in a calendar year who came back for a service visit (any branch) the next year. By calendar year: the date range does not apply; branch and doctor filters do."
             columns={cohortColumns}
             rows={cohortRows}
             rowKey={(row) => row.key}

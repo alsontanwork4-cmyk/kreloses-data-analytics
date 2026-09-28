@@ -81,6 +81,12 @@ export const RETENTION_SALES: readonly Sale[] = [
   { id: 800013, day: "2025-07-07", branch: "south", customer: 1003, lines: [consult(B)] },
   // C1011 — Dr Alpha in 2025; in 2026 only a returned service (quantity (1)) and a sale whose page is missing.
   { id: 800014, day: "2025-08-04", branch: "north", customer: 1011, lines: [consult(A)] },
+  // C1014 — Dr Alpha at North, back 28 days later at South (Dr Bravo): a return, whichever branch.
+  { id: 800035, day: "2025-10-06", branch: "north", customer: 1014, lines: [consult(A)] },
+  { id: 800036, day: "2025-11-03", branch: "south", customer: 1014, lines: [consult(B)] },
+  // Walk-ins (no customer): never a visit, whatever is on them — on the last two days of 2025.
+  { id: 800033, day: "2025-12-30", branch: "north", customer: null, lines: [consult(A)] },
+  { id: 800034, day: "2025-12-31", branch: "south", customer: null, lines: [{ name: "Flea spot-on", type: 1, price: 4500, staff: null }] },
   // C1006 — first visit 5 Jan 2026 (Dr Alpha), back after exactly 90 days (5 Apr) to Dr Bravo.
   { id: 800015, day: "2026-01-05", branch: "south", customer: 1006, lines: [consult(A)] },
   {
@@ -91,7 +97,7 @@ export const RETENTION_SALES: readonly Sale[] = [
     lines: [consult(A), { name: "Vaccination - DHPP", type: 4, price: 12000, staff: A }],
   },
   { id: 800017, day: "2026-01-19", branch: "south", customer: 1010, lines: [consult(B)] },
-  // A walk-in (no customer): never a visit.
+  // A walk-in (no customer) with Dr Alpha's service: never a visit.
   { id: 800018, day: "2026-01-26", branch: "north", customer: null, lines: [consult(A)] },
   // C1007 — first visit 2 Feb 2026 (Dr Bravo), back after 91 days (4 May).
   { id: 800019, day: "2026-02-02", branch: "south", customer: 1007, lines: [consult(B)] },
