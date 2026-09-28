@@ -5,11 +5,23 @@
  * Every query takes a `Sql` connection (`getDb()` in the app, a throwaway database in tests) and the
  * shared `GlobalFilter` (`@/filters`). Money comes back as exact decimal strings (`"1234.50"`, see
  * `@/lib/money`), dates as clinic-local `'YYYY-MM-DD'`, instants as `Date`. What each metric means
- * is in `METRIC_DEFINITIONS` (and CONTEXT.md); what counts as revenue is decided in one place,
- * `revenueFacts` (./facts.ts).
+ * is in `METRIC_DEFINITIONS` (and CONTEXT.md); what counts as revenue — and who it is credited
+ * to — is decided in one place, `revenueFacts` (./facts.ts).
  */
 export { getOverviewKpis, type BranchKpis, type Kpi, type KpiChange, type KpiSet, type OverviewKpis } from "./overview";
+export {
+  getDoctorRanking,
+  getStaffAliasRevenue,
+  listDoctors,
+  type BranchFigures,
+  type DoctorRanking,
+  type DoctorRow,
+  type StaffFigures,
+  type StaffGroup,
+  type StaffRow,
+} from "./doctors";
+export { getPendingLineItems, type PendingLineItems } from "./pending";
 export { getDataFreshness, type BranchFreshness } from "./freshness";
 export { comparisonPeriods, type DateRange } from "./periods";
 export { METRIC_DEFINITIONS, type MetricName } from "./definitions";
-export { branchScope, revenueFacts, type BranchScope } from "./facts";
+export { branchScope, factsScope, revenueFacts, staffScope, type BranchScope, type FactsScope, type StaffScope } from "./facts";

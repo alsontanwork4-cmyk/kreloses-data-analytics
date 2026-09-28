@@ -49,7 +49,9 @@
       "Options": [
         { "Value": "501", "Text": "Dr Alpha Anderson", "Selected": false },
         { "Value": "502", "Text": "Dr Bravo Brown", "Selected": false },
-        { "Value": "503", "Text": "Branch North General", "Selected": false }
+        { "Value": "503", "Text": "Branch North General", "Selected": false },
+        { "Value": "504", "Text": "Charlie Chen", "Selected": false },
+        { "Value": "506", "Text": "Branch South General", "Selected": false }
       ]
     },
     {

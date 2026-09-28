@@ -1,8 +1,8 @@
 import { CredentialsKeyError, DecryptionError } from "@/connections/encryption";
 import { describeTestFailure } from "@/connections/messages";
-import { AuthFailed, LayoutChanged, RateLimited, Transient } from "@/kreloses";
+import { AuthFailed, LayoutChanged, PageMissing, RateLimited, Transient } from "@/kreloses";
 
-import type { SyncErrorCode } from "./runs";
+import type { SyncErrorCode, SyncWarning } from "./runs";
 
 export interface SyncFailure {
   code: SyncErrorCode;
@@ -17,6 +17,12 @@ export interface SyncFailure {
 export function describeSyncFailure(error: unknown): SyncFailure {
   if (error instanceof AuthFailed) {
     return { code: "auth_failed", message: `The Kreloses login failed. ${describeTestFailure(error).message}` };
+  }
+  if (error instanceof PageMissing) {
+    return {
+      code: "layout_changed",
+      message: `The app could not open invoice pages in Kreloses (${error.message}), not even the first few it tried, so their line items were not read. Kreloses may have moved them: the app needs checking. Sales are still counted at their net amounts as "line items not synced yet".`,
+    };
   }
   if (error instanceof LayoutChanged) {
     return {
@@ -48,4 +54,21 @@ export function describeSyncFailure(error: unknown): SyncFailure {
 /** Errors that say the connection's login no longer works (shown on the Connections page too). */
 export function isLoginFailure(error: unknown): boolean {
   return error instanceof AuthFailed || error instanceof CredentialsKeyError || error instanceof DecryptionError;
+}
+
+/** The warning for a run that could not open some invoice pages (it ends `partial`). */
+export function missingPagesWarning(count: number): SyncWarning {
+  const one = count === 1;
+  return {
+    code: "invoice_pages_missing",
+    message: `${count} invoice ${one ? "page" : "pages"} could not be opened in Kreloses (not found, or sent elsewhere). ${one ? "Its sale counts" : "Those sales count"} at the net amount as "line items not synced yet" until a sync reads ${one ? "it" : "them"}; the next sync tries again.`,
+  };
+}
+
+/** The warning for a run whose Sale List filter had no readable Staff list. */
+export function staffListWarning(error: LayoutChanged): SyncWarning {
+  return {
+    code: "staff_list_unreadable",
+    message: `Kreloses's Staff list could not be read this time (${error.message}), so new staff names on invoice lines were not matched to full names. Their sales are still credited to the names as written; check Settings → Doctors.`,
+  };
 }

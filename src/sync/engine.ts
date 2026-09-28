@@ -5,18 +5,26 @@ import type { Sql } from "@/db/sql";
 import { clinicToday, endOfMonth, isIsoDate, startOfMonth, type IsoDate } from "@/filters";
 import {
   AuthFailed,
+  getInvoice,
+  LayoutChanged,
   listInvoices,
   listLocations,
+  listStaff,
+  PageMissing,
   RateLimited,
   SALE_LIST_PAGE_SIZE,
   Transient,
   type InvoiceListQuery,
   type InvoicePage,
+  type KrelosesInvoiceDetail,
   type KrelosesLocation,
   type KrelosesSession,
+  type KrelosesStaffMember,
 } from "@/kreloses";
+import { upsertStaffDirectory } from "@/staff/store";
 
-import { describeSyncFailure, isLoginFailure, type SyncFailure } from "./messages";
+import { invoicesNeedingLines, saveInvoiceLines } from "./lines";
+import { describeSyncFailure, isLoginFailure, missingPagesWarning, staffListWarning, type SyncFailure } from "./messages";
 import {
   finishRun,
   markInterruptedRuns,
@@ -27,13 +35,15 @@ import {
   type SyncCheckpoint,
   type SyncCounts,
   type SyncMode,
+  type SyncWarning,
 } from "./runs";
 import { saveInvoicePage, upsertBranches } from "./store";
 
 /**
- * The Sync Engine: reads a connection's Kreloses Sale List for a date range, page by page, and
- * stores invoices, branches and customers idempotently, recording a `sync_runs` row for every run
- * (including failures).
+ * The Sync Engine: reads a connection's Kreloses Sale List for a date range, page by page, stores
+ * invoices, branches and customers idempotently, then reads the line items of the page's new and
+ * changed invoices (#5) and derives their credited lines, recording a `sync_runs` row for every
+ * run (including failures).
  *
  *   const result = await runSync(syncDeps(), connectionId, "manual", { dateRange: { from, to } });
  *
@@ -41,13 +51,20 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * 1. Takes the connection's lease (`@/connections/lock`), so no other sync or login test uses the
  *    same Kreloses login meanwhile; if it is held, returns `{status: "busy"}` without a run row.
  *    Runs of this connection still marked `running` (their server died) become `interrupted`.
- * 2. Logs in, reads the branches the login can see (the Connections page status is updated from
- *    this login: Connected, or Login failed with the reason).
+ * 2. Logs in, reads the branches and the staff list the login can see (the Connections page status
+ *    is updated from this login: Connected, or Login failed with the reason); unmatched staff
+ *    names on lines are matched again against the staff list.
  * 3. Reads Sale List pages serially (the Reader waits its polite delay between requests); each page
  *    is stored with the run's counts and checkpoint in one transaction, so a crash loses nothing
  *    already read.
- * 4. Finishes `succeeded`, `partial` (time budget reached; `checkpoint` says where to carry on) or
- *    `failed`.
+ * 4. After each page, reads the Sale Overview page of each of its invoices whose line items are
+ *    missing or stale (`invoicesNeedingLines`, in ./lines.ts: the ONE place deciding that) and
+ *    stores lines + credited lines per invoice in one transaction (`saveInvoiceLines`). The page
+ *    stays the checkpoint until its line items are done. A page that is not there (`PageMissing`)
+ *    is skipped and counted (`lineItemsFailed`); the invoice stays "not synced yet".
+ * 5. Finishes `succeeded`, `partial` (time budget reached — `checkpoint` says where to carry on —
+ *    or everything read but some invoice pages missing) or `failed` (also when the first
+ *    MISSING_PAGES_TO_FAIL invoice pages it tries are all missing). Warnings go on the run.
  *
  * Errors: `AuthFailed` and `LayoutChanged` are never retried (the owner or a code fix must act); an
  * expired session gets ONE fresh login per run; `RateLimited` / `Transient` are retried with
@@ -55,8 +72,9 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * tries again.
  *
  * Extension points: #6 (nightly cron, change detection, resume) passes `mode: "nightly"` and
- * `startPage` from a checkpoint; #8 (backfill) runs bounded chunks with `mode: "backfill"` and a
- * date range per chunk; #5 fetches line items for the invoices each page reports as new/changed.
+ * `startPage` from a checkpoint, and refines which invoices need their lines re-read in
+ * `invoicesNeedingLines`; #8 (backfill) runs bounded chunks with `mode: "backfill"` and a date
+ * range per chunk.
  */
 export interface SyncDeps {
   sql: Sql;
@@ -73,7 +91,9 @@ export interface SyncDeps {
 /** The Reader functions the engine uses. */
 export interface SyncReader {
   listLocations(session: KrelosesSession): Promise<KrelosesLocation[]>;
+  listStaff(session: KrelosesSession): Promise<KrelosesStaffMember[]>;
   listInvoices(session: KrelosesSession, query: InvoiceListQuery): Promise<InvoicePage>;
+  getInvoice(session: KrelosesSession, saleId: string): Promise<KrelosesInvoiceDetail>;
 }
 
 export interface SyncOptions {
@@ -96,7 +116,19 @@ export interface SyncOptions {
 }
 
 export type SyncResult =
-  | { status: "succeeded" | "partial" | "failed"; runId: string; counts: SyncCounts; error?: SyncFailure }
+  | {
+      status: "succeeded" | "partial" | "failed";
+      runId: string;
+      counts: SyncCounts;
+      error?: SyncFailure;
+      /** Things to tell the owner even though the run did not fail (also on Sync status). */
+      warnings: SyncWarning[];
+      /**
+       * For `partial`: true = stopped at the time budget (carry on from `checkpoint`); false = read
+       * everything but some invoice pages were missing (`counts.lineItemsFailed`).
+       */
+      stoppedAtTimeLimit?: boolean;
+    }
   /** Another sync or a login test holds the connection; nothing was done. */
   | { status: "busy"; heldFor: LeasePurpose; until: Date }
   | { status: "not_found" };
@@ -113,8 +145,10 @@ export const DEFAULT_TIME_BUDGET_MS = 200_000;
 const LEASE_MARGIN_MS = 120_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
 const DEFAULT_MAX_RETRIES = 3;
+/** A run fails when this many invoice pages are missing before any could be read. */
+export const MISSING_PAGES_TO_FAIL = 3;
 
-const DEFAULT_READER: SyncReader = { listLocations, listInvoices };
+const DEFAULT_READER: SyncReader = { listLocations, listStaff, listInvoices, getInvoice };
 
 /** The clinic month containing `now`, first to last day. */
 export function currentClinicMonth(now: Date): { from: IsoDate; to: IsoDate } {
@@ -172,6 +206,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
   const reader = deps.reader ?? DEFAULT_READER;
   const pageSize = options.pageSize ?? SALE_LIST_PAGE_SIZE;
   let counts: SyncCounts = { ...NO_COUNTS };
+  const warnings: SyncWarning[] = [];
   let page = options.startPage ?? 1;
   // Handed back to the Reader with the next page, so paging that does not advance fails loudly.
   let previous: InvoicePage | undefined;
@@ -182,38 +217,88 @@ async function execute(run: RunContext): Promise<SyncResult> {
     const locations = await client.call((session) => reader.listLocations(session));
     await recordLoginOutcome(deps.sql, connectionId, { ok: true, visibleLocations: locations });
     await upsertBranches(deps.sql, connectionId, locations);
+    try {
+      const staff = await client.call((session) => reader.listStaff(session));
+      await upsertStaffDirectory(deps.sql, connectionId, staff);
+    } catch (error) {
+      // The staff list only improves name matching: without it, lines are still credited (to
+      // unmatched names), so it is a warning, never a reason to stop the sync.
+      if (!(error instanceof LayoutChanged)) throw error;
+      warnings.push(staffListWarning(error));
+    }
 
+    const outOfTime = () => now().getTime() >= run.deadline;
+    const stopPartial = async (): Promise<SyncResult> => {
+      await finishRun(deps.sql, runId, { status: "partial", finishedAt: now(), counts, checkpoint: checkpoint(), warnings: withMissingPages() });
+      return { status: "partial", runId, counts, warnings: withMissingPages(), stoppedAtTimeLimit: true };
+    };
+    let lastMissing: PageMissing | null = null;
+    const withMissingPages = (): SyncWarning[] => (counts.lineItemsFailed > 0 ? [...warnings, missingPagesWarning(counts.lineItemsFailed)] : warnings);
     for (;;) {
-      if (now().getTime() >= run.deadline) {
-        await finishRun(deps.sql, runId, { status: "partial", finishedAt: now(), counts, checkpoint: checkpoint() });
-        return { status: "partial", runId, counts };
-      }
+      if (outOfTime()) return await stopPartial();
       const result = await client.call((session) =>
         reader.listInvoices(session, { page, dateRange: range, includeCancelled: true, pageSize, previous }),
       );
       await deps.sql.begin(async (tx) => {
         const written = await saveInvoicePage(tx, { runId, connectionId, invoices: result.invoices, fetchedAt: now() });
         counts = {
+          ...counts,
           pages: counts.pages + 1,
           invoicesSeen: counts.invoicesSeen + result.invoices.length,
           inserted: counts.inserted + written.inserted,
           updated: counts.updated + written.updated,
           unchanged: counts.unchanged + written.unchanged,
         };
-        await recordProgress(tx, runId, counts, result.hasMore ? { nextPage: page + 1, pageSize } : null);
+        // This page is where to carry on until its line items have been read too.
+        await recordProgress(tx, runId, counts, checkpoint());
       });
+
+      // Line items of the page's new and changed invoices, one Sale Overview page at a time.
+      for (const invoice of await invoicesNeedingLines(deps.sql, result.invoices.map((invoice) => invoice.saleId))) {
+        if (outOfTime()) return await stopPartial();
+        let detail: KrelosesInvoiceDetail;
+        try {
+          detail = await client.call((session) => reader.getInvoice(session, invoice.saleId));
+        } catch (error) {
+          // One page that is not there must not stop every other invoice (nor "data as of"): skip
+          // it — it stays "not synced yet" at its net amount — and try again next run. Pages whose
+          // content changed (LayoutChanged proper) stay fatal, and so does a run whose first
+          // MISSING_PAGES_TO_FAIL pages are all missing (something systematic, e.g. a new URL).
+          if (!(error instanceof PageMissing)) throw error;
+          lastMissing = error;
+          counts = { ...counts, lineItemsFailed: counts.lineItemsFailed + 1 };
+          await recordProgress(deps.sql, runId, counts, checkpoint());
+          if (counts.lineItemsRead === 0 && counts.lineItemsFailed >= MISSING_PAGES_TO_FAIL) throw lastMissing;
+          continue;
+        }
+        const saved = await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, headerVersion: invoice.headerVersion, detail, fetchedAt: now() });
+        if (saved.status === "stored") {
+          counts = { ...counts, lineItemsRead: counts.lineItemsRead + 1, lineItemGaps: counts.lineItemGaps + (saved.gapSen !== 0 ? 1 : 0) };
+        }
+        await recordProgress(deps.sql, runId, counts, checkpoint());
+      }
+      await recordProgress(deps.sql, runId, counts, result.hasMore ? { nextPage: page + 1, pageSize } : null);
       if (!result.hasMore) break;
       previous = result;
       page += 1;
     }
 
-    await finishRun(deps.sql, runId, {
-      status: "succeeded",
-      finishedAt: now(),
-      counts,
-      coveredLocationIds: locations.map((location) => location.id),
-    });
-    return { status: "succeeded", runId, counts };
+    const coveredLocationIds = locations.map((location) => location.id);
+    if (counts.lineItemsFailed > 0) {
+      // The whole listing was read (it counts for "data as of"), but some invoices still need
+      // their lines: "Sync now" starts over from page 1, which retries them.
+      await finishRun(deps.sql, runId, {
+        status: "partial",
+        finishedAt: now(),
+        counts,
+        checkpoint: { nextPage: 1, pageSize },
+        coveredLocationIds,
+        warnings: withMissingPages(),
+      });
+      return { status: "partial", runId, counts, warnings: withMissingPages(), stoppedAtTimeLimit: false };
+    }
+    await finishRun(deps.sql, runId, { status: "succeeded", finishedAt: now(), counts, coveredLocationIds, warnings });
+    return { status: "succeeded", runId, counts, warnings };
   } catch (error) {
     const failure = describeSyncFailure(error);
     if (failure.code === "internal") {
@@ -227,8 +312,9 @@ async function execute(run: RunContext): Promise<SyncResult> {
       checkpoint: counts.pages > 0 || page > 1 ? checkpoint() : null,
       errorCode: failure.code,
       error: failure.message,
+      warnings,
     });
-    return { status: "failed", runId, counts, error: failure };
+    return { status: "failed", runId, counts, error: failure, warnings };
   }
 }
 

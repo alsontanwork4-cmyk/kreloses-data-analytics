@@ -33,6 +33,11 @@ export interface SaleListDiagnostic {
   /** Null when the request failed (see `error`). */
   page: SaleListPageStructure | null;
   error?: string;
+  /**
+   * Sales on the page to open for the Sale Overview check (the first active one, the first with a
+   * discount, the first with a refund or a negative net; no sale twice). Their ids are NEVER printed.
+   */
+  samples?: { saleId: string; netSen: number; label: string }[];
 }
 
 export interface SaleListPageStructure {
@@ -72,6 +77,24 @@ export async function probeSaleList(session: KrelosesSession, template: unknown,
     return { ...diagnostic, error: describeDiagnosticError(error) };
   }
   diagnostic.page = describePage(payload, range);
+  try {
+    const active = parseSaleListPage(payload, { page: 1, dateRange: range, includeCancelled: true }, SALE_LIST_PAGE_SIZE).invoices.filter(
+      (invoice) => invoice.status === "active",
+    );
+    const choices = [
+      { label: "first active sale", invoice: active[0] },
+      { label: "first sale with a discount", invoice: active.find((invoice) => invoice.discountsSen !== 0) },
+      { label: "first sale with a refund or a negative net", invoice: active.find((invoice) => invoice.totalRefundsSen !== 0 || invoice.netSen < 0) },
+    ];
+    const seen = new Set<string>();
+    diagnostic.samples = choices.flatMap(({ label, invoice }) => {
+      if (!invoice || seen.has(invoice.saleId)) return [];
+      seen.add(invoice.saleId);
+      return [{ saleId: invoice.saleId, netSen: invoice.netSen, label }];
+    });
+  } catch {
+    diagnostic.samples = [];
+  }
   return diagnostic;
 }
 
@@ -88,7 +111,7 @@ export function formatSaleListDiagnostic(diagnostic: SaleListDiagnostic): string
     `  Expected fields missing: ${list(page.missingFields)}`,
     `  Other fields: ${list(page.otherFields)}`,
     `  SaleDate formats: ${list(page.saleDateFormats)}`,
-    `  Sale times by KL hour (as the Reader reads SaleDate): ${page.saleTimesByHour} (most sales at 00-06 would mean SaleDate holds KL time sent as UTC)`,
+    `  Sale times by KL hour (as the Reader reads SaleDate): ${page.saleTimesByHour} (clinic hours are about 09-21; most sales at 17-05 instead would mean SaleDate holds KL wall-clock time labelled as UTC, read 8 hours late)`,
     `  Rows newest first: ${page.newestFirst}`,
     `  Rows outside ${range.from}..${range.to}: ${page.outsideRange}`,
     `  Amounts: ${page.amounts}`,

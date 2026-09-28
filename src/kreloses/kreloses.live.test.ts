@@ -7,7 +7,8 @@ import { formatLoginDiagnostic, runLoginDiagnostic } from "./diagnostics";
  * KRELOSES_TEST_EMAIL and KRELOSES_TEST_PASSWORD are set; never part of `npm test`.
  *
  * It logs in once, lists the locations the login can see, reads ONE page of the Sale List
- * (previous month up to today, all statuses), and prints a redacted diagnostic that is safe to
+ * (previous month up to today, all statuses) and ONE invoice's Sale Overview page (its line
+ * items), counts the staff in the Sale List filter, and prints a redacted diagnostic that is safe to
  * paste into the public ticket: the login flow (hop status codes and hosts, cookie
  * names/scopes/lifetimes, one-time-code step, which host the session works on, the number of
  * locations) and the Sale List's structure (field names, TotalCount, the SaleDate pattern, how
@@ -21,7 +22,7 @@ const probeMinutes = Math.max(0, Number(process.env.KRELOSES_TEST_SESSION_PROBE_
 
 describe.skipIf(!email || !password)("live Kreloses login (opt-in)", () => {
   it(
-    "logs in to the real Kreloses, lists the visible locations, reads one Sale List page, and prints a redacted diagnostic",
+    "logs in to the real Kreloses, lists the visible locations, reads one Sale List page and one invoice page, and prints a redacted diagnostic",
     async () => {
       const diagnostic = await runLoginDiagnostic({ email: email!, password: password! }, { probeMinutes });
       console.log(`\n${formatLoginDiagnostic(diagnostic)}\n`);
@@ -30,6 +31,8 @@ describe.skipIf(!email || !password)("live Kreloses login (opt-in)", () => {
       expect(diagnostic.sessionWorksOn).toBe("sea.kreloses.com");
       expect(diagnostic.locations).toMatchObject({ ok: true });
       expect(diagnostic.saleList?.page?.parse, "the Reader should parse the Sale List (see above)").toMatch(/^OK/);
+      expect(diagnostic.staff, "the Sale List filter should have a Staff filter (see above)").toMatchObject({ ok: true });
+      expect(diagnostic.saleOverview?.structure?.parseFailures, "the Reader should parse the invoice pages (see above)").toEqual([]);
     },
     (probeMinutes + 3) * 60_000,
   );

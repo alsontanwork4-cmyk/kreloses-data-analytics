@@ -38,7 +38,7 @@ describe("Sync Engine", () => {
 
     expect(result).toMatchObject({
       status: "succeeded",
-      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0 },
+      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9 },
     });
 
     const branches = await db.sql`select kreloses_location_id, name, connection_id::text from branches order by kreloses_location_id`;
@@ -84,7 +84,7 @@ describe("Sync Engine", () => {
       rawSaleDate: "/Date(1788193800000)/",
       syncRunId: result.runId,
       fetchedAt: h.clock.now,
-      detailFetchedAt: null,
+      detailFetchedAt: h.clock.now,
     });
     const [returned] = await db.sql`select net_amount, total_refunds, customer_id from invoices where kreloses_sale_id = '700206'`;
     expect(returned).toMatchObject({ netAmount: "-120.00", totalRefunds: "120.00" });
@@ -102,11 +102,12 @@ describe("Sync Engine", () => {
       dateTo: "2026-09-30",
       startedAt: h.clock.now,
       finishedAt: h.clock.now,
-      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0 },
+      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 1 },
       checkpoint: null,
       coveredLocationIds: ["1101", "1102"],
       errorCode: null,
       error: null,
+      warnings: [],
     });
   });
 
@@ -147,7 +148,7 @@ describe("Sync Engine", () => {
     h.clock.advance(3_600_000);
     const next = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
 
-    expect(next.counts).toEqual({ pages: 1, invoicesSeen: 11, inserted: 0, updated: 2, unchanged: 9 });
+    expect(next.counts).toEqual({ pages: 1, invoicesSeen: 11, inserted: 0, updated: 2, unchanged: 9, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0 });
     const changed = await db.sql`
       select kreloses_sale_id, status, total_refunds, sync_run_id::text, fetched_at from invoices
       where kreloses_sale_id in ('700102', '700202') order by kreloses_sale_id
@@ -308,8 +309,12 @@ describe("Sync Engine", () => {
           h.deps({
             reader: {
               listLocations: async () => [{ id: "1101", name: "Branch North" }],
+              listStaff: async () => [],
               listInvoices: async () => {
                 throw new TypeError("a bug");
+              },
+              getInvoice: async () => {
+                throw new TypeError("not reached");
               },
             },
           }),
@@ -398,15 +403,18 @@ describe("Sync Engine", () => {
       return undefined;
     });
     const result = ran(await runSync(h.deps(), id, "backfill", { dateRange: SEPTEMBER, pageSize: 4, timeBudgetMs: 15_000 }));
-    expect(result).toMatchObject({ status: "partial", counts: { pages: 2, invoicesSeen: 8, inserted: 8 } });
+    // Page 1 (and its 3 active invoices' line items) at 10 s; page 2 read at 20 s, over budget before its line items.
+    expect(result).toMatchObject({ status: "partial", counts: { pages: 2, invoicesSeen: 8, inserted: 8, lineItemsRead: 3 } });
     const [run] = await listSyncRuns(db.sql);
-    expect(run).toMatchObject({ status: "partial", checkpoint: { nextPage: 3, pageSize: 4 }, errorCode: null, coveredLocationIds: [] });
+    // Page 2 is where to carry on: its line items have not been read yet.
+    expect(run).toMatchObject({ status: "partial", checkpoint: { nextPage: 2, pageSize: 4 }, errorCode: null, coveredLocationIds: [] });
     expect(await db.sql`select 1 from invoices`).toHaveLength(8);
 
-    // Carrying on from the checkpoint reads the rest.
-    const rest = ran(await runSync(h.deps(), id, "backfill", { dateRange: SEPTEMBER, pageSize: 4, startPage: 3 }));
-    expect(rest).toMatchObject({ status: "succeeded", counts: { pages: 1, inserted: 3 } });
+    // Carrying on from the checkpoint re-reads page 2 (no change) for its line items, then reads the rest.
+    const rest = ran(await runSync(h.deps(), id, "backfill", { dateRange: SEPTEMBER, pageSize: 4, startPage: 2 }));
+    expect(rest).toMatchObject({ status: "succeeded", counts: { pages: 2, inserted: 3, unchanged: 4, lineItemsRead: 6 } });
     expect(await db.sql`select 1 from invoices`).toHaveLength(11);
+    expect(await db.sql`select 1 from invoices where status = 'active' and not lines_current`).toHaveLength(0);
   });
 
   it("with resume, carries on from the latest stopped run of the same connection and dates", async () => {
@@ -423,13 +431,14 @@ describe("Sync Engine", () => {
         .filter((request) => request.url.pathname === "/Sale/Get")
         .map((request) => (JSON.parse(request.body!) as { request: { RequestingPage: number } }).request.RequestingPage);
     const before = pagesRequested().length;
-    const resumed = ran(await runSync(h.deps(), id, "manual", options));
-    expect(resumed).toMatchObject({ status: "succeeded", counts: { pages: 1, inserted: 3 } });
-    expect(pagesRequested().slice(before)).toEqual([3]);
+    // Page 2 again (its line items were not read) and page 3: 20 s of Sale List time.
+    const resumed = ran(await runSync(h.deps(), id, "manual", { ...options, timeBudgetMs: 25_000 }));
+    expect(resumed).toMatchObject({ status: "succeeded", counts: { pages: 2, inserted: 3, lineItemsRead: 6 } });
+    expect(pagesRequested().slice(before)).toEqual([2, 3]);
 
     // Once a run of those dates has finished, the next one starts from page 1 again.
     const again = ran(await runSync(h.deps(), id, "manual", { ...options, timeBudgetMs: 60_000 }));
-    expect(again).toMatchObject({ status: "succeeded", counts: { pages: 3, unchanged: 11 } });
+    expect(again).toMatchObject({ status: "succeeded", counts: { pages: 3, unchanged: 11, lineItemsRead: 0 } });
   });
 
   it("keeps synced sales when the connection is deleted", async () => {

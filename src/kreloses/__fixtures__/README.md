@@ -26,6 +26,9 @@ its own hosts and fills `{{VAR}}` placeholders (per-login auth tickets).
 | `sale-list-rows.json` + `post-sale-get.response.json` | The Sale List: 20 synthetic sales ("Customer 0001"…, two branches, Aug–Sep 2026 and Sep–Oct 2025; active, cancelled, a partial refund, a walk-in without a customer, a negative "return" sale in parentheses, amounts with thousand separators, `SaleDate` as `/Date(ms)/` around KL month ends). The fake answers `POST sea…/Sale/Get` from them: it applies the request's `filter` (Sale status, Location — only the login's own —, Date `From`/`To`), sorts newest first and pages by `RequestingPage`/`PageSize`, returning `{Columns, Results, TotalCount}`. `fake.saleRows` is the live, mutable copy |
 | `sale-get-formats.json` | One `/Sale/Get` page using every other date and number format the Reader accepts (ISO with/without zone, `/Date(ms+0800)/`, `dd/MM/yyyy hh:mm AM`, `1 Sep 2026`, `15-Sep-2026 14:05`; JSON numbers, `RM` prefixes, minus signs, `-` for empty, `CustomerId` 0/null) |
 | `sale-get-changed.json` | A `/Sale/Get` body in a different layout (`{success, data: {items, count}}`): `LayoutChanged` |
+| `sale-overviews.json` + `get-sale-overview.response.json` + `sale-overview-page.html` | `GET sea…/Sale/Overview/{SaleId}` (#5): one synthetic page model per sale in `sale-list-rows.json` (`Sale`, `Customer`, `Items[]`, `Totals`, `Transactions`, `RefundInfo`, `CreditNoteInfo`), rendered by the fake into the page as `var model = {…};` (JSON-encoded like ASP.NET's `Json.Encode`, next to decoy scripts with braces in strings). Covers: one doctor with an invoice discount line (700101), two doctors + a fractional quantity (700102), an item-level discount, a no-staff line, a generic account and a `(60.00)` discount line with empty quantity/price (700104), non-doctor staff (700105), a doctor missing from the staff list — "Dr Delta" — and a `-40.00` discount line (700201), a refund (700202), lines that do not add up to the net (700203), a walk-in (700205), a return with quantity `(1)` (700206), a cancelled sale (700103), a `Dr.` spelling variant, thousand separators and a JSON-number quantity. `fake.saleOverviews` is the live, mutable copy; hand-computed credited figures are in `src/analytics/doctors.test.ts` |
+| `sale-overview-no-model.html` | An invoice page without `var model` (data loaded some other way): `LayoutChanged` |
+| `sale-overview-changed.html` | An invoice page whose model moved and renamed its line items (`Lines.Rows`): `LayoutChanged` |
 
 ## Unverified guesses (replace with anonymised real recordings)
 
@@ -46,6 +49,14 @@ Until real responses are recorded, these are guesses:
   date), and how the filter template records selections (here `Selected` flags on options) and
   its date range (here `Date.From`/`To` as `dd/MM/yyyy`). The live report prints each of these
   (as patterns and labels, never values).
+- The Sale Overview page (#5): the model's key names outside `Items[]` (`Sale.SaleId`, `Totals.*`),
+  whether `Amount` is the line's charged amount after its item discount, the sign and the empty
+  fields of discount lines (ItemType 55), how quantities and amounts are written, whether
+  `StaffName` is the short form ("Dr Ong"), and how a refund shows (`RefundInfo`,
+  `CreditNoteInfo`). The live report prints the model's shape and yes/no checks for each.
+- The Staff filter of report 14 (#5): here a `MultiSelect` whose options are full staff names
+  ("Dr Alpha Anderson", "Charlie Chen", "Branch North General", …); the live report prints only how
+  many there are.
 
 When replacing a fixture with a recorded one: strip every cookie value, token, customer name,
 phone number, staff name and amount (the repo is public), keep the structure byte-for-byte

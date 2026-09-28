@@ -63,6 +63,26 @@ export class LayoutChanged extends KrelosesError {
   }
 }
 
+/**
+ * A page load (`session.getHtml`, e.g. one invoice's Sale Overview) found nothing there: HTTP
+ * 404/410, or a redirect somewhere other than the login page. Still a `LayoutChanged` (anything
+ * that treats it as one stays correct), but callers reading many pages — the Sync Engine opening
+ * invoice pages — can tell one missing page (skip it, try again next time) from a page whose
+ * content changed (fatal). Messages never carry a query string.
+ */
+export class PageMissing extends LayoutChanged {
+  readonly reason: "not_found" | "redirected";
+  /** The HTTP status Kreloses answered with. */
+  readonly status: number;
+
+  constructor(message: string, options: { reason: "not_found" | "redirected"; status: number }) {
+    super(message);
+    this.name = "PageMissing";
+    this.reason = options.reason;
+    this.status = options.status;
+  }
+}
+
 export class RateLimited extends KrelosesError {
   readonly code = "rate_limited" as const;
   /** From Kreloses's `Retry-After` header, when it sent one. */

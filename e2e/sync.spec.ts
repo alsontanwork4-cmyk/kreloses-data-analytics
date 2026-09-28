@@ -3,7 +3,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { SYNTHETIC_ACCOUNTS } from "../src/kreloses/testing/synthetic-accounts";
 
 import { signIn } from "./support/auth";
-import { withRunDatabase } from "./support/db";
+import { addConnection, syncMonth } from "./support/connections";
+import { clearSyncedData, withRunDatabase } from "./support/db";
 import { run } from "./support/run";
 
 /**
@@ -13,36 +14,8 @@ import { run } from "./support/run";
  */
 const { both } = SYNTHETIC_ACCOUNTS;
 
-/** Leaves the run's database as the other specs expect it: no sales, branches, runs or connections. */
-async function clearSales() {
-  await withRunDatabase(async (sql) => {
-    await sql`delete from invoices`;
-    await sql`delete from customers`;
-    await sql`delete from sync_runs`;
-    await sql`delete from branches`;
-    await sql`delete from connections`;
-  });
-}
-
-async function addConnection(page: Page, values: { label: string; email: string; password: string }): Promise<Locator> {
-  await page.goto("/connections");
-  await page.getByRole("button", { name: "Add connection" }).click();
-  const form = page.getByRole("form", { name: "Add a Kreloses login" });
-  await form.getByLabel("Name").fill(values.label);
-  await form.getByLabel("Kreloses email").fill(values.email);
-  await form.getByLabel("Kreloses password").fill(values.password);
-  await form.getByRole("button", { name: "Save and test" }).click();
-  await expect(form).toBeHidden();
-  const card = page.getByRole("article", { name: values.label, exact: true });
-  await expect(card.getByTestId("connection-status")).toHaveText("Connected");
-  return card;
-}
-
-async function syncMonth(card: Locator, month: string) {
-  await card.getByLabel("Month to sync").selectOption({ label: month });
-  await card.getByRole("button", { name: "Sync now" }).click();
-  await expect(card.getByRole("form", { name: "Sync sales" }).getByRole("button", { name: "Sync now" })).toBeEnabled({ timeout: 60_000 });
-}
+/** Leaves the run's database as the other specs expect it: no sales, staff, branches, runs or connections. */
+const clearSales = clearSyncedData;
 
 test.describe("Sync now → Sync status → Overview", () => {
   test.beforeEach(clearSales);
@@ -53,12 +26,12 @@ test.describe("Sync now → Sync status → Overview", () => {
     const card = await addConnection(page, { label: "Both branches", email: both.email, password: both.password });
 
     await syncMonth(card, "August 2026");
-    await expect(card.getByRole("status")).toHaveText("Synced August 2026: 5 invoices read (5 new, 0 changed, 0 unchanged).");
+    await expect(card.getByRole("status")).toHaveText("Synced August 2026: 5 invoices read (5 new, 0 changed, 0 unchanged); line items read for 4 invoices.");
     await syncMonth(card, "September 2026");
-    await expect(card.getByRole("status")).toHaveText("Synced September 2026: 11 invoices read (11 new, 0 changed, 0 unchanged).");
+    await expect(card.getByRole("status")).toHaveText("Synced September 2026: 11 invoices read (11 new, 0 changed, 0 unchanged); line items read for 9 invoices.");
     // Again: nothing changes.
     await syncMonth(card, "September 2026");
-    await expect(card.getByRole("status")).toHaveText("Synced September 2026: 11 invoices read (0 new, 0 changed, 11 unchanged).");
+    await expect(card.getByRole("status")).toHaveText("Synced September 2026: 11 invoices read (0 new, 0 changed, 11 unchanged); line items read for 0 invoices.");
 
     // Sync status: every run, newest first, and how fresh each branch is.
     await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Sync status" }).click();
@@ -69,6 +42,11 @@ test.describe("Sync now → Sync status → Overview", () => {
     for (const syncRun of [latest, september, august]) await expect(syncRun.getByTestId("sync-run-status")).toHaveText("Succeeded");
     await expect(latest.getByTestId("sync-run-unchanged")).toHaveText("11");
     await expect(september.getByTestId("sync-run-inserted")).toHaveText("11");
+    await expect(september.getByTestId("sync-run-line-items")).toHaveText("9 invoices");
+    await expect(september.getByTestId("sync-run-line-items-failed")).toHaveText("0");
+    // 700203's lines (260.00) do not add up to its net (250.00): the gap monitor counts it.
+    await expect(september.getByTestId("sync-run-line-gaps")).toHaveText("1 invoice");
+    await expect(september.getByTestId("sync-run-warning")).toHaveCount(0);
     await expect(september).toContainText("1 Sep 2026 – 30 Sep 2026");
     await expect(august.getByTestId("sync-run-seen")).toContainText("5");
     // "Data as of" here is for today, so it depends on whether the synced month includes today.
@@ -125,7 +103,7 @@ test.describe("Sync now → Sync status → Overview", () => {
       page.waitForRequest((request) => request.method() === "POST" && "next-action" in request.headers()),
       card.getByRole("button", { name: "Sync now" }).click(),
     ]);
-    await expect(card.getByRole("status")).toContainText("Synced September 2026");
+    await expect(card.getByRole("status")).toContainText("Synced September 2026", { timeout: 60_000 });
     const runCount = async () => (await withRunDatabase((sql) => sql`select 1 from sync_runs`)).length;
     expect(await runCount()).toBe(1);
 

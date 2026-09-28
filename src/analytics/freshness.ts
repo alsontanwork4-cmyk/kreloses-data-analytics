@@ -15,7 +15,8 @@ export interface BranchFreshness {
 
 /**
  * "Data as of <time>" per branch (spec story 15), for the period being looked at: the finish time
- * of the latest SUCCEEDED sync run that
+ * of the latest sync run that read the whole listing (succeeded, or partial only because some
+ * invoice pages were missing — their sales still count, as "line items not synced yet") and that
  *
  * - covered the branch's Kreloses location (`sync_runs.covered_location_ids`), whichever connection
  *   ran it, and
@@ -23,8 +24,9 @@ export interface BranchFreshness {
  *   least(`filter.dateTo`, the clinic day the run started). A run cannot have seen sales after it
  *   started, and a run of an old month says nothing about the current one.
  *
- * Without `dateTo` the period is "now": runs that read the day they ran. Partial and failed runs
- * never make data look fresher. Branches in the filter (all when none is selected), by name.
+ * Without `dateTo` the period is "now": runs that read the day they ran. Runs stopped at their time
+ * limit and failed runs never make data look fresher. Branches in the filter (all when none is
+ * selected), by name.
  */
 export async function getDataFreshness(
   sql: Sql,
@@ -37,7 +39,9 @@ export async function getDataFreshness(
       b.name as branch_name,
       (
         select max(r.finished_at) from sync_runs r
-        where r.status = 'succeeded'
+        -- Covered = the run read the branch's whole listing: succeeded, or partial only because
+        -- some invoice pages were missing (a run stopped at its time limit covers nothing).
+        where r.status in ('succeeded', 'partial')
           and b.kreloses_location_id = any(r.covered_location_ids)
           and least(
             coalesce(${periodEnd}::date, (r.started_at at time zone 'Asia/Kuala_Lumpur')::date),

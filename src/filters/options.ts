@@ -1,5 +1,6 @@
 import "server-only";
 
+import { listDoctors } from "@/analytics";
 import { getDb } from "@/db/client";
 
 import type { FilterOption } from "./types";
@@ -10,7 +11,8 @@ import type { FilterOption } from "./types";
  * swaps one body without touching the UI:
  *
  * - branches: the `branches` table (created by the sync, #4). Empty until the first sync.
- * - doctors: will read `staff` (ticket #5). While undefined, the doctor selector is hidden.
+ * - doctors: staff of kind doctor that appear on invoice lines (`listDoctors`, Analytics Service;
+ *   #5). Empty until the first sync with line items (the selector shows, disabled).
  */
 export interface FilterOptions {
   branches: FilterOption[];
@@ -27,7 +29,7 @@ export async function listBranchOptions(): Promise<FilterOption[]> {
   return getDb()<FilterOption[]>`select id::text as id, name as label from branches order by lower(name), id`;
 }
 
-/** `undefined` hides the doctor selector; return a list (even empty) to show it. */
+/** Every doctor, by name; `id` is `staff.id` (what `GlobalFilter.doctorIds` holds). `undefined` would hide the selector. */
 export async function listDoctorOptions(): Promise<FilterOption[] | undefined> {
-  return undefined;
+  return (await listDoctors(getDb())).map((doctor) => ({ id: doctor.id, label: doctor.name }));
 }

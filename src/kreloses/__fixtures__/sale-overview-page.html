@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sale Overview - Kreloses (SYNTHETIC)</title>
+    <link href="/Content/css?v=synthetic" rel="stylesheet" />
+    <script type="text/javascript">
+        // Not the page model: a decoy with braces in strings.
+        var modelTemplates = { "row": "<tr>{Name}</tr>", "empty": "}" };
+        var appSettings = { currency: "RM", locale: 'en-MY' };
+    </script>
+</head>
+<body>
+    <nav class="navbar">
+        <form id="logoutForm" action="https://sea.kreloses.com/Account/LogOff" method="post">
+            <input name="__RequestVerificationToken" type="hidden" value="SYNTHETIC-FORM-TOKEN-7f3a9c1e2b4d&#x2B;Qw==" />
+            <a href="javascript:document.getElementById('logoutForm').submit()">Log off</a>
+        </form>
+    </nav>
+    <div class="container body-content">
+        <div id="sale-overview-root"></div>
+    </div>
+    <script type="text/javascript">
+        // The server renders the sale into the page; the React view reads it.
+        var model = {{MODEL}};
+        var readOnly = true;
+        ReactDOM.render(React.createElement(SaleOverview, { model: model, readOnly: readOnly }), document.getElementById('sale-overview-root'));
+    </script>
+</body>
+</html>

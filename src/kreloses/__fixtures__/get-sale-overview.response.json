@@ -1,0 +1,10 @@
+{
+  "comment": "GET https://sea.kreloses.com/Sale/Overview/{SaleId} (signed in): the invoice page. The fake renders the sale's model from sale-overviews.json into sale-overview-page.html ({{MODEL}}), JSON-encoded the way ASP.NET MVC's Json.Encode does (<, > and & as \\u escapes).",
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [],
+  "bodyFile": "sale-overview-page.html"
+}

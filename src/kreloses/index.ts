@@ -5,6 +5,8 @@
  *   const session = await login({ email, password }, readerOptionsFromEnv(process.env));
  *   const locations = await listLocations(session);
  *   const { invoices, hasMore } = await listInvoices(session, { page: 1, dateRange, includeCancelled: true });
+ *   const { header, lines } = await getInvoice(session, invoices[0].saleId);   // line items (#5)
+ *   const staff = await listStaff(session);                                    // full staff names (#5)
  *
  * See `README.md` ("Kreloses Reader") for the login flow, the fixtures and the live smoke test.
  */
@@ -20,6 +22,14 @@ export {
   type PageSpan,
   type SaleStatus,
 } from "./sale-list";
+export {
+  getInvoice,
+  ITEM_TYPES,
+  type KrelosesInvoiceDetail,
+  type KrelosesInvoiceHeader,
+  type KrelosesInvoiceLine,
+} from "./sale-overview";
+export { listStaff, type KrelosesStaffMember } from "./staff";
 export type { KrelosesSession, HopEvent } from "./session";
 export {
   readerOptionsFromEnv,
@@ -33,6 +43,7 @@ export {
   AuthFailed,
   KrelosesError,
   LayoutChanged,
+  PageMissing,
   RateLimited,
   Transient,
   isKrelosesError,

@@ -43,18 +43,20 @@ export function syncMonthOptions(now: Date = new Date()): { value: string; label
 /** What to tell the owner after "Sync now". */
 export function describeSyncResult(result: SyncResult, what: string): { tone: "ok" | "warning" | "error"; message: string } {
   switch (result.status) {
-    case "succeeded": {
-      const { invoicesSeen, inserted, updated, unchanged } = result.counts;
-      return {
-        tone: "ok",
-        message: `Synced ${what}: ${plural(invoicesSeen, "invoice")} read (${inserted} new, ${updated} changed, ${unchanged} unchanged).`,
-      };
+    case "succeeded":
+    case "partial": {
+      if (result.status === "partial" && result.stoppedAtTimeLimit !== false) {
+        return {
+          tone: "warning",
+          message: `Stopped ${what} at the time limit after ${plural(result.counts.invoicesSeen, "invoice")}. Sync ${what} again to carry on from where it stopped.`,
+        };
+      }
+      // Read to the end (a `partial` here only lacks some invoice pages, which its warning explains).
+      const { invoicesSeen, inserted, updated, unchanged, lineItemsRead } = result.counts;
+      const done = `Synced ${what}: ${plural(invoicesSeen, "invoice")} read (${inserted} new, ${updated} changed, ${unchanged} unchanged); line items read for ${plural(lineItemsRead, "invoice")}.`;
+      const warnings = result.warnings.map((warning) => warning.message);
+      return { tone: warnings.length > 0 ? "warning" : "ok", message: [done, ...warnings].join(" ") };
     }
-    case "partial":
-      return {
-        tone: "warning",
-        message: `Stopped ${what} at the time limit after ${plural(result.counts.invoicesSeen, "invoice")}. Sync ${what} again to carry on from where it stopped.`,
-      };
     case "failed":
       return { tone: "error", message: `Sync of ${what} failed. ${result.error?.message ?? ""}`.trim() };
     case "busy":

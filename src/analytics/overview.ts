@@ -2,7 +2,7 @@ import type { Sql } from "@/db/sql";
 import type { GlobalFilter } from "@/filters";
 import { moneyToSen, senToMoney, type Money } from "@/lib/money";
 
-import { branchCondition, branchScope, revenueFacts } from "./facts";
+import { branchCondition, factsScope, revenueFacts } from "./facts";
 import { comparisonPeriods, type DateRange } from "./periods";
 
 /** A KPI's comparison with another period. */
@@ -25,11 +25,11 @@ export interface Kpi<T> {
 
 /** The Overview's headline KPIs; definitions in `METRIC_DEFINITIONS` (./definitions.ts). */
 export interface KpiSet {
-  /** Net amount of active sales, RM. */
+  /** Revenue credited in the filter (net of discounts, active sales), RM. With a doctor filter: credited to those doctors. */
   revenue: Kpi<Money>;
-  /** Active sales. */
+  /** Active sales (with a doctor filter: those with at least one line credited to them). */
   invoices: Kpi<number>;
-  /** Distinct customers with an active sale. */
+  /** Distinct customers with an active sale (with a doctor filter: with a line credited to them). */
   customers: Kpi<number>;
   /** revenue ÷ customers, RM (null without customers). */
   aovPerCustomer: Kpi<Money | null>;
@@ -64,12 +64,12 @@ type PeriodKey = "current" | "previous" | "last_year";
  * Overview KPIs for the global filter: revenue, invoices, customers and AOV per customer, in total
  * and per branch, each compared with the previous period and the same period last year. All sums
  * and averages are computed in SQL on exact `numeric`; only the changes are worked out here, in
- * integer sen. `doctorIds` is not applied yet (no doctors before #5).
+ * integer sen. With `doctorIds`, every KPI counts only lines credited to those doctors (see `revenueFacts`).
  */
 export async function getOverviewKpis(sql: Sql, filter: GlobalFilter): Promise<OverviewKpis> {
   const period: DateRange = { dateFrom: filter.dateFrom, dateTo: filter.dateTo };
   const { previousPeriod, lastYear } = comparisonPeriods(period);
-  const scope = branchScope(filter);
+  const scope = factsScope(filter);
 
   const [rows, branches] = await Promise.all([
     sql<{ period: PeriodKey; branchId: string | null; revenue: string; invoices: number; customers: number; aov: string | null }[]>`
@@ -94,7 +94,7 @@ export async function getOverviewKpis(sql: Sql, filter: GlobalFilter): Promise<O
     sql<{ branchId: string; branchName: string }[]>`
       select b.id::text as branch_id, b.name as branch_name
       from branches b
-      where ${branchCondition(sql, scope, sql`b.id`)}
+      where ${branchCondition(sql, scope.branches, sql`b.id`)}
       order by lower(b.name), b.id
     `,
   ]);

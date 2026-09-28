@@ -76,7 +76,9 @@ export default async function SyncStatusPage() {
 }
 
 function RunCard({ run }: { run: SyncRun }) {
-  const status = STATUS[run.status];
+  // A partial run that read the whole listing only lacks some invoice pages (see its warning).
+  const status =
+    run.status === "partial" && run.coveredLocationIds.length > 0 ? { ...STATUS.partial, label: "Some invoice pages missing" } : STATUS[run.status];
   const { counts } = run;
   return (
     <article data-testid="sync-run" aria-label={`${run.connectionLabel} sync`} className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-sm">
@@ -107,11 +109,41 @@ function RunCard({ run }: { run: SyncRun }) {
         <Item label="Unchanged" testId="sync-run-unchanged">
           {formatCount(counts.unchanged)}
         </Item>
+        <Item label="Line items read" testId="sync-run-line-items">
+          {formatCount(counts.lineItemsRead)} {counts.lineItemsRead === 1 ? "invoice" : "invoices"}
+        </Item>
+        <Item label="Invoice pages missing" testId="sync-run-line-items-failed">
+          {formatCount(counts.lineItemsFailed)}
+        </Item>
+        <Item label="Lines ≠ invoice net" testId="sync-run-line-gaps">
+          {formatCount(counts.lineItemGaps)} {counts.lineItemGaps === 1 ? "invoice" : "invoices"}
+        </Item>
       </dl>
-      {run.status === "partial" && run.checkpoint ? (
+      {run.status === "partial" && run.checkpoint && run.coveredLocationIds.length === 0 ? (
         <p className="text-muted-foreground">
-          Stopped at its time limit before page {run.checkpoint.nextPage}; the next sync of these dates carries on from there.
+          Stopped at its time limit at page {run.checkpoint.nextPage}; the next sync of these dates carries on from there (line items
+          still missing are read then).
         </p>
+      ) : null}
+      {counts.lineItemGaps > 0 ? (
+        <p className="text-muted-foreground">
+          The lines of {plural(counts.lineItemGaps, "invoice")} did not add up to the invoice&apos;s net amount; the difference was
+          shared across its lines in proportion to what each charged, so totals are unaffected.
+        </p>
+      ) : null}
+      {run.warnings.length > 0 ? (
+        <ul className="flex flex-col gap-2" aria-label="Warnings">
+          {run.warnings.map((warning) => (
+            <li
+              key={warning.code}
+              data-testid="sync-run-warning"
+              className="flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-amber-900 dark:text-amber-200"
+            >
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+              <span className="min-w-0 break-words">{warning.message}</span>
+            </li>
+          ))}
+        </ul>
       ) : null}
       {run.error ? (
         <p data-testid="sync-run-error" className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-destructive">
@@ -121,6 +153,10 @@ function RunCard({ run }: { run: SyncRun }) {
       ) : null}
     </article>
   );
+}
+
+function plural(count: number, noun: string): string {
+  return `${formatCount(count)} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function Item({ label, testId, children }: { label: string; testId?: string; children: ReactNode }) {

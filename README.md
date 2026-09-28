@@ -89,13 +89,17 @@ src/
   db/             DB client (getDb), connection options, migration runner, test harness
   filters/        The shared global filter (URL <-> {dateFrom, dateTo, branchIds?, doctorIds?})
   components/     shell/ (app shell, nav config, PageShell), settings/ (tabs, SettingsSection),
-                  filter-bar/, empty-state, ui/ (shadcn)
-  kreloses/       Kreloses Reader — the ONLY code that knows Kreloses exists (login, locations;
-                  __fixtures__/ synthetic responses, testing/ the fake Kreloses)
+                  filter-bar/, data-table/ (THE table + CSV export), charts/ (chart convention),
+                  empty-state, ui/ (shadcn)
+  kreloses/       Kreloses Reader — the ONLY code that knows Kreloses exists (login, locations,
+                  sale list, invoice pages, staff; __fixtures__/ synthetic responses, testing/ the fake)
   connections/    Kreloses connections: encrypted credentials, login test, store
-  sync/           Sync Engine: Sale List → invoices/branches/customers, sync_runs log, lease
-  attribution/    Attribution & Rules — pure functions (later)
-  analytics/      Analytics Service — the single source of every metric (Overview KPIs, freshness)
+  sync/           Sync Engine: Sale List → invoices/branches/customers, line items → credited
+                  lines, sync_runs log, lease
+  attribution/    Attribution & Rules — PURE functions: crediting lines, staff-name matching
+  staff/          Staff directory + staff names on lines (aliases): matching, remap, kinds
+  analytics/      Analytics Service — the single source of every metric (Overview KPIs, doctor
+                  ranking, freshness)
   lib/            money (exact RM strings ↔ integer sen, display), format (display only)
   mcp/            Read-only MCP server (later)
   proxy.ts        Next.js proxy: session refresh + global auth gate
@@ -265,15 +269,19 @@ after its own request). The owner is
 `run.ownerEmail` (seeded by the app from `OWNER_EMAIL`), a manager `run.managerEmail`; use
 `withRunDatabase(sql => …)` to put data into the run's database. Nav-driven tests read
 `NAV_ITEMS`, so new pages are covered automatically; extend the suite for your ticket's flow.
+`addConnection(page, …)` / `syncMonth(card, "September 2026")` (`e2e/support/connections.ts`) add a
+connection and run "Sync now" (it reads line items too: allow ~15 s per synthetic month);
+`clearSyncedData()` (`e2e/support/db.ts`) empties every synced table — call it before and after a
+spec that syncs.
 
 The app under test talks to a **fake Kreloses** (`e2e/support/fake-kreloses-server.ts`, the same
 fake the unit tests use, on its own port) via `KRELOSES_BASE_URL_WWW/SEA`, with a throwaway
 `CREDENTIALS_ENCRYPTION_KEY` per run. Its synthetic logins are `SYNTHETIC_ACCOUNTS` in
 `src/kreloses/testing/fake-kreloses.ts` (`north`, `south`, `both`, `oneTimeCode`, `down`, …). A
 spec that creates connections must leave the table empty (the shell spec expects empty states); a
-spec that syncs must also empty `invoices`, `customers`, `sync_runs` and `branches` (children first;
-see `clearSales()` in `e2e/sync.spec.ts`). The fake serves the synthetic Sale List
-(`sale-list-rows.json`: Aug–Sep 2026 and Sep–Oct 2025), so a spec can "Sync now" September 2026.
+spec that syncs must also empty the synced tables (`clearSyncedData()`). The fake serves the
+synthetic Sale List (`sale-list-rows.json`: Aug–Sep 2026 and Sep–Oct 2025) and every sale's
+invoice page (`sale-overviews.json`), so a spec can "Sync now" September 2026 and get doctors.
 
 ### Kreloses Reader (`src/kreloses/`)
 
@@ -286,6 +294,10 @@ fetchFilterTemplate(session, report: number): Promise<unknown>     // raw filter
 listInvoices(session, { page, dateRange?, includeCancelled, pageSize?, previous? }): Promise<InvoicePage>
   // POST /Sale/Get, one page: { invoices: KrelosesInvoice[], totalCount, page, rowCount, hasMore, span }
   // pass the previous page back as `previous` for every page after the first
+getInvoice(session, saleId): Promise<KrelosesInvoiceDetail>       // GET /Sale/Overview/{id} (#5)
+  // { header: { saleId, grossSen, discountsSen, netSen, taxSen, totalSen, totalPaymentsSen, totalRefundsSen } (null = not on the page),
+  //   lines: KrelosesInvoiceLine[], raw: { Sale, Totals, Transactions, RefundInfo, CreditNoteInfo } }
+listStaff(session): Promise<{ id: string; name: string }[]>       // the Sale List filter's Staff options (#5)
 readerOptionsFromEnv(process.env): ReaderOptions                   // real Kreloses, or the e2e fake outside production/Vercel
 session.postJson(path, body): Promise<unknown>                     // AJAX POST to a sea endpoint (#4: /Sale/Get)
 session.getHtml(path): Promise<string>                             // page load of a sea page (#5: /Sale/Overview/{id})
@@ -327,7 +339,11 @@ session.getHtml(path): Promise<string>                             // page load 
   / `session.getHtml`. Use `fake.intercept(request => Response | undefined)` for one-off failures
   and `fake.expireSessions()` for expiry. The Sale List route filters/sorts/pages `fake.saleRows`
   (mutable: cancel a sale, change a refund, then sync again); `createFakeKreloses({saleList:
-  {ignoreDateFilter: true}})` simulates a server that ignores the date filter.
+  {ignoreDateFilter: true}})` simulates a server that ignores the date filter. `GET
+  /Sale/Overview/{id}` renders `fake.saleOverviews[id]` (mutable models from
+  `sale-overviews.json`: edit a sale's `Items`, then sync again; a sale without a model is a 404).
+  To give a new synthetic sale line items, add its model there (keep its `Totals` equal to its
+  Sale List row) and document the hand-computed figures in the test that uses it.
 - **`listInvoices`** (`src/kreloses/sale-list.ts`): passes the Sale List filter template (fetched
   once per session, shared with `listLocations`) back as `filter` with every Sale status selected
   when `includeCancelled` (the default selects only Active), every location, and the date range in
@@ -344,7 +360,30 @@ session.getHtml(path): Promise<string>                             // page load 
   older than `dateRange.from` — but only while every page seen so far is newest first (otherwise
   it pages on to TotalCount). Paging that does not add up raises `LayoutChanged` instead of losing
   sales: a page shorter than asked while TotalCount says more (a capped page size), more rows than
-  asked, or a page repeating the previous one's first/last sale (RequestingPage ignored).
+  asked, more rows read so far than TotalCount, or a page repeating the previous one's first/last
+  sale (RequestingPage ignored).
+- **`getInvoice`** (`src/kreloses/sale-overview.ts`): the invoice page embeds `var model = {…};`.
+  The Reader scans the page (never rewriting it): only an assignment inside a `<script>` counts,
+  not one in HTML text, an HTML comment, a JS string or a JS comment; it reads the object to its
+  matching brace (braces inside strings ignored), `JSON.parse`s it (two models that parse →
+  `LayoutChanged`) and checks what it relies on: `Items[]` with
+  `Name`, `Quantity`, `UnitPrice`, `Amount`, `StaffName`, `ItemType` (1 product, 4 service,
+  **55 discount line**; other values kept as sent), `DiscountName`, `DiscountAmount`; `Sale.SaleId`
+  (if present) must be the sale asked for; `Totals` amounts (if present) must be readable. Money →
+  integer sen (same formats as the Sale List); quantities → exact decimal strings (`"2.5"`, `"-1"`;
+  up to 4 places, stored `numeric(12,4)`); a blank `StaffName` → null ("No staff on line"). Only a
+  discount line may lack Quantity/UnitPrice/Amount. No model, JSON that does not parse, a missing
+  item field or an unreadable number → `LayoutChanged` naming the item and field (never a value).
+  `Customer` is never returned. A page that is not there — HTTP 404/410 or a redirect anywhere but
+  the login page (`session.getHtml`) — raises **`PageMissing`**, a subclass of `LayoutChanged`
+  (`reason` `not_found` | `redirected`, `status`), so the Sync Engine can skip one missing invoice
+  while treating a changed page as fatal. UNVERIFIED until the live check: `Totals` key names, that `Amount`
+  is after the item discount, the discount line's sign, and how refunds show in
+  `RefundInfo`/`CreditNoteInfo` (kept raw in `invoices.raw_detail` for #6).
+- **`listStaff`** (`src/kreloses/staff.ts`): full staff names from the Sale List filter template's
+  Staff filter (shared with `listLocations`); no Staff filter → `LayoutChanged` (the Sync Engine
+  records it as a warning and carries on); an empty one (e.g. loaded on demand) → `[]` (names on
+  lines then stay unmatched, still credited).
 
 #### Live login check (real Kreloses)
 
@@ -354,8 +393,10 @@ segments other than generic route words shown as `<segment>`, numbers as `<numbe
 any `X-Responded-JSON` status, cookie names with their Domain/Path/expiry/flags (never values),
 whether a one-time-code step appeared, which host the session works on, the number of visible
 locations (not their names) and the shape (keys/types) of the GetFilter JSON (objects whose keys
-could be data — non-identifier keys, more than 20 keys, or values that all share one shape, e.g.
-`{Staff: {Ong: 1}}` — are shown only as `{<n keys>: …}`). It then reads ONE Sale List page (previous
+could be data — non-identifier keys, more than 20 keys, a single-word key that is not a known field
+name (`{Ong: "a", Tan: 2}`), or values that all share one shape (a null matching anything, at any
+depth) unless every key is made of known field words (`NetAmount`) — are shown only as
+`{<n keys>: …}`; see `describeJsonShape` in `src/kreloses/json.ts`). It then reads ONE Sale List page (previous
 month up to today, all statuses) and prints only its structure: the filter template's status
 options, selection mechanism and date pattern, the response shape, TotalCount, which expected fields
 are present/missing (and other field names), `SaleDate` patterns (digits as `9`), how many sales
@@ -363,8 +404,17 @@ fall in each 3-hour slot of the KL day as the Reader reads them (clinic hours sh
 mean `/Date()/` holds KL time sent as UTC), whether rows come newest first, how many rows fall
 outside the requested range, how amounts are
 formatted (separators / parentheses / minus / currency: yes or no), the status labels seen, whether
-cancelled sales appear, and whether the Reader parses the page — never a name, amount, number or
-id. It is skipped unless credentials are set, needs no database, and is never part of `npm test`. Run it from a terminal without saving the password in
+cancelled sales appear, and whether the Reader parses the page. Then it counts the staff in the
+Sale List filter and opens up to THREE invoice pages of that Sale List page (the first active sale,
+the first with a discount, the first with a refund or a negative net) and prints their structure in
+aggregate: the first page's model keys and types, whether every page has the same top-level keys,
+the item fields present/missing/other, how many lines have each ItemType, number formats, how many
+lines name a staff member, and counts for the Reader's assumptions (Amount = Quantity × UnitPrice −
+DiscountAmount, the discount lines' sign, pages whose lines add up to `Totals.NetAmount` and to the
+Sale List's NetAmount — the gap monitor —, `Totals.NetAmount` = the Sale List's NetAmount,
+`Sale.SaleId` = the sale asked for), the shapes of `RefundInfo` / `CreditNoteInfo`, and whether the
+Reader parses each page — never a name, amount, quantity, number or id (sale ids become `<sale>`,
+even in error messages). It is skipped unless credentials are set, needs no database, and is never part of `npm test`. Run it from a terminal without saving the password in
 your shell history:
 
 ```bash
@@ -404,7 +454,7 @@ table: label, Kreloses email, password as an AES-256-GCM envelope
 - `recordLoginOutcome(sql, id, {ok, visibleLocations} | {ok: false, error})` stores what a sync's
   login showed exactly as a login test would, so a failing login shows on the Connections page.
 
-### Sales data (`invoices`, `branches`, `customers`, `sync_runs`)
+### Sales data (`invoices`, `branches`, `customers`, `sync_runs`, line items, staff)
 
 Migration `…_sales_sync.sql`. Kreloses ids (location, customer, sale) are assumed unique across
 every Kreloses login, so two connections that see the same branch update the same rows. Deleting a
@@ -422,15 +472,97 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   (`numeric(12,2)`, Kreloses's sign), `raw_header` (jsonb), `sync_run_id`, `fetched_at` (when the
   header was last written, i.e. first read or changed — an identical re-read leaves the row alone),
   `detail_fetched_at` (#5: line items need a (re)fetch when null or `< fetched_at`). `raw_header`
-  is refreshed on its own when only unparsed fields change (no new `fetched_at`).
+  is refreshed on its own when only unparsed fields change (no new `fetched_at`). #5 added
+  `raw_detail` (the invoice page's `Sale`/`Totals`/`Transactions`/`RefundInfo`/`CreditNoteInfo`),
+  `header_version` (+1 whenever a parsed header column changes), `lines_header_version` (the
+  version the stored lines were computed for), `lines_current` (**generated**: the two are equal —
+  THE definition of "its line items belong to the header as it is now"), `revenue_base`
+  (**generated**: what its credited lines add up to; twin of `invoiceRevenueBaseSen`) and
+  `line_gap_amount` (net − Σ all line amounts when last read; the gap monitor).
+- `invoice_lines` (migration `…_line_items_and_doctor_credit.sql`) — the invoice page's `Items[]`
+  as read: `invoice_id`, `line_no` (1-based; unique per invoice), `item_name`, `item_type` (55 =
+  discount line), `quantity` `numeric(12,4)`, `unit_price`, `amount` (the charged amount, after any
+  item discount), `raw_staff_name` (null = no staff), `discount_name`, `discount_amount`. Upserted
+  by (invoice, line_no), so ids survive a re-read.
+- `credited_lines` — see [Credited lines](#credited-lines-the-revenue-model).
+- `staff` — `full_name`, `name_key` (how the matcher reads it), `kind` (`doctor` | `other` |
+  `generic`), `kind_source` (`auto` | `manual`: the owner's choice is never overwritten), `source`
+  (`kreloses` from a staff list | `alias_only`: a line name matching nobody, e.g. a deleted doctor),
+  `kreloses_staff_id`, `active` (false once the connection that listed them stops listing them),
+  `connection_id`. Never deleted.
+- `staff_aliases` — every distinct staff name seen on lines: `raw_name`, `normalised_name`
+  (unique: trimmed, spaces collapsed, lower case), `staff_id` (always set), `match` (`auto` |
+  `manual` | `unmatched`). A name is matched when first seen; once it has credited lines a sync
+  never moves it (unmatched names get suggestions, `listStaffAliases`). Kinds follow
+  `defaultStaffKind(fullName, lineNames)` until the owner sets one (generic only from the full name).
+- `sync_runs.warnings` — `[{code, message}]` (see Sync Engine).
 - `sync_runs` — `connection_id`, `connection_label`, `mode` (`nightly` | `backfill` | `manual`),
   `status` (`running` | `succeeded` | `partial` | `failed`), `date_from` / `date_to`, `started_at`,
   `finished_at`, `counts` (`{pages, invoicesSeen, inserted, updated, unchanged}`), `checkpoint`
   (`{nextPage, pageSize}` — saved with every page, kept on partial/failed), `covered_location_ids`
-  (set on success; drives "data as of"), `error_code` (`auth_failed` | `layout_changed` |
+  (set when the run read its whole listing — succeeded, or partial only for missing invoice pages; drives "data as of"), `error_code` (`auth_failed` | `layout_changed` |
   `rate_limited` | `transient` | `key_problem` | `interrupted` | `internal`) + `error` (shown to users).
   At most one `running` run per connection (unique partial index).
 - `connection_locks` — the per-connection lease (above).
+
+### Credited lines: the revenue model
+
+Every revenue figure is a sum of **credited lines** (spec: Attribution & Rules; ADRs 0005, 0006):
+
+- **The rule** (`creditInvoice`, `src/attribution/credit.ts`, PURE, unit-tested edge by edge): each
+  non-discount line starts from its own `Amount` (what it charged, after any item-level discount).
+  The invoice's discount lines (ItemType 55) and any gap between the lines and the revenue base are
+  spread over the non-discount lines **in proportion to what each line charged** (lines that
+  charged ≤ 0 take no share while any line charged more; if none did, by |quantity × unit price|;
+  if that is zero too, equally), in whole sen by largest remainder, ties to the lower line_no. An
+  invoice with no non-discount line gets one "unitemised remainder" row (`invoice_line_id` null, no
+  staff). **An invoice's credited lines add up exactly to its revenue base.**
+- **The revenue base** is defined twice, kept equal by a test (`src/sync/lines.test.ts`) and a
+  runtime check in `saveInvoiceLines`: `invoiceRevenueBaseSen()` in TypeScript (what credited lines
+  add up to) and the generated `invoices.revenue_base` in SQL (what pending rows and reconciliations
+  use) — today `net_amount` if active, 0 if cancelled; refunds recorded, not subtracted. Change both
+  together (one migration + one function).
+- **Stored per invoice read** (`saveInvoiceLines`, `src/sync/lines.ts`, one transaction): the
+  lines, the credited lines (`gross_amount`, `line_amount`, `spread_amount`, `credited_amount =
+  line_amount + spread_amount`, `staff_alias_id` — null = "No staff on line"), and on the invoice
+  `lines_header_version` (the `header_version` the lines were computed for), `detail_fetched_at`,
+  `raw_detail` and `line_gap_amount` (net − Σ all line amounts: the gap monitor; ≠ 0 is counted on
+  the run as `lineItemGaps`). If the header changed while its page was being read, nothing is
+  written and the invoice stays pending.
+- **Current or pending**: `invoices.lines_current` (generated) = `lines_header_version =
+  header_version`. The sync bumps `header_version` whenever a parsed header column changes, so lines
+  are compared with the header they were computed for — by version, never by clock.
+- **Who and what kind are resolved at query time**: `credited_lines.staff_alias_id →
+  staff_aliases.staff_id → staff.kind`. A remap (Settings → Doctors) or a kind change changes every
+  figure at once, with no re-sync and nothing re-derived (the amounts do not depend on the staff).
+- **Query them only through `revenueFacts`** (`src/analytics/facts.ts`), which adds the invoice's
+  `sale_date`/`branch_id`/`customer_id`, the resolved `staff_id` and `credit_group` (`doctor` |
+  `other` | `generic` | `no_staff` | `pending`), applies the branch and doctor filters, keeps only
+  active invoices whose `lines_current` is true, and adds ONE `pending` row (its `revenue_base`) per
+  active invoice whose lines are missing or stale — so revenue never drops between a header sync
+  and its line sync. Reconciliation (tested per branch and month): Σ credited = Σ `revenue_base`.
+
+**#9 (item groups / mix)**: keep the item → group rules in their own table(s) and resolve them at
+query time, exactly like staff: add a pure matcher in `src/attribution/` (item name/type →
+`{group, surgery, consult, vaccine, dental}`), store the owner's rules (e.g. `item_groups` +
+per-name overrides), and add `mix_group` and the four flags as columns of `revenueFacts` by joining
+`invoice_lines` (`item_name`, `item_type`) on `invoice_line_id`. Do not copy groups onto
+`credited_lines` (a rule change must change history at once, spec story 26). Pending rows have no
+item (group "Line items not synced yet"); the unitemised remainder has none either.
+
+**#6 (nightly / change detection / refunds)**: which invoices get their lines (re)read is decided
+in ONE place, `invoicesNeedingLines()` (`src/sync/lines.ts`: active and `not lines_current`, i.e.
+never read, or the header version moved). To re-read only on line-relevant header changes, bump
+`header_version` in `saveInvoicePage` (`src/sync/store.ts`) only for those columns. Refund handling
+changes `invoiceRevenueBaseSen()` AND `invoices.revenue_base` together — once the live check shows
+how Kreloses represents refunds (`total_refunds`, `raw_detail.RefundInfo` / `CreditNoteInfo`).
+Existing credited lines then need re-deriving: bump `header_version` for the affected invoices (they
+turn pending and the next sync re-reads them), or add a re-credit step that recomputes
+`credited_lines` from stored `invoice_lines`.
+
+**#12 (discounts)**: per line, discount = `gross_amount − credited_amount` (independent of the spread
+rule); discount types and amounts come from `invoice_lines` with `item_type = 55` and
+`discount_name` / `discount_amount` on item lines.
 
 ### Sync Engine (`src/sync/`)
 
@@ -447,7 +579,28 @@ listSyncRuns(sql, { limit? }): Promise<SyncRun[]>   // newest first, for the Syn
 A run takes the connection's lease (else `busy`, no run row), marks the connection's stale
 `running` runs `interrupted` (and runs of deleted connections left `running` for over an hour),
 logs in, stores the visible branches (and the connection's login
-status), then reads Sale List pages serially (the Reader's polite delay). Each page is upserted
+status) and the staff list (`upsertStaffDirectory`, `src/staff/store.ts`: new staff, renamed staff,
+inactive ones; unmatched line names are matched again), then reads Sale List pages serially (the
+Reader's polite delay). After each page it opens the invoice page of each of the page's invoices
+in `invoicesNeedingLines()` and stores lines + aliases + credited lines per invoice in one
+transaction (`saveInvoiceLines`), checking the time budget before each; the page stays the
+checkpoint until its line items are done (so carrying on re-reads that page, a no-op for headers,
+then the missing line items). `counts.lineItemsRead` counts invoice pages read.
+
+- **A missing invoice page** (the Reader's `PageMissing`: HTTP 404/410, or a redirect anywhere but the
+  login page) is skipped: `counts.lineItemsFailed` +1, the invoice stays pending at its revenue base
+  and the next run tries it again. A run that read its whole listing but skipped pages ends
+  **`partial`** with `coveredLocationIds` set (so it counts for "data as of"), `checkpoint`
+  `{nextPage: 1}` (Sync now starts over) and an `invoice_pages_missing` warning; `SyncResult` says
+  `stoppedAtTimeLimit: false`. If the first `MISSING_PAGES_TO_FAIL` (3) pages a run tries are all
+  missing, it fails (`layout_changed`: something systematic). A page whose content changed
+  (`LayoutChanged` proper) still fails the run at once.
+- **Warnings** (`sync_runs.warnings`, `SyncResult.warnings`, `SyncWarning` in `src/sync/runs.ts`):
+  `invoice_pages_missing`, `staff_list_unreadable` (no readable Staff filter in report 14: the run
+  carries on, names stay unmatched, nobody is marked inactive). Sync status and the "Sync now"
+  message show them.
+- **Counts** (`SyncCounts`): `pages, invoicesSeen, inserted, updated, unchanged, lineItemsRead,
+  lineItemsFailed, lineItemGaps`. Older rows lack the new keys; `listSyncRuns` fills them with 0. Each page is upserted
 **idempotently** (`on conflict … do update … where (…) is distinct from (…)`: a re-run writes
 nothing and counts `unchanged`; a change only in fields the app does not parse refreshes
 `raw_header` without counting as a change or moving `fetched_at`) together with the run's counts
@@ -462,14 +615,13 @@ with a `sync_runs` row, failures included (`describeSyncFailure` words the error
 with `resume: true`, so syncing a month that stopped at the time limit again carries on from its
 checkpoint.
 
-**Extension points.** #5 (line items): after `saveInvoicePage` in `execute()` (`engine.ts`), fetch
-`getInvoice` for the page's invoices with `detail_fetched_at is null or detail_fetched_at <
-fetched_at`, store lines + credited lines, set `detail_fetched_at`; add `getInvoice` to `SyncReader`.
-#6 (nightly/cron/resume): call `runSync(…, "nightly", { dateRange, startPage: checkpoint.nextPage })`
+**Extension points.** #5 (line items) is in place (above; `SyncReader` has `listLocations`,
+`listStaff`, `listInvoices`, `getInvoice`). #6 (nightly/cron/resume): call `runSync(…, "nightly", { dateRange, startPage: checkpoint.nextPage })`
 from a cron route (under `PUBLIC_PATHS`, secret-authenticated); the lease already stops overlapping
 runs. #8 (backfill): `mode: "backfill"` over bounded date ranges; `partial` + checkpoint says where
 the chunk stopped. Tests: `createSyncHarness(sql)` / `clearSyncTables(sql)` in
-`src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps).
+`src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps; `h.fake.saleOverviews`
+edits line items; `clearSyncTables` empties staff too).
 
 ### Analytics Service (`src/analytics/`)
 
@@ -483,15 +635,34 @@ getOverviewKpis(sql, filter): Promise<OverviewKpis>
   // KpiSet = { revenue: Kpi<Money>, invoices: Kpi<number>, customers: Kpi<number>, aovPerCustomer: Kpi<Money | null> }
   // Kpi<T> = { value, previousPeriod: { base, change, changePercent }, lastYear: { … } }  (changePercent null when base is 0)
 getDataFreshness(sql, { dateFrom?, dateTo?, branchIds? }?): Promise<{ branchId, branchName, dataAsOf: Date | null }[]>
-  // latest succeeded run covering the branch whose dates include least(dateTo, the day it started);
+  // latest run that read the branch's whole listing (succeeded, or partial only for missing invoice
+  // pages) whose dates include least(dateTo, the day it started);
   // no dateTo = "now" (runs that read the day they ran). An old month never makes today look fresh.
+getDoctorRanking(sql, filter, { splitByBranch? }?): Promise<DoctorRanking>
+  // { period, totalRevenue (all revenue in the dates + branches: the share denominator; the doctor filter does not apply),
+  //   doctors: DoctorRow[] (kind doctor, by revenue desc then name; `branches` per branch when splitByBranch),
+  //   groups: { other: StaffGroup, generic: StaffGroup, noStaff: StaffFigures, pending: StaffFigures } }
+  // StaffFigures = { revenue: Money, invoices, customers, aovPerCustomer: Money | null, itemsPerInvoice: number | null, sharePercent: number | null }
+  // DoctorRow/StaffRow = StaffFigures & { staffId, name, source: "kreloses" | "alias_only", active }; StaffGroup = StaffFigures & { members: StaffRow[] }
+listDoctors(sql): Promise<{ id, name }[]>          // kind doctor with a name on lines; the filter bar's doctor options
+getPendingLineItems(sql, { dateFrom, dateTo, branchIds? }): Promise<{ invoices, revenue: Money }>
+  // sales whose line items are not synced yet (doctor filter ignored on purpose): pages show
+  // <PendingLineItemsNote> (src/components/pending-line-items-note.tsx) under a doctor filter
+getStaffAliasRevenue(sql, { dateFrom, dateTo, branchIds? }): Promise<Record<aliasId, Money>>   // Settings → Doctors
 METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); #17's MCP answers quote them
 ```
 
-What counts as revenue is decided in ONE place: `revenueFacts(sql, scope)` in `facts.ts` (rows of
-`sale_date, branch_id, customer_id, invoice_id, revenue`; today active invoices' `net_amount`). #5
-switches its body to credited lines (adding a doctor column and the `doctorIds` filter, which is
-ignored until then); every metric built on those columns keeps working. Comparison periods:
+What counts as revenue — and who it is credited to — is decided in ONE place:
+`revenueFacts(sql, factsScope(filter))` in `facts.ts`: one row per credited line (plus the pending
+rows), columns `sale_date, branch_id, customer_id, invoice_id, revenue, credited_line_id,
+invoice_line_id, staff_alias_id, staff_id, credit_group, gross_amount` (see
+[Credited lines](#credited-lines-the-revenue-model)). Build every new metric on it (`with facts as
+(${revenueFacts(sql, scope)}) …`): `sum(revenue)`, `count(distinct invoice_id)`, `count(distinct
+customer_id)`, `count(invoice_line_id)` (item lines), grouped by `staff_id` / `credit_group` /
+`branch_id` / `sale_date`. With `doctorIds` (staff ids) it keeps only lines credited to them, so
+the Overview's KPIs become "credited to the selected doctors". Doctor metric definitions: AOV per
+customer = the doctor's revenue ÷ distinct customers with ≥ 1 line credited to them (per branch when
+split); items per invoice = their item lines ÷ their invoices; share = revenue ÷ `totalRevenue`. Comparison periods:
 `comparisonPeriods()` (previous = same length immediately before; last year = same dates, 29 Feb →
 28 Feb). The Seam 1 test (`overview.test.ts`) documents the hand-computed fixture totals.
 
@@ -516,8 +687,8 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   `resolveDatePreset(preset, now)`, `clinicToday(now)`, `formatDateRange(from, to)`.
 - Selector options come from `getFilterOptions()` in `@/filters/options` (server only):
   `listBranchOptions()` lists the synced `branches` (id = `branches.id`), empty before the first sync;
-  `listDoctorOptions()` returns `undefined`, which hides the doctor selector — return a list (#5)
-  and the selector appears (the slot is already in `filter-bar-controls.tsx`).
+  `listDoctorOptions()` lists the doctors (`listDoctors`, Analytics Service; id = `staff.id`, what
+  `GlobalFilter.doctorIds` holds), empty before the first sync with line items.
 
 ### Pages and navigation
 
@@ -551,8 +722,59 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   `<NoSalesYet>` while nothing has been synced (`getDataFreshness(sql)` is empty).
 - Mobile first (the owner checks numbers on a phone): the shell switches to a top bar + slide-in
   menu below `md`, and the e2e suite asserts no horizontal scrolling at phone width.
+- Doctors (`/doctors`, #5): the ranking (`?split=branch` for the per-branch view — a page-specific
+  param the filter bar keeps), a bar chart of revenue by doctor, the "not in the ranking" groups, and
+  each doctor linked to `/doctors/<staff id>` (a placeholder with the filter bar; #10 builds it).
+  Settings → Doctors (`/settings/doctors`, owner only): every name on lines with its match and
+  revenue for the URL's period, a form to credit it to another staff member, and each staff
+  member's kind; changes revalidate the whole dashboard.
 - UI components: shadcn/ui (`npx shadcn@latest add <component>` → `src/components/ui/`), Tailwind
   utilities, `cn()` from `@/lib/utils`, icons from `lucide-react`.
+
+### Tables and CSV export (`src/components/data-table/`)
+
+Every analytics table is a `<DataTable>` (spec story 55, "export any table to CSV"):
+
+```tsx
+const columns: DataTableColumn<Row>[] = [
+  { key: "doctor", header: "Doctor", kind: "text", value: (row) => row.name, cell: (row) => <Link …>{row.name}</Link> },
+  { key: "revenue", header: "Revenue", kind: "money", value: (row) => row.revenue },     // Money string
+  { key: "share", header: "Share of revenue", kind: "percent", value: (row) => row.sharePercent },
+  { key: "customers", header: "Customers", kind: "count", value: (row) => row.customers, priority: "secondary" },
+];
+<DataTable caption="Doctor ranking" columns={columns} rows={rows} rowKey={(row) => row.id}
+  export={{ name: "doctors", filter }} testId="doctor-ranking" />
+```
+
+- `kind` decides display AND export: `money` (a `Money` string) shows `RM 1,234.50` and exports
+  `1234.50` (header gets ` (RM)`); `count` `1,234` / `1234`; `decimal` `1.50`; `percent` `57.2%` /
+  `57.2` (header ` (%)`); `text` as is (CSV defuses `= + - @` formulas). `null` shows `—`, exports empty.
+- The CSV is built on the server from the same `columns` and `rows` (`toCsv`: RFC 4180, CRLF,
+  UTF-8 BOM for Excel) and downloaded in the browser; the file is `<name>_<from>_to_<to>.csv`
+  (`csvFileName`). `cell` only changes the display; the CSV always exports `value`.
+- Server-renderable (pass column functions from a Server Component). Rows come from the Analytics
+  Service already computed. The first column is the row header and stays put when the table
+  scrolls sideways on a phone; `priority: "secondary"` hides a column below `sm` (the CSV keeps it).
+- e2e: rows are `data-testid="data-table-row"`, cells `[data-column="<key>"]`, the button "Export CSV".
+
+### Charts (`src/components/charts/`)
+
+- Recharts through shadcn's chart component (`src/components/ui/chart.tsx`, `ChartContainer`).
+  Charts are client components that receive plain, already-computed data; a chart is a picture of
+  a table that is also on the page (the accessible and exportable view), so give the chart an
+  `aria-label` summary and keep the numbers in a `<DataTable>`.
+- Colours: `--chart-1` … `--chart-8` in `globals.css` (light and `.dark`), a categorical palette
+  validated for colour-blind separation in that order; `seriesColor(slot)` returns `var(--chart-N)`.
+  Assign slots in fixed order by a stable key (`stableSeriesSlots(ids)`), never by rank, so a filter
+  never repaints the survivors — pass it the FULL key set (e.g. every doctor from `listDoctors`),
+  not the rows a filter left; more than 8 series fold into "Other". One series = slot 1, no legend.
+  Text (labels, values) uses text colours, never the series colour.
+- Marks: bars ≤ 24px with a 4px rounded data end, 2px lines, recessive grid, the exact value
+  (pre-formatted `formatRinggit`) at the bar tip / line end, a hover tooltip. Pass numbers for
+  geometry only (`Number(money)`); what people read is always the exact formatted string. No
+  dual axes. Height follows the rows; width the container (phone-friendly).
+- `<HorizontalBarChart data={[{ id, label, value, valueLabel }]} title valueName />` is the ranked
+  single-series bar chart (Doctors page). Add new chart kinds next to it following the same rules.
 
 ## Production (not deployed yet)
 

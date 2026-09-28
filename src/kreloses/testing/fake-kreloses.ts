@@ -21,11 +21,13 @@ import { SYNTHETIC_ACCOUNTS, type FakeAccount } from "./synthetic-accounts";
  * ASP.NET Identity's HTTP 200 + `X-Responded-JSON` 401.
  *
  * It also serves the Sale List (`POST /Sale/Get`, #4) from `__fixtures__/sale-list-rows.json`
- * (filtered, newest first, paged; `saleRows` is mutable).
+ * (filtered, newest first, paged; `saleRows` is mutable) and each sale's Sale Overview page
+ * (`GET /Sale/Overview/{SaleId}`, #5): the sale's model from `__fixtures__/sale-overviews.json`
+ * rendered into `sale-overview-page.html` as `var model = {…};` (`saleOverviews` is mutable).
  *
- * Extending it (ticket #5): add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in a
- * test), backed by fixture files; sea routes get the login check for free. Use `intercept()` in
- * a test to inject one-off responses (errors, odd shapes) and `expireSessions()` for expiry.
+ * Extending it: add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in a test), backed
+ * by fixture files; sea routes get the login check for free. Use `intercept()` in a test to inject
+ * one-off responses (errors, odd shapes) and `expireSessions()` for expiry.
  */
 
 export const FIXTURES_DIR = fileURLToPath(new URL("../__fixtures__/", import.meta.url));
@@ -81,6 +83,8 @@ export interface FakeKrelosesOptions {
     /** List the oldest sale first instead of the newest. */
     oldestFirst?: boolean;
   };
+  /** The Sale Overview models by sale id (default: `__fixtures__/sale-overviews.json`). */
+  saleOverviews?: Record<string, SaleOverviewModel>;
 }
 
 /** One raw Sale List row, as `/Sale/Get` returns it (see `__fixtures__/sale-list-rows.json`). */
@@ -89,6 +93,22 @@ export type SaleListRow = Record<string, unknown>;
 /** The synthetic Sale List rows in `__fixtures__/sale-list-rows.json` (a fresh copy each call). */
 export function readSaleListRows(): SaleListRow[] {
   return (JSON.parse(readFixture("sale-list-rows.json")) as { rows: SaleListRow[] }).rows;
+}
+
+/** One Sale Overview page model (`var model = {…}`), as in `__fixtures__/sale-overviews.json`. */
+export type SaleOverviewModel = Record<string, unknown>;
+
+/** The synthetic Sale Overview models by sale id (`__fixtures__/sale-overviews.json`; a fresh copy each call). */
+export function readSaleOverviewModels(): Record<string, SaleOverviewModel> {
+  return (JSON.parse(readFixture("sale-overviews.json")) as { models: Record<string, SaleOverviewModel> }).models;
+}
+
+/**
+ * A model as ASP.NET MVC writes it into a page (`Html.Raw(Json.Encode(Model))`): JSON with `<`, `>`
+ * and `&` escaped, so a name containing `</script>` cannot end the script early.
+ */
+export function encodePageModel(model: unknown): string {
+  return JSON.stringify(model).replace(/[<>&]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 export interface FakeKreloses {
@@ -106,6 +126,12 @@ export interface FakeKreloses {
    * and the next `/Sale/Get` sees it.
    */
   saleRows: SaleListRow[];
+  /**
+   * The Sale Overview models this fake serves, by sale id. Mutable: edit a sale's `Items` (or add
+   * a model for a new sale) and the next `GET /Sale/Overview/{id}` sees it. A sale without a model
+   * answers HTTP 404.
+   */
+  saleOverviews: Record<string, SaleOverviewModel>;
 }
 
 /** The anti-forgery pair in the fixtures (the form value is HTML-encoded there: `&#x2B;` is `+`). */
@@ -123,6 +149,7 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
   const addedRoutes: FakeRoute[] = [];
   const sessions = new Map<string, FakeAccount>();
   const saleRows: SaleListRow[] = options.saleList?.rows ?? readSaleListRows();
+  const saleOverviews: Record<string, SaleOverviewModel> = options.saleOverviews ?? readSaleOverviewModels();
 
   function postLogin({ request, fixture }: FakeRouteContext): Response {
     const form = new URLSearchParams(request.body ?? "");
@@ -232,6 +259,19 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
     );
   }
 
+  /** `GET /Sale/Overview/{SaleId}`: the sale's page, its model embedded as `var model = {…};`. */
+  function saleOverview({ request, fixture }: FakeRouteContext): Response {
+    const saleId = decodeURIComponent(SALE_OVERVIEW_PATH.exec(request.url.pathname)?.[1] ?? "");
+    const model = Object.hasOwn(saleOverviews, saleId) ? saleOverviews[saleId] : undefined;
+    if (!model) {
+      return new Response("<html><body><h1>404 - Sale not found</h1></body></html>", {
+        status: 404,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+    return fixture("get-sale-overview", { MODEL: encodePageModel(model) });
+  }
+
   const BUILT_IN_ROUTES: FakeRoute[] = [
     {
       host: "www",
@@ -245,6 +285,7 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
     { host: "sea", method: "GET", path: "/home/index", handler: ({ fixture }) => fixture("get-sea-home") },
     { host: "sea", method: "POST", path: "/report/getfilter", handler: getFilter },
     { host: "sea", method: "POST", path: "/sale/get", handler: saleGet },
+    { host: "sea", method: "GET", path: SALE_OVERVIEW_PATH, handler: saleOverview },
   ];
 
   function matches(route: FakeRoute, request: RecordedRequest): boolean {
@@ -299,8 +340,11 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
     addRoute: (added) => void addedRoutes.push(added),
     expireSessions: () => sessions.clear(),
     saleRows,
+    saleOverviews,
   };
 }
+
+const SALE_OVERVIEW_PATH = /^\/sale\/overview\/([^/]+)\/?$/i;
 
 interface FakeFilter {
   Name: string;

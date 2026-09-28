@@ -36,11 +36,41 @@ export interface SyncCounts {
   updated: number;
   /** Stored invoices read again with nothing changed. */
   unchanged: number;
+  /** Invoices whose line items (Sale Overview page) were read: new ones, and ones whose header changed. */
+  lineItemsRead: number;
+  /** Invoice pages that were not there (404 / sent elsewhere): skipped, still "not synced yet", tried again next run. */
+  lineItemsFailed: number;
+  /** Invoices read in this run whose lines do not add up to their net amount (`invoices.line_gap_amount` ≠ 0). */
+  lineItemGaps: number;
 }
 
-export const NO_COUNTS: SyncCounts = { pages: 0, invoicesSeen: 0, inserted: 0, updated: 0, unchanged: 0 };
+export const NO_COUNTS: SyncCounts = {
+  pages: 0,
+  invoicesSeen: 0,
+  inserted: 0,
+  updated: 0,
+  unchanged: 0,
+  lineItemsRead: 0,
+  lineItemsFailed: 0,
+  lineItemGaps: 0,
+};
 
-/** Where a stopped run carries on (#6 resumes from it). */
+/**
+ * Something the owner should know about a run that did not fail (shown on Sync status):
+ * - `invoice_pages_missing` — some invoice pages could not be opened (the run ends `partial`);
+ * - `staff_list_unreadable` — the Sale List filter had no readable Staff list, so new staff names
+ *   could not be matched to full names this time (they are still credited).
+ */
+export interface SyncWarning {
+  code: "invoice_pages_missing" | "staff_list_unreadable";
+  message: string;
+}
+
+/**
+ * Where a stopped run carries on (#6 resumes from it). A page stays the checkpoint until the line
+ * items of its invoices have been read too, so carrying on re-reads that page (a no-op for its
+ * headers) and then reads the line items still missing.
+ */
 export interface SyncCheckpoint {
   /** The next Sale List page to read. */
   nextPage: number;
@@ -60,15 +90,19 @@ export interface SyncRun {
   finishedAt: Date | null;
   counts: SyncCounts;
   checkpoint: SyncCheckpoint | null;
-  /** Kreloses location ids this run read completely (set when it succeeds). */
+  /**
+   * Kreloses location ids whose whole listing this run read (set when it succeeds, or ends
+   * `partial` only because some invoice pages were missing); drives "data as of".
+   */
   coveredLocationIds: string[];
   errorCode: SyncErrorCode | null;
   error: string | null;
+  warnings: SyncWarning[];
 }
 
 const RUN_COLUMNS = `
   id::text as id, connection_id::text as connection_id, connection_label, mode, status, date_from, date_to,
-  started_at, finished_at, counts, checkpoint, covered_location_ids, error_code, error
+  started_at, finished_at, counts, checkpoint, covered_location_ids, error_code, error, warnings
 `;
 
 /** The most recent runs first. */
@@ -146,20 +180,27 @@ export async function recordProgress(sql: Queryable, runId: string, counts: Sync
 export async function finishRun(
   sql: Sql,
   runId: string,
-  outcome:
+  outcome: (
     | { status: "succeeded"; finishedAt: Date; counts: SyncCounts; coveredLocationIds: string[] }
-    | { status: "partial"; finishedAt: Date; counts: SyncCounts; checkpoint: SyncCheckpoint }
-    | { status: "failed"; finishedAt: Date; counts: SyncCounts; checkpoint: SyncCheckpoint | null; errorCode: SyncErrorCode; error: string },
+    /**
+     * Stopped at the time budget (`coveredLocationIds` absent), or read the whole listing but could
+     * not open some invoice pages (`coveredLocationIds` set: it counts for "data as of").
+     */
+    | { status: "partial"; finishedAt: Date; counts: SyncCounts; checkpoint: SyncCheckpoint; coveredLocationIds?: string[] }
+    | { status: "failed"; finishedAt: Date; counts: SyncCounts; checkpoint: SyncCheckpoint | null; errorCode: SyncErrorCode; error: string }
+  ) & { warnings?: SyncWarning[] },
 ): Promise<void> {
+  const covered = outcome.status === "failed" ? [] : (outcome.coveredLocationIds ?? []);
   await sql`
     update sync_runs set
       status = ${outcome.status},
       finished_at = ${outcome.finishedAt},
       counts = ${sql.json({ ...outcome.counts })},
       checkpoint = ${outcome.status === "succeeded" || !outcome.checkpoint ? null : sql.json({ ...outcome.checkpoint })},
-      covered_location_ids = ${outcome.status === "succeeded" ? outcome.coveredLocationIds : []}::text[],
+      covered_location_ids = ${covered}::text[],
       error_code = ${outcome.status === "failed" ? outcome.errorCode : null},
-      error = ${outcome.status === "failed" ? outcome.error : null}
+      error = ${outcome.status === "failed" ? outcome.error : null},
+      warnings = ${sql.json((outcome.warnings ?? []).map((warning) => ({ ...warning })))}
     where id = ${runId}
   `;
 }

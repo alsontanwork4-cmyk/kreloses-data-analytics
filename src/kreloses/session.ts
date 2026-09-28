@@ -1,6 +1,6 @@
 import type { ResolvedReaderOptions } from "./config";
 import { CookieJar, type CookieChange, type CookieSummary } from "./cookie-jar";
-import { AuthFailed, LayoutChanged, RateLimited, Transient } from "./errors";
+import { AuthFailed, LayoutChanged, PageMissing, RateLimited, Transient } from "./errors";
 import { findLoginForm } from "./html";
 
 /**
@@ -132,7 +132,8 @@ export class KrelosesSession {
 
   /**
    * GETs an app page (e.g. `/Sale/Overview/{id}`) as a browser page load and returns its HTML. An
-   * expired session raises `AuthFailed("session_expired")`; a redirect elsewhere or a missing page
+   * expired session raises `AuthFailed("session_expired")`; a missing page (404/410) or a redirect
+   * anywhere but the login page raises `PageMissing` (a `LayoutChanged`); any other non-200 status
    * raises `LayoutChanged`.
    */
   async getHtml(path: string): Promise<string> {
@@ -152,13 +153,17 @@ export class KrelosesSession {
     const where = `${method} ${redactUrl(response.url)}`;
     if (response.status >= 300 && response.status < 400) {
       if (response.location && looksLikeLoginUrl(response.location)) throw new AuthFailed("session_expired");
-      throw new LayoutChanged(
-        `${where} redirected to ${response.location ? redactUrl(response.location) : "nowhere"} instead of answering`,
-      );
+      const message = `${where} redirected to ${response.location ? redactUrl(response.location) : "nowhere"} instead of answering`;
+      // A page load sent elsewhere means that page is not there (e.g. an unknown sale → the list).
+      if (method === "GET") throw new PageMissing(message, { reason: "redirected", status: response.status });
+      throw new LayoutChanged(message);
     }
     if (response.status === 401 || response.status === 403) throw new AuthFailed("session_expired");
     const responded = respondedJsonStatus(response.headers);
     if (responded === 401 || responded === 403) throw new AuthFailed("session_expired");
+    if (method === "GET" && (response.status === 404 || response.status === 410)) {
+      throw new PageMissing(`${where} returned HTTP ${response.status}`, { reason: "not_found", status: response.status });
+    }
     if (response.status !== 200) throw new LayoutChanged(`${where} returned HTTP ${response.status}`);
     const contentType = response.headers.get("content-type") ?? "";
     if (!/json/i.test(contentType) && findLoginForm(response.body)) throw new AuthFailed("session_expired");
