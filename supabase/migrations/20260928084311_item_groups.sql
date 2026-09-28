@@ -129,16 +129,19 @@ revoke all on table public.item_group_rules, public.item_assignments, public.ite
 -- into a wrong group — a wrong group (worse: a wrong "operation") is worse than unmapped. The
 -- cases they are checked against are pinned in src/items/store.test.ts. Priorities:
 --
---   99 leave unmapped: cancellation fees and removals ("Stitching removal", but also "Surgery -
---      Mass removal": the owner assigns those) never become surgery / an operation
+--   99 leave unmapped: cancellation fees; removing stitches / sutures / a drain, cast, bandage,
+--      splint or tick — never surgery / an operation
 --   98 consult: any name with "consult" ("Spay consult", "Vaccination & consultation") and the
 --      TCVM examination — a consult line, never an operation
---   96 specific exceptions to the broad patterns below: post-op visits (follow-up, recheck,
---      review, check-up, wound check) are consults; pre-anaesthetic tests and heartworm tests are
---      diagnostics; heartworm treatment is treatment; a dental scaling under anaesthesia stays
---      dental scaling (Preventive, not a surgery line); anaesthetic drops / creams are medicines;
---      a flea comb and vaccine paperwork are retail; surgical packs / consumables are surgery
---      lines but not an operation
+--   96 specific exceptions to the broad patterns below: post-op visits (surgery follow-up /
+--      recheck / review, post-op check / visit / review, spay or neuter check, wound check,
+--      check-up) are consults; pre-anaesthetic tests and heartworm tests are diagnostics;
+--      heartworm treatment is treatment; a dental scaling under anaesthesia stays dental scaling
+--      (Preventive, not a surgery line); anaesthetic drops / creams are medicines; a flea comb and
+--      vaccine paperwork (card, certificate, book, record) are retail; a surgical pack /
+--      consumables is a surgery line but not an operation. A generic follow-up or recheck ("Follow-up
+--      X-ray", "Recheck blood test") keeps its own group; a generic review stays unmapped (95).
+--   92 operations named by what is removed: mass, tumour, lump, foreign body
 --   91 named operations and the SURGERY service (surgery + operation)
 --   90 sedation / anaesthesia (surgery, not an operation — "Sedation for X-ray" too, per the spec;
 --      #15 counts a case with only such lines as "sedation only")
@@ -150,20 +153,35 @@ select r.match_type, r.pattern, r.priority, r.mix_group, r.is_surgery, r.is_cons
 from (values
   -- Leave unmapped (no group, no flags).
   ('pattern', '%cancel%',             99, 'unmapped',              false, false, false, false, false),
-  ('pattern', '%removal%',            99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%stitch%remov%',       99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%remov%stitch%',       99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%sutur%remov%',        99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%remov%sutur%',        99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%drain%remov%',        99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%cast%remov%',         99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%bandage%remov%',      99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%splint%remov%',       99, 'unmapped',              false, false, false, false, false),
+  ('pattern', '%tick%remov%',         99, 'unmapped',              false, false, false, false, false),
   -- Consult: CONSULTATION services and the TCVM examination.
   ('pattern', '%consult%',            98, 'consult',               false, true,  false, false, false),
   ('pattern', '%tcvm exam%',          98, 'consult',               false, true,  false, false, false),
-  -- Exceptions: post-op / follow-up visits are consults, never an operation.
-  ('pattern', '%follow%up%',          96, 'consult',               false, true,  false, false, false),
-  ('pattern', '%recheck%',            96, 'consult',               false, true,  false, false, false),
-  ('pattern', '%re-check%',           96, 'consult',               false, true,  false, false, false),
-  ('pattern', '%review%',             96, 'consult',               false, true,  false, false, false),
+  -- Exceptions: post-op visits and check-ups are consults, never an operation. (Only post-op / consult
+  -- wording: "Follow-up X-ray" or "Recheck blood test" keep their own group.)
+  ('pattern', '%surg%follow%',        96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%surg%recheck%',       96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%surg%re-check%',      96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%surg%review%',        96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%post%op%check%',      96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%post%op%visit%',      96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%post%op%review%',     96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%spay%check%',         96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%neuter%check%',       96, 'consult',               false, true,  false, false, false),
+  ('pattern', '%wound check%',        96, 'consult',               false, true,  false, false, false),
   ('pattern', '%check-up%',           96, 'consult',               false, true,  false, false, false),
   ('pattern', '%check up%',           96, 'consult',               false, true,  false, false, false),
   ('pattern', '%checkup%',            96, 'consult',               false, true,  false, false, false),
-  ('pattern', '%wound check%',        96, 'consult',               false, true,  false, false, false),
-  ('pattern', '%post%op%check%',      96, 'consult',               false, true,  false, false, false),
+  -- A generic review (e.g. "Medication review") has no safe group: leave it unmapped.
+  ('pattern', '%review%',             95, 'unmapped',              false, false, false, false, false),
   -- Exceptions: tests before an anaesthetic, and heartworm tests, are diagnostics.
   ('pattern', '%pre-anaes%',          96, 'diagnostics',           false, false, false, false, false),
   ('pattern', '%pre-anes%',           96, 'diagnostics',           false, false, false, false, false),
@@ -187,13 +205,27 @@ from (values
   ('pattern', '%anes%gel%',           96, 'medicines_supplements', false, false, false, false, false),
   -- Exceptions: a flea comb and vaccine paperwork are retail, not prevention / a vaccination.
   ('pattern', '%flea comb%',          96, 'retail_other',          false, false, false, false, false),
-  ('pattern', '%vaccin%card%',        96, 'retail_other',          false, false, false, false, false),
-  ('pattern', '%vaccin%cert%',        96, 'retail_other',          false, false, false, false, false),
-  ('pattern', '%vaccin%book%',        96, 'retail_other',          false, false, false, false, false),
-  ('pattern', '%vaccin%record%',      96, 'retail_other',          false, false, false, false, false),
-  -- Exceptions: surgical packs / consumables are related surgical charges, not an operation.
-  ('pattern', 'surg% pack%',          96, 'surgery',               true,  false, false, false, false),
-  ('pattern', 'surg%consumable%',     96, 'surgery',               true,  false, false, false, false),
+  ('pattern', '%vaccine card%',       96, 'retail_other',          false, false, false, false, false),
+  ('pattern', '%vaccination card%',   96, 'retail_other',          false, false, false, false, false),
+  ('pattern', '%vaccine certificate%', 96, 'retail_other',         false, false, false, false, false),
+  ('pattern', '%vaccination certificate%', 96, 'retail_other',     false, false, false, false, false),
+  ('pattern', '%vaccine book%',       96, 'retail_other',          false, false, false, false, false),
+  ('pattern', '%vaccination book%',   96, 'retail_other',          false, false, false, false, false),
+  ('pattern', '%vaccine record%',     96, 'retail_other',          false, false, false, false, false),
+  ('pattern', '%vaccination record%', 96, 'retail_other',          false, false, false, false, false),
+  -- Exceptions: a surgical pack / consumables (the pack itself, not "Surgery - Spay package") is a
+  -- related surgical charge, not an operation.
+  ('pattern', 'surgery pack%',        96, 'surgery',               true,  false, false, false, false),
+  ('pattern', 'surgical pack%',       96, 'surgery',               true,  false, false, false, false),
+  ('pattern', 'surgery - pack%',      96, 'surgery',               true,  false, false, false, false),
+  ('pattern', '%surgical consumable%', 96, 'surgery',              true,  false, false, false, false),
+  ('pattern', '%surgery consumable%', 96, 'surgery',               true,  false, false, false, false),
+  -- Operations named by what is removed (above the generic surgery rules).
+  ('pattern', '%mass removal%',       92, 'surgery',               true,  false, false, false, true),
+  ('pattern', '%tumour removal%',     92, 'surgery',               true,  false, false, false, true),
+  ('pattern', '%tumor removal%',      92, 'surgery',               true,  false, false, false, true),
+  ('pattern', '%lump removal%',       92, 'surgery',               true,  false, false, false, true),
+  ('pattern', '%foreign body%',       92, 'surgery',               true,  false, false, false, true),
   -- Surgery: the SURGERY service and named operations (actual procedures).
   ('exact',   'surgery',              91, 'surgery',               true,  false, false, false, true),
   ('pattern', 'surgery %',            91, 'surgery',               true,  false, false, false, true),

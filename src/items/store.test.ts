@@ -81,6 +81,16 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Neuter check-up", as("consult", { consult: true })],
       ["Spay wound check", as("consult", { consult: true })],
       ["Post-op check", as("consult", { consult: true })],
+      ["Post-operative review", as("consult", { consult: true })],
+      ["Follow-up consultation", as("consult", { consult: true })],
+      ["Recheck consult", as("consult", { consult: true })],
+      // …but a generic follow-up / recheck keeps its own group (what was done), or stays unmapped.
+      ["Follow-up X-ray", as("diagnostics")],
+      ["Recheck blood test", as("diagnostics")],
+      ["Blood test follow up", as("diagnostics")],
+      ["Follow up vaccination", as("preventive", { vaccine: true })],
+      ["Medication review", "unmapped"],
+      ["Recheck", "unmapped"],
       ["SURGERY", as("surgery", { surgery: true, procedure: true })],
       ["Surgery - Spay", as("surgery", { surgery: true, procedure: true })],
       ["Surgery - FHO", as("surgery", { surgery: true, procedure: true })],
@@ -98,7 +108,20 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Surgery - C section", as("surgery", { surgery: true, procedure: true })],
       // Related surgical charges: surgery lines, but not an operation by themselves.
       ["Surgery pack / consumables", as("surgery", { surgery: true, procedure: false })],
+      ["Surgical pack", as("surgery", { surgery: true, procedure: false })],
+      ["Surgery - pack (sterile)", as("surgery", { surgery: true, procedure: false })],
       ["Surgical consumables", as("surgery", { surgery: true, procedure: false })],
+      ["Surgery consumables", as("surgery", { surgery: true, procedure: false })],
+      // A "package" / "pack" of an operation is the operation.
+      ["Surgery - Spay package", as("surgery", { surgery: true, procedure: true })],
+      ["Surgery - Neuter pack (cat)", as("surgery", { surgery: true, procedure: true })],
+      // Removals that are operations.
+      ["Surgery - Mass removal", as("surgery", { surgery: true, procedure: true })],
+      ["Tumour removal", as("surgery", { surgery: true, procedure: true })],
+      ["Tumor removal", as("surgery", { surgery: true, procedure: true })],
+      ["Lump removal", as("surgery", { surgery: true, procedure: true })],
+      ["Foreign body removal", as("surgery", { surgery: true, procedure: true })],
+      ["Enterotomy (foreign body removal)", as("surgery", { surgery: true, procedure: true })],
       ["Sedation", as("surgery", { surgery: true, procedure: false })],
       ["General anaesthesia", as("surgery", { surgery: true, procedure: false })],
       ["Anesthesia monitoring", as("surgery", { surgery: true, procedure: false })],
@@ -141,7 +164,13 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Flea comb", as("retail_other")],
       // Paperwork about a vaccine is not a vaccination.
       ["Vaccine card", as("retail_other")],
+      ["Vaccination card", as("retail_other")],
       ["Rabies vaccination certificate", as("retail_other")],
+      ["Vaccine certificate", as("retail_other")],
+      ["Vaccination book", as("retail_other")],
+      ["Vaccination record", as("retail_other")],
+      // …but a vaccination that comes with its certificate is a vaccination.
+      ["Vaccination - Rabies (with certificate)", as("preventive", { vaccine: true })],
       // Not recognised: better unmapped (visible, assigned by the owner) than a wrong group.
       ["Skin scraping test", "unmapped"],
       ["Ear cleaner 100ml", "unmapped"],
@@ -151,6 +180,13 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Surgery cancellation fee", "unmapped"],
       ["Stitching removal", "unmapped"],
       ["Suture removal", "unmapped"],
+      ["Wound suture removal", "unmapped"],
+      ["Removal of stitches", "unmapped"],
+      ["Drain removal", "unmapped"],
+      ["Cast removal", "unmapped"],
+      ["Bandage removal", "unmapped"],
+      ["Splint removal", "unmapped"],
+      ["Tick removal", "unmapped"],
       ["Diagnostic section fee", "unmapped"], // not a C-section ("…c section…")
     ];
     const results = cases.map(([name]) => {
