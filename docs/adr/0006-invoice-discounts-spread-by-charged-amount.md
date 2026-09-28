@@ -15,4 +15,6 @@ more than zero; if none did, the spread falls back to |gross|, then to equal sha
 whole sen by largest remainder, ties to the lower line number, so an invoice's credited lines
 still add up exactly to its revenue base. The rule lives in one pure function
 (`creditInvoice` / `spreadWeights`, `src/attribution/credit.ts`). #12's discount metric (gross −
-charged, per line) is defined independently of this and is unaffected.
+charged, per line): the TOTAL discount of an invoice (Σ gross − net) is unaffected by this rule, but
+how it is split between the invoice's doctors follows it — each doctor's discount is their lines'
+gross minus what the spread credited them.

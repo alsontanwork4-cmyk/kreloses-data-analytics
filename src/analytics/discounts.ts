@@ -23,9 +23,13 @@ import type { DateRange } from "./periods";
  * - Refunds are NOT discounts: the charged amount is before any refund (today the revenue base
  *   does not deduct refunds at all; if it ever does, discounts must keep using the pre-refund
  *   charged amount — the refund test in discounts.test.ts guards this).
- * - Only credited ITEM lines count: sales whose line items are not synced yet (no gross is known —
- *   reported as `pendingLineItems` instead) and an invoice's "unitemised remainder" (no item, so no
- *   gross) are left out. Cancelled sales never count.
+ * - Only SOLD lines count (`soldLine`: credited item lines with gross ≥ 0). Left out of every figure —
+ *   totals, gross, charged, rate, discounted-invoice counts, types and the difference row alike:
+ *   return lines (gross < 0: a return already reduces revenue; counted here it would show as a
+ *   "discount" at a negative rate), so an invoice with only returns is out entirely; sales whose line
+ *   items are not synced yet (no gross is known — reported as `pendingLineItems` instead); and an
+ *   invoice's "unitemised remainder" (no item line, e.g. a sale with only a discount line).
+ *   Cancelled sales never count.
  *
  * Everything is summed in SQL on exact `numeric`; money comes back as `"1234.50"` strings.
  */
@@ -38,9 +42,9 @@ export interface DiscountFigures {
   charged: Money;
   /** gross − charged, RM (`METRIC_DEFINITIONS.discount`). Negative if lines were charged above their price. */
   discount: Money;
-  /** discount ÷ gross × 100, one decimal; null when gross is zero (`discountRate`). */
+  /** discount ÷ gross × 100, one decimal; null when gross is zero or less (`discountRate`). */
   discountRatePercent: number | null;
-  /** Invoices with at least one credited line here. */
+  /** Invoices with at least one sold (non-return) line credited here. */
   invoices: number;
   /** Of those, the invoices on which this row's share of the discount is over RM 0.05 (`discountedInvoices`). */
   discountedInvoices: number;
@@ -97,14 +101,15 @@ export type DiscountAppliedTo =
   | "invoice"
   /** The same name used both ways. */
   | "both"
-  /** Lines adding up to more (or less) than the invoice net with no discount line saying why. */
+  /** What the invoice's lines differ from its net by that its discount lines do not explain (may be negative). */
   | "difference";
 
 /** One discount type (`METRIC_DEFINITIONS.discountTypes`). */
 export interface DiscountTypeRow {
   /**
-   * Stable grouping key: `name:<name trimmed, inner spaces collapsed, lower case>`, or
-   * `unnamed-item` / `unnamed-line` for discounts without a name, or `difference`.
+   * Stable grouping key: `name:<the name without any whitespace, lower case>` (so "5%DISCOUNT" and
+   * "5% discount" are one type), or `unnamed-item` / `unnamed-line` for discounts without a name, or
+   * `difference`.
    */
   key: string;
   /** The name as written most often (trimmed); a description for unnamed discounts and the difference. */
@@ -172,10 +177,9 @@ export async function getDoctorDiscounts(sql: Sql, filter: GlobalFilter): Promis
     sql<FigureRow[]>`
       with facts as (${revenueFacts(sql, factsScope(filter))}),
       lines as (
-        -- Credited ITEM lines only: pending rows and unitemised remainders have no gross.
         select f.credit_group, f.staff_id, f.invoice_id, f.gross_amount as gross, f.revenue as charged
         from facts f
-        where f.invoice_line_id is not null and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
+        where ${soldLine(sql, sql`f`)} and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
       ),
       -- Per invoice, at each level, so "discounted" means THIS row's share of that invoice's discount.
       per_invoice as (
@@ -193,7 +197,7 @@ export async function getDoctorDiscounts(sql: Sql, filter: GlobalFilter): Promis
         sum(gross)::text as gross,
         sum(charged)::text as charged,
         (sum(gross) - sum(charged))::text as discount,
-        round(100 * (sum(gross) - sum(charged)) / nullif(sum(gross), 0), 1)::text as discount_rate,
+        case when sum(gross) > 0 then round(100 * (sum(gross) - sum(charged)) / sum(gross), 1) end::text as discount_rate,
         count(*)::int as invoices,
         count(*) filter (where gross - charged > ${DISCOUNTED_INVOICE_THRESHOLD}::numeric)::int as discounted_invoices,
         round(100.0 * count(*) filter (where gross - charged > ${DISCOUNTED_INVOICE_THRESHOLD}::numeric) / nullif(count(*), 0), 1)::text as discounted_share
@@ -251,7 +255,7 @@ export async function getDoctorDiscounts(sql: Sql, filter: GlobalFilter): Promis
 export const DISCOUNT_TYPE_LABELS = {
   unnamedItem: "Item discount (no name)",
   unnamedLine: "Discount line (no name)",
-  difference: "Difference to the invoice net (no discount line)",
+  difference: "Other difference to the invoice net (not explained by a discount line)",
 } as const;
 
 interface TypeRow {
@@ -272,11 +276,13 @@ interface TypeRow {
  * - an **item discount** (a `DiscountName` / `DiscountAmount` on an item line, or any line charged
  *   other than quantity × unit price): gross − the line's charged amount;
  * - a **discount line** (ItemType 55, named by its `DiscountName`, else its item name): its amount;
- * - the **difference** between an invoice's lines and its net amount that no discount line
- *   explains (one row for all invoices).
+ * - the **other difference** between an invoice's lines and its net amount that its discount lines
+ *   do not explain (one row for all invoices; negative when lines add up to less than the net).
  *
- * Names are grouped ignoring case and spaces and shown as written most often (ties: the first in
- * byte order). Without a doctor filter the amounts add up exactly to the total discount of
+ * Only sold lines count, as in `getDoctorDiscounts`: return lines and their item discounts are left
+ * out, and an invoice with no sold line (only returns, or only a discount line) is out entirely.
+ * Names are grouped ignoring case and ALL whitespace ("5%DISCOUNT" = "5% discount") and shown as
+ * written most often (trimmed, spaces collapsed; ties: the first in byte order). Without a doctor filter the amounts add up exactly to the total discount of
  * `getDoctorDiscounts`. With one, each type shows the part that fell on the selected doctors' lines:
  * an item discount counts for the doctor on its line; a discount line or difference counts in the
  * proportion #5's spread gave the doctors of that invoice's discount lines and difference together
@@ -289,14 +295,14 @@ export async function getDiscountTypes(sql: Sql, filter: GlobalFilter): Promise<
   const rows = await sql<TypeRow[]>`
     with scoped as (${revenueFacts(sql, factsScope(filter))}),
     everyone as (${revenueFacts(sql, { branches: branchScope(filter), staff: { all: true } })}),
-    -- The credited item lines in the filter (with a doctor filter: the selected doctors' lines).
+    -- The sold lines in the filter (with a doctor filter: the selected doctors' lines).
     scoped_lines as (
       select f.invoice_id, f.invoice_line_id, f.gross_amount, f.revenue
       from scoped f
-      where f.invoice_line_id is not null and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
+      where ${soldLine(sql, sql`f`)} and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
     ),
     -- Per invoice: the invoice-level discount (discount lines + difference) that #5's spread put on
-    -- ALL its item lines (whole) and on the lines in the filter (scoped): line amount − credited.
+    -- ALL its sold lines (whole) and on the lines in the filter (scoped): line amount − credited.
     scoped_share as (
       select s.invoice_id, sum(l.amount - s.revenue) as scoped, count(*) as scoped_lines
       from scoped_lines s join invoice_lines l on l.id = s.invoice_line_id
@@ -307,6 +313,7 @@ export async function getDiscountTypes(sql: Sql, filter: GlobalFilter): Promise<
       from everyone e
       join invoice_lines l on l.id = e.invoice_line_id
       join scoped_share sc on sc.invoice_id = e.invoice_id
+      where ${soldLine(sql, sql`e`)}
       group by e.invoice_id
     ),
     discount_lines as (
@@ -340,7 +347,7 @@ export async function getDiscountTypes(sql: Sql, filter: GlobalFilter): Promise<
         case
           when u.applied_to = 'difference' then 'difference'
           when u.name is null then case u.applied_to when 'item' then 'unnamed-item' else 'unnamed-line' end
-          else 'name:' || lower(u.name)
+          else 'name:' || lower(regexp_replace(u.name, '[[:space:]]+', '', 'g'))
         end as key
       from uses u
       where u.counted
@@ -383,6 +390,14 @@ export async function getDiscountTypes(sql: Sql, filter: GlobalFilter): Promise<
       sharePercent: row.sharePercent === null ? null : Number(row.sharePercent),
     })),
   };
+}
+
+/**
+ * THE rule for which credited lines discounts are computed on: sold lines — an item line (not an
+ * invoice's unitemised remainder or a pending row) whose gross is not negative (not a return).
+ */
+function soldLine(sql: Sql, facts: ReturnType<Sql>) {
+  return sql`(${facts}.invoice_line_id is not null and ${facts}.gross_amount >= 0)`;
 }
 
 /** A discount name trimmed with inner whitespace collapsed; null when empty. */

@@ -27,7 +27,8 @@ import { getDiscountTypes, getDoctorDiscounts, getDoctorRanking, type DiscountFi
  * credited amount: what the line charged after its own item discount AND its share of the invoice's
  * discount lines, spread by #5 in proportion to what each line charged — ADR 0006). Per doctor:
  * discount = Σ gross − Σ charged; rate = discount ÷ gross; an invoice counts as discounted for them
- * when THEIR share of its discount is over RM 0.05.
+ * when THEIR share of its discount is over RM 0.05. Return lines (gross < 0) are left out of every
+ * discount figure (an invoice with only returns is out entirely), and so are sales with no sold line.
  *
  * SEPTEMBER 2026 (the shared fixture; credited amounts in src/analytics/doctors.test.ts)
  *   700101 N  Dr Alpha 150 → 144.00 (6.00) · 900 → 864.00 (36.00) · 10 × 20 → 192.00 (8.00)   "RM50 LOYALTY" (50.00)
@@ -38,18 +39,18 @@ import { getDiscountTypes, getDoctorDiscounts, getDoctorRanking, type DiscountFi
  *   700201 S  Dr Delta 90 → 84.37 (5.63) · 2 × 275 → 515.63 (34.37)                           "RM40 OFF" -40.00
  *   700202 S  Dr Bravo 700 + 2 × 200 = 1,100 → 1,100 (a 100.00 refund is recorded: NOT a discount)
  *   700203 S  Dr Bravo 100 → 96.15 (3.85) · Dr. Alpha 160 → 153.85 (6.15)          lines 260 vs net 250: 10.00 difference
- *   700205 S  South General 45 (walk-in) · 700206 S Dr Delta return (1) × 120 → (120.00): gross = charged, no discount
+ *   700205 S  South General 45 (walk-in) · 700206 S Dr Delta return (1) × 120 → (120.00): a return, left out
  *
  *   Doctor          gross      charged    discount  rate   invoices  discounted (> RM 0.05)
  *   Dr Bravo        3,530.00   3,352.00   178.00    5.0 %  4         2 (700104 174.15, 700203 3.85) → 50.0 %
  *   Dr Alpha        1,710.50   1,654.35    56.15    3.3 %  3         2 (700101 50.00, 700203 6.15)  → 66.7 %
- *   Dr Delta          520.00     480.00    40.00    7.7 %  2         1 (700201)                     → 50.0 %
+ *   Dr Delta          640.00     600.00    40.00    6.3 %  1         1 (700201; 40 ÷ 640 = 6.25 %)   → 100.0 %
  *   Other: Charlie Chen 45.00 / 45.00 / 0.00 · 0.0 % · 1 · 0 → 0.0 %
  *   Generic: 95.00 / 93.73 / 1.27 · 1.3 % · 2 · 1 → 50.0 %  (North General 50.00 / 48.73 / 1.27 · 2.5 % · 1 · 1; South General 45 / 45 / 0 · 1 · 0)
  *   No staff: 234.90 / 230.32 / 4.58 · 1.9 % · 2 · 1 → 50.0 %
- *   Total: 6,135.40 / 5,855.40 / 280.00 · 4.6 % · 9 invoices · 4 discounted → 44.4 %
+ *   Total: 6,255.40 / 5,975.40 / 280.00 · 4.5 % · 8 invoices (700206 is only a return) · 4 discounted → 50.0 %
  *   Types: 10% DISCOUNT (item) 120.00 · RM60 VOUCHER 60.00 · RM50 LOYALTY 50.00 · RM40 OFF 40.00
- *          · difference to the invoice net 10.00 (700203)                      = 280.00, the total discount
+ *          · other difference to the invoice net 10.00 (700203)                = 280.00, the total discount
  *
  * JULY 2026 (discount-sales.json; all Branch North except 710008)
  *   710001  Dr Alpha 100 → 95.00 (5.00) · Dr Bravo 300 → 285.00 (15.00)       "5% DISCOUNT" (20.00): shared 1 : 3
@@ -72,11 +73,22 @@ import { getDiscountTypes, getDoctorDiscounts, getDoctorRanking, type DiscountFi
  *   Total: 1,390.50 / 1,088.84 / 301.66 · 21.7 % · 8 invoices · 7 discounted → 87.5 %
  *   Types: 90% OFF 90.00 · FREE CONSULT 80.00 · RM60 OFF 60.00 · 5% DISCOUNT (item + invoice, 3 lines, 2 invoices) 32.50
  *          · STAFF 10% 18.05 · RM12 OFF 12.00 · Item discount (no name) 9.00 · ROUNDING (2 lines) 0.11   = 301.66
+ *
+ * JUNE 2026 (discount-sales.json)
+ *   710011  only a return: Dr Alpha (1) × 150 = (150.00) and "RM10 OFF" (10.00), net (160.00). Counted as a
+ *           line it would be a +10.00 "discount" at a −6.7 % rate; it is left out entirely.
+ *   710012  Dr Bravo 100 · the return of an item sold with "5% DISCOUNT": (1) × 50 → (47.50). The return is
+ *           left out: Dr Bravo 100.00 / 100.00 / 0.00, not discounted, and no 5% DISCOUNT use.
+ *   710013  only a discount line "RM15 OFF", net (15.00) (credited to nobody as an unitemised remainder): no gross → left out
+ *   710014  Dr Alpha 100 → 95.00 with "5%DISCOUNT" (5.00): the same type as "5% DISCOUNT" (names grouped ignoring ALL spaces)
+ *   Total: 200.00 / 195.00 / 5.00 · 2.5 % · 2 invoices · 1 discounted → 50.0 %
  */
 const { both } = SYNTHETIC_ACCOUNTS;
 const SEPTEMBER = { dateFrom: "2026-09-01", dateTo: "2026-09-30" };
 const JULY = { dateFrom: "2026-07-01", dateTo: "2026-07-31" };
 const july = (day: number) => ({ dateFrom: `2026-07-0${day}`, dateTo: `2026-07-0${day}` });
+const june = (day: number) => ({ dateFrom: `2026-06-0${day}`, dateTo: `2026-06-0${day}` });
+const JUNE = { dateFrom: "2026-06-01", dateTo: "2026-06-30" };
 
 const NOTHING: DiscountFigures = {
   gross: "0.00",
@@ -100,7 +112,7 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
   let branch: { north: string; south: string };
   let staff: Record<string, string>;
 
-  const sync = (dateRange = { from: "2026-07-01", to: "2026-09-30" }) => runSync(h.deps(), connectionId, "manual", { dateRange, pageSize: 7 });
+  const sync = (dateRange = { from: "2026-06-01", to: "2026-09-30" }) => runSync(h.deps(), connectionId, "manual", { dateRange, pageSize: 7 });
   /** A doctor row without its ids (asserted separately), for compact expectations. */
   const figures = (rows: { name: string }[]) => rows.map(({ name, ...rest }) => ({ name, ...pick(rest as unknown as DiscountFigures) }));
 
@@ -129,13 +141,13 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
     const discounts = await getDoctorDiscounts(db.sql, SEPTEMBER);
     expect(discounts.period).toEqual(SEPTEMBER);
     expect(discounts.total).toEqual({
-      gross: "6135.40",
-      charged: "5855.40",
+      gross: "6255.40",
+      charged: "5975.40",
       discount: "280.00",
-      discountRatePercent: 4.6,
-      invoices: 9,
+      discountRatePercent: 4.5,
+      invoices: 8,
       discountedInvoices: 4,
-      discountedInvoicesPercent: 44.4,
+      discountedInvoicesPercent: 50,
     });
     expect(discounts.doctors).toEqual([
       {
@@ -169,13 +181,13 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
         name: "Dr Delta",
         source: "alias_only",
         active: true,
-        gross: "520.00",
-        charged: "480.00",
+        gross: "640.00",
+        charged: "600.00",
         discount: "40.00",
-        discountRatePercent: 7.7,
-        invoices: 2,
+        discountRatePercent: 6.3,
+        invoices: 1,
         discountedInvoices: 1,
-        discountedInvoicesPercent: 50,
+        discountedInvoicesPercent: 100,
       },
     ]);
     const charlie = { gross: "45.00", charged: "45.00", discount: "0.00", discountRatePercent: 0, invoices: 1, discountedInvoices: 0, discountedInvoicesPercent: 0 };
@@ -226,11 +238,14 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
     expect(discounts.pendingLineItems).toEqual({ invoices: 0, revenue: "0.00" });
   });
 
-  it("charged is the revenue credited (the Doctors page's figure), so gross − discount = revenue", async () => {
+  it("charged is the revenue credited (the Doctors page's figure) except for returns, which are left out", async () => {
     for (const period of [SEPTEMBER, JULY]) {
       const [discounts, ranking] = await Promise.all([getDoctorDiscounts(db.sql, period), getDoctorRanking(db.sql, period)]);
       const charged = Object.fromEntries(discounts.doctors.map((row) => [row.staffId, row.charged]));
-      expect(charged).toEqual(Object.fromEntries(ranking.doctors.map((row) => [row.staffId, row.revenue])));
+      const revenue = Object.fromEntries(ranking.doctors.map((row) => [row.staffId, row.revenue]));
+      // Dr Delta's September revenue (480.00) includes his (120.00) return; his discount figures do not.
+      if (period === SEPTEMBER) expect([revenue[staff["Dr Delta"]!], charged[staff["Dr Delta"]!]]).toEqual(["480.00", "600.00"]);
+      else expect(charged).toEqual(revenue);
     }
   });
 
@@ -239,13 +254,13 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       period: SEPTEMBER,
       total: "280.00",
       types: [
-        { key: "name:10% discount", label: "10% DISCOUNT", appliedTo: "item", lines: 1, invoices: 1, amount: "120.00", sharePercent: 42.9 },
-        { key: "name:rm60 voucher", label: "RM60 VOUCHER", appliedTo: "invoice", lines: 1, invoices: 1, amount: "60.00", sharePercent: 21.4 },
-        { key: "name:rm50 loyalty", label: "RM50 LOYALTY", appliedTo: "invoice", lines: 1, invoices: 1, amount: "50.00", sharePercent: 17.9 },
-        { key: "name:rm40 off", label: "RM40 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "40.00", sharePercent: 14.3 },
+        { key: "name:10%discount", label: "10% DISCOUNT", appliedTo: "item", lines: 1, invoices: 1, amount: "120.00", sharePercent: 42.9 },
+        { key: "name:rm60voucher", label: "RM60 VOUCHER", appliedTo: "invoice", lines: 1, invoices: 1, amount: "60.00", sharePercent: 21.4 },
+        { key: "name:rm50loyalty", label: "RM50 LOYALTY", appliedTo: "invoice", lines: 1, invoices: 1, amount: "50.00", sharePercent: 17.9 },
+        { key: "name:rm40off", label: "RM40 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "40.00", sharePercent: 14.3 },
         {
           key: "difference",
-          label: "Difference to the invoice net (no discount line)",
+          label: "Other difference to the invoice net (not explained by a discount line)",
           appliedTo: "difference",
           lines: null,
           invoices: 1,
@@ -263,7 +278,7 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       { name: "Dr Alpha Anderson", gross: "100.00", charged: "95.00", discount: "5.00", discountRatePercent: 5, invoices: 1, discountedInvoices: 1, discountedInvoicesPercent: 100 },
     ]);
     expect((await getDiscountTypes(db.sql, july(1))).types).toEqual([
-      { key: "name:5% discount", label: "5% DISCOUNT", appliedTo: "invoice", lines: 1, invoices: 1, amount: "20.00", sharePercent: 100 },
+      { key: "name:5%discount", label: "5% DISCOUNT", appliedTo: "invoice", lines: 1, invoices: 1, amount: "20.00", sharePercent: 100 },
     ]);
   });
 
@@ -275,8 +290,8 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       { name: "Dr Bravo Brown", gross: "100.00", charged: "45.45", discount: "54.55", discountRatePercent: 54.6, invoices: 1, discountedInvoices: 1, discountedInvoicesPercent: 100 },
     ]);
     expect((await getDiscountTypes(db.sql, july(2))).types).toEqual([
-      { key: "name:90% off", label: "90% OFF", appliedTo: "item", lines: 1, invoices: 1, amount: "90.00", sharePercent: 60 },
-      { key: "name:rm60 off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "60.00", sharePercent: 40 },
+      { key: "name:90%off", label: "90% OFF", appliedTo: "item", lines: 1, invoices: 1, amount: "90.00", sharePercent: 60 },
+      { key: "name:rm60off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "60.00", sharePercent: 40 },
     ]);
   });
 
@@ -300,7 +315,7 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       { name: "Dr Alpha Anderson", gross: "230.50", charged: "212.45", discount: "18.05", discountRatePercent: 7.8, invoices: 1, discountedInvoices: 1, discountedInvoicesPercent: 100 },
     ]);
     expect((await getDiscountTypes(db.sql, july(5))).types).toEqual([
-      { key: "name:staff 10%", label: "STAFF 10%", appliedTo: "item", lines: 1, invoices: 1, amount: "18.05", sharePercent: 100 },
+      { key: "name:staff10%", label: "STAFF 10%", appliedTo: "item", lines: 1, invoices: 1, amount: "18.05", sharePercent: 100 },
     ]);
   });
 
@@ -313,8 +328,8 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
     const charlie = { gross: "0.00", charged: "0.00", discount: "0.00", discountRatePercent: null, invoices: 1, discountedInvoices: 0, discountedInvoicesPercent: 0 };
     expect(free.groups.other).toEqual({ ...charlie, members: [{ staffId: staff["Charlie Chen"], name: "Charlie Chen", source: "kreloses", active: true, ...charlie }] });
     expect((await getDiscountTypes(db.sql, july(6))).types).toEqual([
-      { key: "name:free consult", label: "FREE CONSULT", appliedTo: "item", lines: 1, invoices: 1, amount: "80.00", sharePercent: 87 },
-      { key: "name:rm12 off", label: "RM12 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "12.00", sharePercent: 13 },
+      { key: "name:freeconsult", label: "FREE CONSULT", appliedTo: "item", lines: 1, invoices: 1, amount: "80.00", sharePercent: 87 },
+      { key: "name:rm12off", label: "RM12 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "12.00", sharePercent: 13 },
     ]);
   });
 
@@ -340,12 +355,12 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       period: JULY,
       total: "301.66",
       types: [
-        { key: "name:90% off", label: "90% OFF", appliedTo: "item", lines: 1, invoices: 1, amount: "90.00", sharePercent: 29.8 },
-        { key: "name:free consult", label: "FREE CONSULT", appliedTo: "item", lines: 1, invoices: 1, amount: "80.00", sharePercent: 26.5 },
-        { key: "name:rm60 off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "60.00", sharePercent: 19.9 },
-        { key: "name:5% discount", label: "5% DISCOUNT", appliedTo: "both", lines: 3, invoices: 2, amount: "32.50", sharePercent: 10.8 },
-        { key: "name:staff 10%", label: "STAFF 10%", appliedTo: "item", lines: 1, invoices: 1, amount: "18.05", sharePercent: 6 },
-        { key: "name:rm12 off", label: "RM12 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "12.00", sharePercent: 4 },
+        { key: "name:90%off", label: "90% OFF", appliedTo: "item", lines: 1, invoices: 1, amount: "90.00", sharePercent: 29.8 },
+        { key: "name:freeconsult", label: "FREE CONSULT", appliedTo: "item", lines: 1, invoices: 1, amount: "80.00", sharePercent: 26.5 },
+        { key: "name:rm60off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "60.00", sharePercent: 19.9 },
+        { key: "name:5%discount", label: "5% DISCOUNT", appliedTo: "both", lines: 3, invoices: 2, amount: "32.50", sharePercent: 10.8 },
+        { key: "name:staff10%", label: "STAFF 10%", appliedTo: "item", lines: 1, invoices: 1, amount: "18.05", sharePercent: 6 },
+        { key: "name:rm12off", label: "RM12 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "12.00", sharePercent: 4 },
         { key: "unnamed-item", label: "Item discount (no name)", appliedTo: "item", lines: 1, invoices: 1, amount: "9.00", sharePercent: 3 },
         { key: "name:rounding", label: "ROUNDING", appliedTo: "invoice", lines: 2, invoices: 2, amount: "0.11", sharePercent: 0 },
       ],
@@ -378,21 +393,21 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       period: JULY,
       total: "139.55",
       types: [
-        { key: "name:90% off", label: "90% OFF", appliedTo: "item", lines: 1, invoices: 1, amount: "90.00", sharePercent: 64.5 },
-        { key: "name:staff 10%", label: "STAFF 10%", appliedTo: "item", lines: 1, invoices: 1, amount: "18.05", sharePercent: 12.9 },
-        { key: "name:rm12 off", label: "RM12 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "12.00", sharePercent: 8.6 },
+        { key: "name:90%off", label: "90% OFF", appliedTo: "item", lines: 1, invoices: 1, amount: "90.00", sharePercent: 64.5 },
+        { key: "name:staff10%", label: "STAFF 10%", appliedTo: "item", lines: 1, invoices: 1, amount: "18.05", sharePercent: 12.9 },
+        { key: "name:rm12off", label: "RM12 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "12.00", sharePercent: 8.6 },
         { key: "unnamed-item", label: "Item discount (no name)", appliedTo: "item", lines: 1, invoices: 1, amount: "9.00", sharePercent: 6.4 },
-        { key: "name:rm60 off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "5.45", sharePercent: 3.9 },
-        { key: "name:5% discount", label: "5% DISCOUNT", appliedTo: "invoice", lines: 1, invoices: 1, amount: "5.00", sharePercent: 3.6 },
+        { key: "name:rm60off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "5.45", sharePercent: 3.9 },
+        { key: "name:5%discount", label: "5% DISCOUNT", appliedTo: "invoice", lines: 1, invoices: 1, amount: "5.00", sharePercent: 3.6 },
         { key: "name:rounding", label: "ROUNDING", appliedTo: "invoice", lines: 1, invoices: 1, amount: "0.05", sharePercent: 0 },
       ],
     });
 
     // Dr Bravo charged nothing on 710006, so none of its RM12 OFF is his.
     expect((await getDiscountTypes(db.sql, { ...JULY, doctorIds: [staff["Dr Bravo Brown"]!] })).types).toEqual([
-      { key: "name:free consult", label: "FREE CONSULT", appliedTo: "item", lines: 1, invoices: 1, amount: "80.00", sharePercent: 49.3 },
-      { key: "name:rm60 off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "54.55", sharePercent: 33.6 },
-      { key: "name:5% discount", label: "5% DISCOUNT", appliedTo: "both", lines: 3, invoices: 2, amount: "27.50", sharePercent: 17 },
+      { key: "name:freeconsult", label: "FREE CONSULT", appliedTo: "item", lines: 1, invoices: 1, amount: "80.00", sharePercent: 49.3 },
+      { key: "name:rm60off", label: "RM60 OFF", appliedTo: "invoice", lines: 1, invoices: 1, amount: "54.55", sharePercent: 33.6 },
+      { key: "name:5%discount", label: "5% DISCOUNT", appliedTo: "both", lines: 3, invoices: 2, amount: "27.50", sharePercent: 17 },
       { key: "name:rounding", label: "ROUNDING", appliedTo: "invoice", lines: 1, invoices: 1, amount: "0.06", sharePercent: 0 },
     ]);
 
@@ -400,7 +415,7 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
     expect((await getDiscountTypes(db.sql, { ...SEPTEMBER, doctorIds: [staff["Dr Bravo Brown"]!] })).types.map((row) => [row.label, row.amount])).toEqual([
       ["10% DISCOUNT", "120.00"],
       ["RM60 VOUCHER", "54.15"],
-      ["Difference to the invoice net (no discount line)", "3.85"],
+      ["Other difference to the invoice net (not explained by a discount line)", "3.85"],
     ]);
 
     const nobody = { ...JULY, doctorIds: ["999999", "not-an-id"] };
@@ -433,6 +448,68 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
       pendingLineItems: { invoices: 0, revenue: "0.00" },
     });
     expect(await getDiscountTypes(db.sql, empty)).toEqual({ period: empty, total: "0.00", types: [] });
+  });
+
+  it("leaves returns out of every discount figure: an invoice with only a return, and the return of an item sold with an item discount", async () => {
+    // 710011: only a return (and a discount line): out entirely — no doctor row, no totals, no types, no difference.
+    expect(await getDoctorDiscounts(db.sql, june(1))).toEqual({
+      period: june(1),
+      total: NOTHING,
+      doctors: [],
+      groups: { other: { ...NOTHING, members: [] }, generic: { ...NOTHING, members: [] }, noStaff: NOTHING },
+      pendingLineItems: { invoices: 0, revenue: "0.00" },
+    });
+    expect(await getDiscountTypes(db.sql, june(1))).toEqual({ period: june(1), total: "0.00", types: [] });
+
+    // 710012: Dr Bravo's sold line counts; the returned, item-discounted Ear cleaner does not.
+    const mixed = await getDoctorDiscounts(db.sql, june(2));
+    expect(figures(mixed.doctors)).toEqual([
+      { name: "Dr Bravo Brown", gross: "100.00", charged: "100.00", discount: "0.00", discountRatePercent: 0, invoices: 1, discountedInvoices: 0, discountedInvoicesPercent: 0 },
+    ]);
+    expect((await getDiscountTypes(db.sql, june(2))).types).toEqual([]);
+
+    // Dr Delta in September: the rate on his sales alone (40.00 ÷ 640.00 = 6.25 %), without his (120.00) return invoice.
+    const delta = (await getDoctorDiscounts(db.sql, { ...SEPTEMBER, doctorIds: [staff["Dr Delta"]!] })).doctors;
+    expect(figures(delta)).toEqual([
+      { name: "Dr Delta", gross: "640.00", charged: "600.00", discount: "40.00", discountRatePercent: 6.3, invoices: 1, discountedInvoices: 1, discountedInvoicesPercent: 100 },
+    ]);
+  });
+
+  it("leaves out a sale with only a discount line (no sold line, so no gross)", async () => {
+    // 710013: "RM15 OFF" and nothing else.
+    const discounts = await getDoctorDiscounts(db.sql, june(3));
+    expect(discounts.total).toEqual(NOTHING);
+    expect(discounts.groups.noStaff).toEqual(NOTHING);
+    expect(await getDiscountTypes(db.sql, june(3))).toEqual({ period: june(3), total: "0.00", types: [] });
+  });
+
+  it("groups discount names ignoring case and ALL spaces: \"5%DISCOUNT\" is \"5% DISCOUNT\"", async () => {
+    const period = { dateFrom: "2026-06-04", dateTo: "2026-07-01" }; // 710014 "5%DISCOUNT" and 710001 "5% DISCOUNT"
+    expect((await getDiscountTypes(db.sql, period)).types).toEqual([
+      { key: "name:5%discount", label: "5% DISCOUNT", appliedTo: "invoice", lines: 2, invoices: 2, amount: "25.00", sharePercent: 100 },
+    ]);
+  });
+
+  it("adds up June: only the sold lines of 710012 and 710014", async () => {
+    const discounts = await getDoctorDiscounts(db.sql, JUNE);
+    expect(discounts.total).toEqual({
+      gross: "200.00",
+      charged: "195.00",
+      discount: "5.00",
+      discountRatePercent: 2.5,
+      invoices: 2,
+      discountedInvoices: 1,
+      discountedInvoicesPercent: 50,
+    });
+    expect(figures(discounts.doctors)).toEqual([
+      { name: "Dr Alpha Anderson", gross: "100.00", charged: "95.00", discount: "5.00", discountRatePercent: 5, invoices: 1, discountedInvoices: 1, discountedInvoicesPercent: 100 },
+      { name: "Dr Bravo Brown", gross: "100.00", charged: "100.00", discount: "0.00", discountRatePercent: 0, invoices: 1, discountedInvoices: 0, discountedInvoicesPercent: 0 },
+    ]);
+    expect(await getDiscountTypes(db.sql, JUNE)).toEqual({
+      period: JUNE,
+      total: "5.00",
+      types: [{ key: "name:5%discount", label: "5%DISCOUNT", appliedTo: "invoice", lines: 1, invoices: 1, amount: "5.00", sharePercent: 100 }],
+    });
   });
 
   // Last: it changes the fake's data.

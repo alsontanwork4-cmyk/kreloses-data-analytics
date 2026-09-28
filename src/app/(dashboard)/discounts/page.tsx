@@ -174,7 +174,7 @@ export default async function DiscountsPage({ searchParams }: PageProps<"/discou
 
           <DataTable
             caption="Discounts by doctor"
-            description="Highest discount first. Discount = gross (quantity × unit price) − charged; an invoice counts as discounted when the doctor's share of its discount is over RM 0.05."
+            description="Highest discount first. Discount = gross (quantity × unit price) − charged, on sold lines (returns are left out); an invoice counts as discounted when the doctor's share of its discount is over RM 0.05."
             columns={doctorColumns}
             rows={doctorRows}
             rowKey={(row) => row.staffId}

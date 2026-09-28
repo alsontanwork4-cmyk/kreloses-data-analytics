@@ -53,12 +53,12 @@ test.describe("Discounts page", () => {
     await page.goto(`/discounts?${SEPTEMBER}`);
     await expect(page.getByRole("heading", { level: 1, name: "Discounts" })).toBeVisible();
 
-    // Totals: 280.00 off 6,135.40 gross; 4 of 9 invoices discounted.
+    // Totals: 280.00 off 6,255.40 gross; 4 of 8 invoices discounted (Dr Delta's return-only invoice is left out).
     await expect(stat(page, "total-discount").value).toHaveText("RM 280.00");
-    await expect(stat(page, "total-discount").detail).toHaveText("off RM 6,135.40 gross");
-    await expect(stat(page, "total-discount-rate").value).toHaveText("4.6%");
-    await expect(stat(page, "total-discounted-invoices").value).toHaveText("44.4%");
-    await expect(stat(page, "total-discounted-invoices").detail).toHaveText("4 of 9 invoices (over RM 0.05)");
+    await expect(stat(page, "total-discount").detail).toHaveText("off RM 6,255.40 gross");
+    await expect(stat(page, "total-discount-rate").value).toHaveText("4.5%");
+    await expect(stat(page, "total-discounted-invoices").value).toHaveText("50.0%");
+    await expect(stat(page, "total-discounted-invoices").detail).toHaveText("4 of 8 invoices (over RM 0.05)");
 
     // Per doctor, highest discount first.
     const doctors = page.getByTestId("doctor-discounts");
@@ -67,7 +67,7 @@ test.describe("Discounts page", () => {
     expect(await tableText(doctors, columns)).toEqual([
       ["Dr Bravo Brown", "RM 178.00", "5.0%", "50.0%", "2", "4", "RM 3,530.00", "RM 3,352.00"],
       ["Dr Alpha Anderson", "RM 56.15", "3.3%", "66.7%", "2", "3", "RM 1,710.50", "RM 1,654.35"],
-      ["Dr Delta Not in staff list", "RM 40.00", "7.7%", "50.0%", "1", "2", "RM 520.00", "RM 480.00"],
+      ["Dr Delta Not in staff list", "RM 40.00", "6.3%", "100.0%", "1", "1", "RM 640.00", "RM 600.00"],
     ]);
     await expect(page.getByRole("img", { name: /^Discount by doctor: Dr Bravo Brown RM 178\.00; Dr Alpha Anderson RM 56\.15; Dr Delta RM 40\.00$/ })).toBeVisible();
     await expect(page.getByTestId("doctor-discount-chart").locator(".recharts-bar-rectangle")).toHaveCount(3);
@@ -87,7 +87,7 @@ test.describe("Discounts page", () => {
       ["RM60 VOUCHER", "Whole invoice", "RM 60.00", "21.4%", "1", "1"],
       ["RM50 LOYALTY", "Whole invoice", "RM 50.00", "17.9%", "1", "1"],
       ["RM40 OFF", "Whole invoice", "RM 40.00", "14.3%", "1", "1"],
-      ["Difference to the invoice net (no discount line)", "—", "RM 10.00", "3.6%", "1", "—"],
+      ["Other difference to the invoice net (not explained by a discount line)", "—", "RM 10.00", "3.6%", "1", "—"],
     ]);
 
     // The CSVs have exactly the numbers on screen, as plain decimals.
@@ -97,7 +97,7 @@ test.describe("Discounts page", () => {
       "﻿Doctor,Discount (RM),Discount rate (%),Invoices discounted (%),Discounted invoices,Invoices,Gross (RM),Charged (RM)\r\n" +
         "Dr Bravo Brown,178.00,5.0,50.0,2,4,3530.00,3352.00\r\n" +
         "Dr Alpha Anderson,56.15,3.3,66.7,2,3,1710.50,1654.35\r\n" +
-        "Dr Delta,40.00,7.7,50.0,1,2,520.00,480.00\r\n",
+        "Dr Delta,40.00,6.3,100.0,1,1,640.00,600.00\r\n",
     );
     const typesCsv = await downloadCsv(page, types);
     expect(typesCsv.name).toBe("discount-types_2026-09-01_to_2026-09-30.csv");
@@ -107,7 +107,7 @@ test.describe("Discounts page", () => {
         "RM60 VOUCHER,Whole invoice,60.00,21.4,1,1\r\n" +
         "RM50 LOYALTY,Whole invoice,50.00,17.9,1,1\r\n" +
         "RM40 OFF,Whole invoice,40.00,14.3,1,1\r\n" +
-        "Difference to the invoice net (no discount line),,10.00,3.6,1,\r\n",
+        "Other difference to the invoice net (not explained by a discount line),,10.00,3.6,1,\r\n",
     );
     const groupsCsv = await downloadCsv(page, page.getByTestId("discount-groups"));
     expect(groupsCsv.text.split("\r\n")).toEqual([
@@ -129,7 +129,7 @@ test.describe("Discounts page", () => {
     expect(await tableText(types, ["discount", "amount", "share"])).toEqual([
       ["10% DISCOUNT", "RM 120.00", "67.4%"],
       ["RM60 VOUCHER", "RM 54.15", "30.4%"],
-      ["Difference to the invoice net (no discount line)", "RM 3.85", "2.2%"],
+      ["Other difference to the invoice net (not explained by a discount line)", "RM 3.85", "2.2%"],
     ]);
     await expect(page.getByTestId("discount-groups")).toContainText("Only lines credited to the selected doctor are shown.");
 
