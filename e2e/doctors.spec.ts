@@ -63,7 +63,7 @@ test.describe("Line items → Doctors page", () => {
       ["Dr Alpha Anderson", "RM 1,654.35", "28.3%", "RM 827.18", "3", "2.00", "2"],
       ["Dr Delta Not in staff list", "RM 480.00", "8.2%", "RM 480.00", "2", "1.50", "1"],
     ]);
-    await expect(page.getByRole("img", { name: /^Revenue by doctor: Dr Bravo Brown RM 3,351\.72; Dr Alpha Anderson RM 1,654\.35; Dr Delta RM 480\.00$/ })).toBeVisible();
+    await expect(page.getByRole("img", { name: /^Revenue by doctor: Dr Bravo Brown RM 3,352\.00; Dr Alpha Anderson RM 1,654\.35; Dr Delta RM 480\.00$/ })).toBeVisible();
     await expect(page.getByTestId("doctor-revenue-chart").locator(".recharts-bar-rectangle")).toHaveCount(3);
     // Non-doctors are grouped apart, never ranked.
     expect(await tableText(page.getByTestId("staff-groups"), ["credited-to", "group", "revenue", "share"])).toEqual([

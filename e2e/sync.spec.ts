@@ -42,6 +42,11 @@ test.describe("Sync now → Sync status → Overview", () => {
     for (const syncRun of [latest, september, august]) await expect(syncRun.getByTestId("sync-run-status")).toHaveText("Succeeded");
     await expect(latest.getByTestId("sync-run-unchanged")).toHaveText("11");
     await expect(september.getByTestId("sync-run-inserted")).toHaveText("11");
+    await expect(september.getByTestId("sync-run-line-items")).toHaveText("9 invoices");
+    await expect(september.getByTestId("sync-run-line-items-failed")).toHaveText("0");
+    // 700203's lines (260.00) do not add up to its net (250.00): the gap monitor counts it.
+    await expect(september.getByTestId("sync-run-line-gaps")).toHaveText("1 invoice");
+    await expect(september.getByTestId("sync-run-warning")).toHaveCount(0);
     await expect(september).toContainText("1 Sep 2026 – 30 Sep 2026");
     await expect(august.getByTestId("sync-run-seen")).toContainText("5");
     // "Data as of" here is for today, so it depends on whether the synced month includes today.
