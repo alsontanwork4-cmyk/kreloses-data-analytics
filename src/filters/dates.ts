@@ -30,14 +30,24 @@ export function isIsoDate(value: unknown): value is IsoDate {
   const match = ISO_DATE.exec(value);
   if (!match) return false;
   const [, y, m, d] = match.map(Number) as [number, number, number, number];
-  const date = new Date(Date.UTC(y, m - 1, d));
+  const date = utcDate(y, m - 1, d);
   return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
+/**
+ * Midnight UTC of year / month (0-based) / day; out-of-range months and days roll over like
+ * `Date.UTC`. Unlike `Date.UTC`, years 0–99 stay themselves (`Date.UTC(99, …)` is 1999).
+ */
+function utcDate(year: number, month: number, day: number): Date {
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, day);
+  return date;
 }
 
 function toUtc(date: IsoDate): Date {
   if (!isIsoDate(date)) throw new RangeError(`Not an ISO date: ${date}`);
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d));
+  return utcDate(y, m - 1, d);
 }
 
 function fromUtc(date: Date): IsoDate {
@@ -54,8 +64,8 @@ export function addDays(date: IsoDate, days: number): IsoDate {
 export function addYears(date: IsoDate, years: number): IsoDate {
   const utc = toUtc(date);
   const year = utc.getUTCFullYear() + years;
-  const lastDay = new Date(Date.UTC(year, utc.getUTCMonth() + 1, 0)).getUTCDate();
-  return fromUtc(new Date(Date.UTC(year, utc.getUTCMonth(), Math.min(utc.getUTCDate(), lastDay))));
+  const lastDay = utcDate(year, utc.getUTCMonth() + 1, 0).getUTCDate();
+  return fromUtc(utcDate(year, utc.getUTCMonth(), Math.min(utc.getUTCDate(), lastDay)));
 }
 
 /** Whole days from `from` to `to` (0 for the same date; negative if `to` is earlier). */
@@ -75,7 +85,7 @@ export function startOfMonth(date: IsoDate): IsoDate {
 
 export function endOfMonth(date: IsoDate): IsoDate {
   const utc = toUtc(startOfMonth(date));
-  return fromUtc(new Date(Date.UTC(utc.getUTCFullYear(), utc.getUTCMonth() + 1, 0)));
+  return fromUtc(utcDate(utc.getUTCFullYear(), utc.getUTCMonth() + 1, 0));
 }
 
 export function startOfYear(date: IsoDate): IsoDate {

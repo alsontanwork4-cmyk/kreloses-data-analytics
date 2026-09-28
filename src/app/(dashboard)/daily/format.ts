@@ -11,7 +11,9 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 export function formatDayWithWeekday(day: IsoDate, style: "long" | "short" = "long"): string {
   if (!isIsoDate(day)) return day;
   const [y, m, d] = day.split("-").map(Number) as [number, number, number];
-  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]!;
+  const date = new Date(0);
+  date.setUTCFullYear(y, m - 1, d); // not Date.UTC: it reads years 0–99 as 19xx
+  const weekday = WEEKDAYS[date.getUTCDay()]!;
   return `${style === "short" ? weekday.slice(0, 3) : weekday} ${formatIsoDate(day)}`;
 }
 

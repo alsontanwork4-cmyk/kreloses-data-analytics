@@ -100,10 +100,17 @@ export function defaultDailyDay(now: Date = new Date()): IsoDate {
   return addDays(clinicToday(now), -1);
 }
 
-/** The day asked for (e.g. the page's `?day=YYYY-MM-DD`; the first one if repeated) if it is a real date, else `defaultDailyDay(now)`. */
+/** The earliest day `resolveDailyDay` accepts (anything before is a typo, not a sales day). */
+export const EARLIEST_DAILY_DAY: IsoDate = "2000-01-01";
+
+/**
+ * The day asked for (e.g. the page's `?day=YYYY-MM-DD`; the first one if repeated) if it is a real
+ * date from `EARLIEST_DAILY_DAY` up to today at the clinic (today allowed: a day in progress), else
+ * `defaultDailyDay(now)` — a future day has no sales, and would still show "data as of".
+ */
 export function resolveDailyDay(value: string | readonly string[] | undefined, now: Date = new Date()): IsoDate {
   const first = typeof value === "string" ? value : value?.[0];
-  return isIsoDate(first) ? first : defaultDailyDay(now);
+  return isIsoDate(first) && first >= EARLIEST_DAILY_DAY && first <= clinicToday(now) ? first : defaultDailyDay(now);
 }
 
 type Period = "day" | "lastWeek" | "lastYear";

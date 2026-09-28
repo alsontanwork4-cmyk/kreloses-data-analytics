@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import Form from "next/form";
 import Link from "next/link";
 
+import { EARLIEST_DAILY_DAY } from "@/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { addDays, withSearchParams, type IsoDate } from "@/filters";
@@ -39,7 +40,7 @@ export function DayPicker({ day, today, yesterday, params }: { day: IsoDate; tod
           ))}
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             Day
-            <Input key={day} type="date" name="day" required defaultValue={day} max={today} className="h-9 w-40" />
+            <Input key={day} type="date" name="day" required defaultValue={day} min={EARLIEST_DAILY_DAY} max={today} className="h-9 w-40" />
           </label>
           <Button type="submit" size="sm" className="h-9">
             Show

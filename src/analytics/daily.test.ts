@@ -316,4 +316,16 @@ describe("The day the Daily page shows", () => {
     expect(resolveDailyDay("yesterday", now)).toBe("2026-09-27");
     expect(resolveDailyDay("", now)).toBe("2026-09-27");
   });
+
+  it("allows today (a day in progress) but not a future or implausibly old day", () => {
+    const now = new Date("2026-09-28T02:00:00Z"); // 28 Sep 2026, 10:00 in KL
+    expect(resolveDailyDay("2026-09-28", now)).toBe("2026-09-28");
+    expect(resolveDailyDay("2026-09-29", now)).toBe("2026-09-27");
+    expect(resolveDailyDay("2099-01-01", now)).toBe("2026-09-27");
+    expect(resolveDailyDay("2000-01-01", now)).toBe("2000-01-01");
+    expect(resolveDailyDay("1999-12-31", now)).toBe("2026-09-27");
+    expect(resolveDailyDay("0100-06-15", now)).toBe("2026-09-27");
+    // "Today" is the clinic's: at 00:30 on the 29th in KL (still the 28th in UTC), the 29th is allowed.
+    expect(resolveDailyDay("2026-09-29", new Date("2026-09-28T16:30:00Z"))).toBe("2026-09-29");
+  });
 });

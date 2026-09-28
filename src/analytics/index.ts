@@ -11,6 +11,7 @@
 export { getOverviewKpis, type BranchKpis, type Kpi, type KpiChange, type KpiSet, type OverviewKpis } from "./overview";
 export {
   dailyComparisonDays,
+  EARLIEST_DAILY_DAY,
   defaultDailyDay,
   getDailySales,
   resolveDailyDay,

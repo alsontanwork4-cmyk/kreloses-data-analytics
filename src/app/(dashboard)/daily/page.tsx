@@ -22,6 +22,7 @@ import { PageShell } from "@/components/shell/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { getDb } from "@/db/client";
 import { clinicToday, formatClinicDateTime, mergeFilterIntoSearchParams, parseFilter, serializeFilter, withSearchParams, type IsoDate } from "@/filters";
+import { clinicNow } from "@/lib/clinic-clock";
 import { formatCount } from "@/lib/format";
 import { formatRinggit, type Money } from "@/lib/money";
 
@@ -81,7 +82,7 @@ export default async function DailyPage({ searchParams }: PageProps<"/daily">) {
   const params = await searchParams;
   const filterState = parseFilter(params);
   const { filter } = filterState;
-  const now = new Date();
+  const now = clinicNow();
   const day = resolveDailyDay(params.day, now);
   const yesterday = defaultDailyDay(now);
   const dayFilter = { ...filter, dateFrom: day, dateTo: day };

@@ -16,13 +16,18 @@ import { run } from "./support/run";
 /**
  * The Daily page, end to end: the fake Kreloses serves the synthetic daily scenario around
  * YESTERDAY at the clinic (src/analytics/testing/daily-scenario.ts; its figures are hand-computed
- * in src/analytics/daily.test.ts for a fixed day — every date in it is relative, so they are the
- * same here) → "Sync now" for the months involved → /daily opens on yesterday with those figures,
- * compared with the same weekday last week and the same date last year → both CSVs have the same
- * numbers → choosing another day, the branch filter and the (ignored) date range.
+ * in src/analytics/daily.test.ts — every date in it is relative to the day) → "Sync now" for the
+ * months involved → /daily opens on yesterday with those figures, compared with the same weekday
+ * last week and the same date last year → both CSVs have the same numbers → choosing another day,
+ * the branch filter and the (ignored) date range.
+ *
+ * "Now" at the clinic is fixed for the app under test (`CLINIC_NOW` = `E2E_CLINIC_NOW`, set in
+ * playwright.config.ts and read by `clinicNow()`), so "yesterday" is the same day here and on the
+ * server whatever the machine clock says: 27 Sep 2026, the unit test's day.
  */
 const { both } = SYNTHETIC_ACCOUNTS;
-const yesterday = addDays(clinicToday(), -1);
+if (!process.env.E2E_CLINIC_NOW) throw new Error("E2E_CLINIC_NOW is not set; run the suite with `npm run test:e2e`");
+const yesterday = addDays(clinicToday(new Date(process.env.E2E_CLINIC_NOW)), -1);
 const lastWeek = addDays(yesterday, -7);
 const lastYear = addYears(yesterday, -1);
 
@@ -224,6 +229,12 @@ test.describe("Daily page", () => {
     await page.getByRole("link", { name: "Yesterday", exact: true }).click();
     await expect(page.getByTestId("daily-day")).toContainText("(yesterday)");
     await expect(page).not.toHaveURL(/[?&]day=/);
+    await expect(revenue.value).toHaveText("RM 1,125.00");
+
+    // A future (or implausible) day in the URL falls back to yesterday.
+    await page.goto("/daily?day=2099-01-01");
+    await expect(page.getByTestId("daily-day")).toContainText(formatIsoDate(yesterday));
+    await expect(page.getByTestId("daily-day")).toContainText("(yesterday)");
     await expect(revenue.value).toHaveText("RM 1,125.00");
 
     // On a phone: the owner's morning check fits, nothing scrolls sideways (tables scroll inside themselves).

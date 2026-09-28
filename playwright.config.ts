@@ -37,6 +37,9 @@ const fakeKrelosesUrl = `http://127.0.0.1:${process.env.E2E_KRELOSES_PORT}`;
 process.env.E2E_CREDENTIALS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64");
 // A throwaway MCP bearer token per run (e2e/mcp.spec.ts sends it to /api/mcp).
 process.env.E2E_MCP_BEARER_TOKEN ||= randomBytes(32).toString("base64");
+// A fixed "now" at the clinic for pages that read `clinicNow()` (the Daily page's "yesterday" is
+// 27 Sep 2026), so e2e/daily.spec.ts never depends on the machine clock or on crossing KL midnight.
+process.env.E2E_CLINIC_NOW ||= "2026-09-28T09:00:00+08:00";
 
 export default defineConfig({
   testDir: "e2e",
@@ -79,6 +82,7 @@ export default defineConfig({
         OWNER_EMAIL: `e2e-owner-${process.env.E2E_RUN_ID}@example.test`,
         CREDENTIALS_ENCRYPTION_KEY: process.env.E2E_CREDENTIALS_ENCRYPTION_KEY,
         MCP_BEARER_TOKEN: process.env.E2E_MCP_BEARER_TOKEN,
+        CLINIC_NOW: process.env.E2E_CLINIC_NOW,
         // Point the Kreloses Reader at the fake (allowed outside production, loopback only).
         KRELOSES_BASE_URL_WWW: fakeKrelosesUrl,
         KRELOSES_BASE_URL_SEA: fakeKrelosesUrl,

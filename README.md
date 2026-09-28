@@ -71,6 +71,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
 | `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
 | `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page) |
+| `CLINIC_NOW` | Tests only: freezes `clinicNow()` (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
 | `MCP_BEARER_TOKEN` | Server only. The secret Claude sends to the MCP server (`openssl rand -base64 32`; at least 32 characters). Unset, blank or shorter → `/api/mcp` refuses every request. It grants read access to ALL clinic data: treat it like a password (see [Connect Claude](#connect-claude-to-the-mcp-server)) |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
@@ -762,7 +763,10 @@ getDailySales(sql, day: IsoDate, filter?: { branchIds?, doctorIds? }): Promise<D
   // DailyMetric<T> = { value, lastWeek: KpiChange<T>, lastYear: KpiChange<T> }   (KpiChange: { base, change, changePercent }; % null when base is 0)
 dailyComparisonDays(day)       // { lastWeek: day − 7, lastYear: same date a year earlier (29 Feb → 28 Feb) }
 defaultDailyDay(now?)          // yesterday at the clinic (Asia/Kuala_Lumpur), whatever the server's time zone
-resolveDailyDay(value, now?)   // value (e.g. ?day=, first if repeated) if a real date, else defaultDailyDay
+resolveDailyDay(value, now?)   // value (e.g. ?day=, first if repeated) if a real date from 2000-01-01 up to today
+                               // at the clinic (today allowed), else defaultDailyDay
+clinicNow()                    // @/lib/clinic-clock (server only): "now" for clinic-relative defaults; CLINIC_NOW
+                               // (ISO instant with zone) freezes it outside production (the e2e suite sets it)
 ```
 
 - Built on `revenueFacts`, so revenue, invoices, customers and AOV per customer mean exactly what they
@@ -779,10 +783,11 @@ resolveDailyDay(value, now?)   // value (e.g. ?day=, first if repeated) if a rea
   week and last year (percentage + amount, arrow + sign + colour); the CSV has, per metric, the value,
   each comparison day's value, the change and the change % (`daily-branches_<day>.csv`,
   `daily-doctors_<day>.csv`).
-- MCP `daily_sales` (#17/#18): `getDailySales(sql, resolveDailyDay(input.day), { branchIds, doctorIds })`.
+- MCP `daily_sales` (#17/#18): `getDailySales(sql, resolveDailyDay(input.day, clinicNow()), { branchIds, doctorIds })`.
 - Tests: `src/analytics/daily.test.ts` (Seam 1, hand-computed figures for the synthetic scenario in
   `src/analytics/testing/daily-scenario.ts`, dates relative to the day), `e2e/daily.spec.ts` (the same
-  scenario around yesterday).
+  scenario around yesterday, with the app's clock fixed by `CLINIC_NOW` = `E2E_CLINIC_NOW` from
+  `playwright.config.ts`: yesterday is 27 Sep 2026).
 
 ### Global filter
 
