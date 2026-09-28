@@ -569,7 +569,7 @@ describe("Nightly sync", () => {
       expect(await getSyncAlerts(db.sql)).toEqual([]);
     });
 
-    it("shows a failed nightly run with its error until a later run succeeds; a failed Sync now is not a banner", async () => {
+    it("shows a failed nightly run with its error until a later run of any kind succeeds (a later failed Sync now does not hide it)", async () => {
       const id = await h.connect(both, "Both");
       let broken = true;
       h.fake.intercept((request) =>
@@ -577,21 +577,57 @@ describe("Nightly sync", () => {
           ? new Response(readFixture("sale-get-changed.json"), { headers: { "Content-Type": "application/json" } })
           : undefined,
       );
-      const failed = ran(await runSync(h.deps(), id, "nightly"));
-      expect(failed).toMatchObject({ status: "failed", error: { code: "layout_changed" } });
-      expect(await getSyncAlerts(db.sql)).toEqual([
-        { connectionId: id, connectionLabel: "Both", kind: "nightly_failed", message: failed.error!.message, since: h.clock.now },
-      ]);
-      expect((await listConnections(db.sql))[0]).toMatchObject({ status: "ok" }); // the login itself works
+      const september = { dateRange: { from: "2026-09-01", to: "2026-09-30" } };
+      // A failed Sync now alone is no banner: the owner saw it fail on the Connections page.
+      expect(ran(await runSync(h.deps(), id, "manual", september))).toMatchObject({ status: "failed" });
+      expect(await getSyncAlerts(db.sql)).toEqual([]);
 
       h.clock.advance(60_000);
-      expect(ran(await runSync(h.deps(), id, "manual", { dateRange: { from: "2026-09-01", to: "2026-09-30" } }))).toMatchObject({ status: "failed" });
-      expect(await getSyncAlerts(db.sql)).toEqual([]); // the owner saw that one fail on the Connections page
+      const failed = ran(await runSync(h.deps(), id, "nightly"));
+      expect(failed).toMatchObject({ status: "failed", error: { code: "layout_changed" } });
+      const alert = { connectionId: id, connectionLabel: "Both", kind: "nightly_failed", message: failed.error!.message, since: h.clock.now };
+      expect(await getSyncAlerts(db.sql)).toEqual([alert]);
+      expect((await listConnections(db.sql))[0]).toMatchObject({ status: "ok" }); // the login itself works
 
+      // The owner tries "Sync now", which fails the same way: the nightly failure still shows.
+      h.clock.advance(60_000);
+      expect(ran(await runSync(h.deps(), id, "manual", september))).toMatchObject({ status: "failed" });
+      expect(await getSyncAlerts(db.sql)).toEqual([alert]);
+
+      // Fixed: a later run that reads its whole listing (here a Sync now) clears it.
+      broken = false;
+      h.clock.advance(60_000);
+      expect(ran(await runSync(h.deps(), id, "manual", september))).toMatchObject({ status: "succeeded" });
+      expect(await getSyncAlerts(db.sql)).toEqual([]);
+
+      // So does a later successful nightly after another failed one.
+      broken = true;
+      h.clock.advance(60_000);
+      ran(await runSync(h.deps(), id, "nightly"));
+      expect(await getSyncAlerts(db.sql)).toHaveLength(1);
       broken = false;
       h.clock.advance(60_000);
       ran(await runSync(h.deps(), id, "nightly"));
       expect(await getSyncAlerts(db.sql)).toEqual([]);
+    });
+
+    it("a later run that stopped at its time limit does not clear it (it did not read its whole listing)", async () => {
+      const id = await h.connect(both, "Both");
+      let broken = true;
+      h.fake.intercept((request) => {
+        if (request.url.pathname !== "/Sale/Get") return undefined;
+        if (broken) return new Response(readFixture("sale-get-changed.json"), { headers: { "Content-Type": "application/json" } });
+        h.clock.advance(10_000);
+        return undefined;
+      });
+      ran(await runSync(h.deps(), id, "nightly"));
+      broken = false;
+      h.clock.advance(60_000);
+      expect(ran(await runSync(h.deps(), id, "manual", { dateRange: { from: "2026-09-01", to: "2026-09-30" }, pageSize: 4, timeBudgetMs: 15_000 }))).toMatchObject({
+        status: "partial",
+        stoppedAtTimeLimit: true,
+      });
+      expect(await getSyncAlerts(db.sql)).toMatchObject([{ kind: "nightly_failed" }]);
     });
   });
 });
