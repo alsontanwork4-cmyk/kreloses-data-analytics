@@ -162,10 +162,15 @@ const RUN_COLUMNS = `
   resumed_from_run_id::text as resumed_from_run_id, chain_started_at
 `;
 
-/** The most recent runs first. */
-export async function listSyncRuns(sql: Sql, options: { limit?: number } = {}): Promise<SyncRun[]> {
+/**
+ * The most recent runs first; `modes` keeps only those kinds (Sync status lists the history
+ * backfill's many small runs apart from the nightly and Sync now runs).
+ */
+export async function listSyncRuns(sql: Sql, options: { limit?: number; modes?: readonly SyncMode[] } = {}): Promise<SyncRun[]> {
   const rows = await sql<SyncRun[]>`
-    select ${sql.unsafe(RUN_COLUMNS)} from sync_runs order by started_at desc, id desc limit ${options.limit ?? 50}
+    select ${sql.unsafe(RUN_COLUMNS)} from sync_runs
+    ${options.modes ? sql`where mode = any(${[...options.modes]}::text[])` : sql``}
+    order by started_at desc, id desc limit ${options.limit ?? 50}
   `;
   return rows.map((row) => ({ ...row, counts: { ...NO_COUNTS, ...row.counts } }));
 }

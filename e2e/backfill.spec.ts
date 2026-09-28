@@ -88,10 +88,16 @@ test.describe("History backfill", () => {
       await expect(backfill.getByTestId("backfill-percent")).toHaveText(/^\d+%$/);
       await expect(backfill.getByRole("progressbar")).toBeVisible();
       await expect(backfill.getByTestId("backfill-nights")).toHaveText(/^about \d+ nights?$/);
-      // Its runs (one per month) are listed with the other syncs, with the Kreloses requests each sent.
-      const monthRuns = page.getByTestId("sync-run").filter({ has: page.getByTestId("sync-run-mode").getByText("History backfill", { exact: true }) });
-      await expect(monthRuns).toHaveCount(monthsDone);
+      // Its runs (one per month) are listed apart (the latest 20), with the Kreloses requests each
+      // sent, so they never push the nightly and Sync now runs off the page.
+      const backfillRuns = page.getByTestId("backfill-runs");
+      await backfillRuns.locator("summary").click();
+      const monthRuns = backfillRuns.getByTestId("sync-run");
+      await expect(monthRuns).toHaveCount(Math.min(monthsDone, 20));
+      await expect(monthRuns.first().getByTestId("sync-run-mode")).toHaveText("History backfill");
       await expect(monthRuns.first().getByTestId("sync-run-requests")).toHaveText(/^\d+$/);
+      await expect(page.getByRole("list", { name: "Sync runs", exact: true })).toHaveCount(0);
+      await expect(page.getByText("No nightly sync or Sync now has run yet")).toBeVisible();
 
       // Budget spent: the next call tonight does nothing.
       expect((await callBackfill(cron)).connections).toEqual([expect.objectContaining({ status: "idle", reason: "budget_spent" })]);

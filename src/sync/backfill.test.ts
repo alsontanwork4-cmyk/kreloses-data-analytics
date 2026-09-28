@@ -107,6 +107,9 @@ describe("History backfill", () => {
     expect(await db.sql`select count(*)::int as n from invoices`).toEqual([{ n: 16 }]);
 
     expect(await readBackfill(db.sql, id)).toMatchObject({ status: "complete", dateFrom: "2024-01-01", dateTo: "2026-10-02", completedAt: NIGHT, startedAt: NIGHT });
+    // One run per month; Sync status lists them apart from the nightly and Sync now runs.
+    expect(await listSyncRuns(db.sql, { limit: 100, modes: ["backfill"] })).toHaveLength(34);
+    expect(await listSyncRuns(db.sql, { modes: ["nightly", "manual"] })).toEqual([]);
     // Idempotent: a complete backfill does nothing more, and running a month again changes nothing.
     const before = h.fake.requests.length;
     expect(await chunk(id)).toEqual({ status: "idle", reason: "complete" });

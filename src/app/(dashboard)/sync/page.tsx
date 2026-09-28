@@ -32,14 +32,19 @@ const STATUS: Record<SyncRunStatus, { label: string; className: string }> = {
 };
 
 const MODE: Record<SyncMode, string> = { manual: "Sync now", nightly: "Nightly", backfill: "History backfill" };
+/** Backfill runs listed under the backfill (the latest; each chunk makes one per month it works on). */
+const BACKFILL_RUNS_SHOWN = 20;
 
 /** Every signed-in user: how fresh each branch's data is, the history backfill, and the recent sync runs. */
 export default async function SyncStatusPage() {
   const user = await requireUser();
   const sql = getDb();
   const backfillConfig = backfillConfigFromEnv();
-  const [runs, freshness, missing, backfill] = await Promise.all([
-    listSyncRuns(sql, { limit: 50 }),
+  // The backfill's many small runs (one per month per chunk) are listed apart, so they never push the
+  // nightly and Sync now runs off the page.
+  const [runs, backfillRuns, freshness, missing, backfill] = await Promise.all([
+    listSyncRuns(sql, { limit: 50, modes: ["nightly", "manual"] }),
+    listSyncRuns(sql, { limit: BACKFILL_RUNS_SHOWN, modes: ["backfill"] }),
     getDataFreshness(sql),
     listPermanentlyMissingInvoices(sql),
     getBackfillProgress(sql, { now: clinicNow(), config: backfillConfig }),
@@ -73,7 +78,7 @@ export default async function SyncStatusPage() {
         </section>
       ) : null}
 
-      {backfill.length > 0 ? (
+      {backfill.length > 0 || backfillRuns.length > 0 ? (
         <section aria-labelledby="backfill-heading" className="flex flex-col gap-2">
           <h2 id="backfill-heading" className="text-base font-medium">
             History backfill
@@ -84,22 +89,45 @@ export default async function SyncStatusPage() {
             requests per login per night and one at a time, so Kreloses is not strained. Months a sync has already read completely are skipped,
             and no invoice page is read twice. The nightly sync always comes first.
           </p>
-          <ul className="flex flex-col gap-3" aria-label="History backfill per connection">
-            {backfill.map((progress) => (
-              <li key={progress.connectionId}>
-                <BackfillCard progress={progress} actions={owner ? { start: startBackfillAction, pause: pauseBackfillAction } : undefined} />
-              </li>
-            ))}
-          </ul>
+          {backfill.length > 0 ? (
+            <ul className="flex flex-col gap-3" aria-label="History backfill per connection">
+              {backfill.map((progress) => (
+                <li key={progress.connectionId}>
+                  <BackfillCard progress={progress} actions={owner ? { start: startBackfillAction, pause: pauseBackfillAction } : undefined} />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {backfillRuns.length > 0 ? (
+            <details data-testid="backfill-runs" className="rounded-xl border bg-card p-4 text-sm">
+              <summary className="cursor-pointer font-medium">
+                Latest backfill runs ({backfillRuns.length === BACKFILL_RUNS_SHOWN ? `last ${BACKFILL_RUNS_SHOWN}` : backfillRuns.length})
+              </summary>
+              <ul className="mt-3 flex flex-col gap-3" aria-label="History backfill runs">
+                {backfillRuns.map((run) => (
+                  <li key={run.id}>
+                    <RunCard run={run} />
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </section>
       ) : null}
 
       {missing.total > 0 ? <PermanentlyMissing total={missing.total} invoices={missing.invoices} /> : null}
 
-      {runs.length === 0 ? (
+      {runs.length === 0 && backfillRuns.length === 0 ? (
         <EmptyState icon={RefreshCw} title="No sync runs yet">
           <p>Runs appear here once a Kreloses connection has been added and synced.</p>
         </EmptyState>
+      ) : runs.length === 0 ? (
+        <section aria-labelledby="runs-heading" className="flex flex-col gap-2">
+          <h2 id="runs-heading" className="text-base font-medium">
+            Recent runs
+          </h2>
+          <p className="text-sm text-muted-foreground">No nightly sync or Sync now has run yet (backfill runs are listed above).</p>
+        </section>
       ) : (
         <section aria-labelledby="runs-heading" className="flex flex-col gap-2">
           <h2 id="runs-heading" className="text-base font-medium">
