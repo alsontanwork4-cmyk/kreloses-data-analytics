@@ -97,7 +97,8 @@ export function branchCondition(sql: Sql, scope: BranchScope, column: ReturnType
   return sql`${column} = any(${scope.ids}::bigint[])`;
 }
 
-function staffCondition(sql: Sql, scope: StaffScope, column: ReturnType<Sql>) {
+/** A boolean SQL condition restricting `column` (a staff id) to the scope. */
+export function staffCondition(sql: Sql, scope: StaffScope, column: ReturnType<Sql>) {
   if (scope.all) return sql`true`;
   if (scope.ids.length === 0) return sql`false`;
   return sql`${column} = any(${scope.ids}::bigint[])`;

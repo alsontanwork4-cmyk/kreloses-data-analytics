@@ -1,3 +1,5 @@
+import { RETENTION_DEFINITIONS } from "./retention-definitions";
+
 /**
  * Plain-language definitions of every metric the Analytics Service returns. The dashboard shows
  * them as explanations and the MCP server (#17) returns them with its answers, so Claude and the
@@ -56,6 +58,7 @@ export const METRIC_DEFINITIONS = {
     "Sales search: individual active sales (invoices) on clinic days (Asia/Kuala_Lumpur) in the period and branches that match every criterion given; cancelled sales are never found. A sale's revenue is its net amount (after discounts): the sum of its credited lines. Its credits split that revenue by the staff member (or group) each line is credited to, so they add up to it. With a doctor filter, a sale matches when at least one of its lines is credited to one of those doctors, and the whole sale is still shown. A sale whose line items are not synced yet has one \"line items not synced yet\" credit for its whole net amount and cannot match a doctor or item search. Customer and item searches match part of the name in any case (walk-in sales have no customer; discount lines are not items); amount limits apply to the sale's revenue and include the limits.",
   lastSyncRun:
     "Last sync run: for each Kreloses connection, what happened to its most recent sync: succeeded (read its whole date range), stopped at its time limit (the next sync of those dates carries on), some invoice pages missing (everything else was read; those sales count as \"line items not synced yet\" until a later sync reads them), failed (with the reason) or still running; and whether the connection's latest login to Kreloses worked.",
+  ...RETENTION_DEFINITIONS,
 } as const;
 
 export type MetricName = keyof typeof METRIC_DEFINITIONS;
