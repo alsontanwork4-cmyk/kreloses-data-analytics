@@ -10,6 +10,7 @@ import type { Sql } from "@/db/sql";
  *   it (of any kind: nightly or Sync now) has succeeded or read its whole listing since. That run's
  *   error. A later Sync now that fails too (or stops at its time limit) does not hide it; one that
  *   works does. A failed Sync now alone is no banner (the owner saw it fail on the Connections page).
+ *   History backfill runs (#8) never hide it: they read old months, not the nightly window.
  *
  * A connection that recovers (a later login or run works) drops out on its own.
  */
@@ -40,10 +41,12 @@ export async function getSyncAlerts(sql: Sql): Promise<SyncAlert[]> {
     where c.status = 'failed'
       or (
         n.id is not null
-        -- … and nothing since has worked: a later run that succeeded or read its whole listing.
+        -- … and nothing since has worked: a later run that succeeded or read its whole listing. Not a
+        -- history backfill run (#8): reading an old month says nothing about the nightly window.
         and not exists (
           select 1 from sync_runs later
           where later.connection_id = c.id
+            and later.mode <> 'backfill'
             and (later.started_at, later.id) > (n.started_at, n.id)
             and (later.status = 'succeeded' or cardinality(later.covered_location_ids) > 0)
         )

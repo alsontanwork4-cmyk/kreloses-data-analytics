@@ -21,7 +21,7 @@ describe("Sync now: months and messages", () => {
   });
 
   it("says what a sync did", () => {
-    const counts = { pages: 1, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0 };
+    const counts = { pages: 1, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0, requests: 0 };
     expect(describeSyncResult({ status: "succeeded", runId: "1", counts, warnings: [] }, "September 2026")).toEqual({
       tone: "ok",
       message: "Synced September 2026: 11 invoices read (11 new, 0 changed, 0 unchanged); line items read for 9 invoices.",
@@ -33,6 +33,7 @@ describe("Sync now: months and messages", () => {
       ),
     ).toEqual({ tone: "error", message: "Sync of September 2026 failed. Kreloses could not be reached." });
     expect(describeSyncResult({ status: "busy", heldFor: "sync", until: new Date() }, "x").message).toMatch(/already running/);
+    expect(describeSyncResult({ status: "busy", heldFor: "backfill", until: new Date() }, "x").message).toMatch(/history backfill is using this connection/);
     // "Sync now" resumes a stopped month, so this is what really happens next.
     expect(
       describeSyncResult({ status: "partial", runId: "1", counts: { ...counts, invoicesSeen: 8 }, warnings: [], stoppedAtTimeLimit: true }, "September 2026"),
@@ -43,7 +44,7 @@ describe("Sync now: months and messages", () => {
   });
 
   it("says so when everything was read but some invoice pages could not be opened, and passes on other warnings", () => {
-    const counts = { pages: 1, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 7, lineItemsFailed: 2, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0 };
+    const counts = { pages: 1, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 7, lineItemsFailed: 2, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0, requests: 0 };
     const missing = { code: "invoice_pages_missing" as const, message: "2 invoice pages could not be opened." };
     expect(describeSyncResult({ status: "partial", runId: "1", counts, warnings: [missing], stoppedAtTimeLimit: false }, "September 2026")).toEqual({
       tone: "warning",

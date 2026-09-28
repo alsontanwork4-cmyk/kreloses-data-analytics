@@ -80,6 +80,14 @@ export class KrelosesSession {
     this.#jar = new CookieJar(options.now);
   }
 
+  /**
+   * HTTP requests this session has sent so far (every hop: its login's, redirects followed, and
+   * failed attempts included). The Sync Engine counts them against the backfill's request budget.
+   */
+  get requestCount(): number {
+    return this.#seq;
+  }
+
   /** The Kreloses app host this session is for (e.g. `sea.kreloses.com`). */
   get appHost(): string {
     return this.#options.sea.host;

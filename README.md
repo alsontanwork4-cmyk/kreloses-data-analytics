@@ -72,8 +72,11 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
 | `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page and the cron route). The nightly cron shares 250 s between all connections, each capped at this |
 | `SYNC_NIGHTLY_WINDOW_DAYS` | Optional: how many days back the nightly sync re-reads the Sale List to notice edits, cancellations and refunds (1–366, default 45) |
-| `CRON_SECRET` | Server only, **required for the nightly sync**: at least 16 random characters (`openssl rand -hex 32`). Vercel Cron sends it as `Authorization: Bearer …` to `/api/cron/nightly`; without it (or with a shorter one) the endpoint refuses every request |
-| `CLINIC_NOW` | Tests only: freezes `clinicNow()` — "today" for the Daily page and the MCP server (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
+| `CRON_SECRET` | Server only, **required for the nightly sync and the history backfill**: at least 16 random characters (`openssl rand -hex 32`). Vercel Cron sends it as `Authorization: Bearer …` to `/api/cron/nightly`, the backfill workflow to `/api/cron/backfill`; without it (or with a shorter one) both endpoints refuse every request |
+| `BACKFILL_REQUEST_DELAY_SECONDS` | Optional: the history backfill's pause between two Kreloses requests of a login (0.5–30, default 2; the nightly sync's is 1) — see [History backfill](#history-backfill-8) |
+| `BACKFILL_MAX_REQUESTS_PER_NIGHT` | Optional: Kreloses requests one login's backfill may send per night (50–50,000, default 2,500) |
+| `BACKFILL_NIGHT_WINDOW` | Optional: `HH:MM-HH:MM` in Kuala Lumpur time (default `00:00-06:00`; may wrap past midnight); outside it the backfill endpoint does nothing. Keep `.github/workflows/backfill.yml`'s schedule (UTC) inside it |
+| `CLINIC_NOW` | Tests only: freezes `clinicNow()` — "today" for the Daily page, the MCP server and the history backfill's night window (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
 | `MCP_BEARER_TOKEN` | Server only. The secret Claude sends to the MCP server (`openssl rand -base64 32`; at least 32 characters). Unset, blank or shorter → `/api/mcp` refuses every request. It grants read access to ALL clinic data: treat it like a password (see [Connect Claude](#connect-claude-to-the-mcp-server)) |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
@@ -117,6 +120,7 @@ supabase/
   templates/      Auth email templates
 scripts/          db:create-dev / db:drop-dev
 e2e/              Playwright smoke suite
+.github/workflows backfill.yml: the history backfill's night-time trigger (inert until the owner opts in)
 ```
 
 Dashboard pages and MCP tools are thin wrappers over the Analytics Service. Never compute a metric
@@ -176,8 +180,9 @@ is untouched. If the invitation email fails the invite still stands and the page
 Public routes are listed in `src/auth/paths.ts`: `PUBLIC_PATHS` (with their sub-paths: `/login`,
 `/auth/*`) and `PUBLIC_EXACT_PATHS` (that path only: `/api/mcp`, the MCP server — bearer token,
 `src/mcp/auth.ts`; `/api/cron/nightly`, the nightly sync (#6) — Vercel Cron's `Authorization: Bearer
-<CRON_SECRET>`, checked constant-time and failing closed by `src/sync/cron.ts`; a route added under
-either later stays behind the sign-in gate). Anything added there (prefer the exact list) is the one
+<CRON_SECRET>`, checked constant-time and failing closed by `src/sync/cron.ts`; `/api/cron/backfill`,
+the history backfill (#8), same header and check; a route added under any of them later stays behind
+the sign-in gate). Anything added there (prefer the exact list) is the one
 exception to "wrap every route handler in `withUser`/`withRole`": it must authenticate itself.
 
 Never redirect to a user-supplied path without `safeNextPath()` (`src/auth/paths.ts`): it refuses
@@ -287,7 +292,8 @@ spec that syncs. A spec that changes item groups (`e2e/mix.spec.ts`) also delete
 
 The app under test talks to a **fake Kreloses** (`e2e/support/fake-kreloses-server.ts`, the same
 fake the unit tests use, on its own port) via `KRELOSES_BASE_URL_WWW/SEA`, with a throwaway
-`CREDENTIALS_ENCRYPTION_KEY` per run. Its synthetic logins are `SYNTHETIC_ACCOUNTS` in
+`CREDENTIALS_ENCRYPTION_KEY` per run (and backfill settings for `e2e/backfill.spec.ts`: night window
+08:00–10:00 around the fixed 09:00 clock, 50 requests a night, 0.5 s pause). Its synthetic logins are `SYNTHETIC_ACCOUNTS` in
 `src/kreloses/testing/fake-kreloses.ts` (`north`, `south`, `both`, `oneTimeCode`, `down`,
 `brokenSaleList` — logs in fine, but its Sale List is in an unknown layout, so every sync of it
 fails —, …). The suite's app gets a throwaway `CRON_SECRET` (`E2E_CRON_SECRET`), so a spec can call
@@ -530,7 +536,12 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   `rate_limited` | `transient` | `key_problem` | `interrupted` | `internal`) + `error` (shown to users).
   At most one `running` run per connection (unique partial index).
 - `connection_locks` — the per-connection lease (above; database clock, renewed by every write of a
-  sync, ADR 0009).
+  sync, ADR 0009). Holders are `sync:…`, `backfill:…` (#8) or `login-test:…`; `yield_requested_at`
+  is set when the nightly sync or Sync now asks a backfill holder to step aside (ADR 0010).
+- `connection_backfills` (#8) — one per connection: `status` (`active` | `paused` | `complete`),
+  `date_from` (2024-01-01), `date_to` (fixed by its first chunk: the clinic day it ran; null before),
+  `requested_at`, `started_at`, `paused_at`, `completed_at`. Month progress is not stored: see
+  [History backfill](#history-backfill-8).
 
 ### Credited lines: the revenue model
 
@@ -624,11 +635,17 @@ runSync(deps: SyncDeps, connectionId, mode: "manual" | "nightly" | "backfill", o
   //            resume? (carry on from the connection's latest run of the same mode — nightly: any window;
   //            else exactly these dates — that stopped part-way: time limit, failed or interrupted with a
   //            checkpoint, chain started < resumeMaxAgeMs (default 6 h) ago; a run that read its whole
-  //            listing is never resumed), sweep? (default: nightly), maxRetries? (default 3) }
-  // → { status: "succeeded" | "partial" | "failed", runId, counts, error?, warnings, stoppedAtTimeLimit?, resumedFromRunId? }
-  //   | { status: "busy", heldFor, until } | { status: "not_found" }
+  //            listing is never resumed), sweep? (default: nightly), maxRetries? (default 3),
+  //            maxRequests? (#8: stop cleanly before sending more Kreloses requests than this),
+  //            backfillYieldWaitMs? (#8, nightly/manual: how long to wait for a backfill to step aside, default 60 s) }
+  // → { status: "succeeded" | "partial" | "failed", runId, counts, error?, warnings, stoppedAtTimeLimit?,
+  //     stopReason? ("time_limit" | "request_limit" | "yielded"), resumedFromRunId? }
+  //   | { status: "busy", heldFor: "sync" | "backfill" | "login-test", until } | { status: "not_found" }
 runNightlySync(deps, { windowDays?, totalBudgetMs? (250 s), maxRunBudgetMs? }): Promise<NightlyConnectionResult[]>
   // @/sync/nightly: every connection (failed ones included), one after another, resume: true
+runBackfill(deps, { config, budgetMs?, pageSize? }): Promise<BackfillOutcome>      // @/sync/backfill (#8): the endpoint's work
+runBackfillChunk(deps, connectionId, { config, budgetMs?, pageSize? }): Promise<BackfillChunkResult>
+getBackfillProgress(sql, { now, config }): Promise<BackfillProgress[]>           // @/sync/backfill-progress: Sync status, Connections
 getSyncAlerts(sql): Promise<SyncAlert[]>          // @/sync/alerts: the dashboard banner's data
 listPermanentlyMissingInvoices(sql): Promise<{ total, invoices }>   // @/sync/lines: Sync status
 listSyncRuns(sql, { limit? }): Promise<SyncRun[]>   // newest first, for the Sync status page
@@ -685,9 +702,14 @@ then the missing line items). `counts.lineItemsRead` counts invoice pages read.
 - **Warnings** (`sync_runs.warnings`, `SyncResult.warnings`, `SyncWarning` in `src/sync/runs.ts`):
   `invoice_pages_missing`, `staff_list_unreadable` (no readable Staff filter in report 14: the run
   carries on, names stay unmatched, nobody is marked inactive), `line_items_left` and
-  `invoice_pages_unreadable` (nightly sweep, above). Sync status and the "Sync now" message show them.
+  `invoice_pages_unreadable` (nightly sweep, above), `backfill_request_budget` and `backfill_yielded`
+  (#8: a backfill run stopped at tonight's request budget, or to let another sync use the login).
+  Sync status and the "Sync now" message show them.
 - **Counts** (`SyncCounts`): `pages, invoicesSeen, inserted, updated, unchanged, lineItemsRead,
-  lineItemsFailed, lineItemGaps, lineItemsSwept, lineItemsUnreadable` (#6). Older rows lack the new keys; `listSyncRuns` fills them with 0. Each page is upserted
+  lineItemsFailed, lineItemGaps, lineItemsSwept, lineItemsUnreadable` (#6), `requests` (#8: HTTP
+  requests sent to Kreloses — its login's, redirects and retries included; a login that fails is not
+  counted — from `KrelosesSession.requestCount`) and `saleListTotal` (#8, optional: Kreloses's
+  TotalCount for the run's dates at its last Sale List page). Older rows lack the new keys; `listSyncRuns` fills the counts with 0. Each page is upserted
 **idempotently** (`on conflict … do update … where (…) is distinct from (…)`: a re-run writes
 nothing and counts `unchanged`; a change only in fields the app does not parse refreshes
 `raw_header` without counting as a change or moving `fetched_at`) together with the run's counts
@@ -711,21 +733,20 @@ every request refused with 401) and runs `runNightlySync`: every connection, fai
 (a fixed login recovers by itself; one that still fails stays failed with the new error), one after
 another under its own lease, sharing a 250 s budget (each gets the time left ÷ connections still to
 go, at least 20 s, at most `SYNC_TIME_BUDGET_SECONDS`). To run it by hand:
-`curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/nightly`.
+`curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/nightly`. The history backfill
+(#8) has its own trigger (GitHub Actions, below) because Hobby allows no second, more frequent cron.
 
 **Failure banner** (#6): `getSyncAlerts(sql)` — a connection whose login fails (`status = failed`),
-or whose latest finished NIGHTLY run failed with no later run (any mode) that succeeded or read its
+or whose latest finished NIGHTLY run failed with no later run (nightly or Sync now; never a history
+backfill run, #8, which reads old months) that succeeded or read its
 whole listing (a later failed or time-limited Sync now does not hide it) — is rendered by the
 dashboard layout on every page for everyone signed in (`<SyncAlertBanner>`,
 `src/components/sync-alert-banner.tsx`): the error in plain words; owners get a link to Connections,
 managers the message only.
 
-**Extension points.** #5 (line items) and #6 (nightly, cron, resume, sweep, fencing) are in place
-(above; `SyncReader` has `listLocations`, `listStaff`, `listInvoices`, `getInvoice`). #8 (backfill):
-`mode: "backfill"` over bounded date ranges with `resume: true` (page-based checkpoint; pass a
-larger `resumeMaxAgeMs` — past ranges do not go stale) and `sweep: false`; `partial` + checkpoint says
-where the chunk stopped; a more frequent backfill cron can reuse `handleNightlyCron`'s
-authentication. Tests: `createSyncHarness(sql, { requestDelayMs? })` / `clearSyncTables(sql)` /
+**Extension points.** #5 (line items), #6 (nightly, cron, resume, sweep, fencing) and #8 (history
+backfill, below) are in place (`SyncReader` has `listLocations`, `listStaff`, `listInvoices`,
+`getInvoice`). Tests: `createSyncHarness(sql, { requestDelayMs? })` / `clearSyncTables(sql)` /
 `snapshotSyncedData(sql)` (every synced row by natural keys, for "identical state" assertions) in
 `src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps; `h.fake.saleOverviews`
 edits line items; `clearSyncTables` empties staff too). The lease follows the DATABASE clock: to
@@ -738,6 +759,92 @@ it gives `quantity` + `unitPrice`) → `createSyncHarness(sql, { fake: { saleLis
 classification under the current rules (`reclassifyAllItems`, in `runSync`; writes only what
 changed), and `saveInvoiceLines` classifies new item names in its transaction (`classifyItemNames`) — see
 [Item groups](#item-groups-and-service-mix-srcitems-9).
+
+### History backfill (#8)
+
+Spec stories 10–12: every connection's sales from **1 January 2024** are loaded on first connection,
+spread over several nights at a gentle rate, with progress on Sync status. Code: `src/sync/backfill.ts`
+(`runBackfill`, `runBackfillChunk`, `backfillMonths`, `completedMonths`), `backfill-config.ts` (settings,
+night window), `backfill-store.ts` (`connection_backfills`), `backfill-progress.ts`
+(`getBackfillProgress`), the endpoint `src/app/api/cron/backfill/route.ts` (`handleBackfillCron` in
+`cron.ts`) and the trigger `.github/workflows/backfill.yml`. ADR 0010.
+
+- **Starts by itself** the first time a connection's login test works (`ensureBackfill` in
+  `runLoginTest`, `src/connections/service.ts`; the migration also starts one for connections already
+  connected). The owner can **Pause backfill** / **Start backfill** on Sync status (a pause keeps its
+  progress; start carries on).
+- **Month by month, newest first.** The first chunk fixes the dates: 1 Jan 2024 → the clinic day it
+  ran (`date_to`). Each chunk takes the newest month not done yet and runs the Sync Engine over exactly
+  that month (`mode: "backfill"`, `resume: true` with a 7-day chain limit, page checkpoints — past
+  months are fixed ranges — `sweep: false`, one retry per request), then the next month while its
+  time and request budget last, reusing one Kreloses session (one login per chunk).
+- **A month is done** when any complete run of the connection (succeeded, or read its whole listing
+  with some pages missing) covered all its days: the backfill's own, a nightly whose 45-day window
+  contained it, or a Sync now of that month. So months the nightly sync already read are skipped, and
+  within a month only invoices whose lines are not current are opened (`invoicesNeedingLines`):
+  **no invoice page is read twice for the same header**, whichever mode got there first. Rerunning a
+  month changes nothing (tested). Deviation from the ticket's "up to the start of the nightly
+  window": the backfill ends on the day its first chunk ran, overlapping the window, because a
+  connection's first nightly runs cannot read a whole 45-day window in their 250 s (the oldest days
+  would fall out of the window unread); the overlap costs only Sale List pages.
+- **Politeness** (`backfillConfigFromEnv`): the backfill's Kreloses sessions pause
+  `BACKFILL_REQUEST_DELAY_SECONDS` (default **2 s**, the nightly's is 1 s) after each answer; one login
+  sends at most `BACKFILL_MAX_REQUESTS_PER_NIGHT` (default **2,500**) requests per night — counted in
+  real HTTP requests (`counts.requests`), a run stops before the next request once reached (warning
+  `backfill_request_budget`); nothing at all happens outside `BACKFILL_NIGHT_WINDOW` (default
+  **00:00–06:00** Kuala Lumpur time). A call runs for at most 240 s; logins that see different
+  branches run side by side (requests stay serial per login), logins that share a branch take turns
+  (so they never open the same invoice page at once). A chunk does nothing while the
+  connection's login fails (no retrying a bad password every 15 minutes), and after a backfill run
+  failed tonight because Kreloses asked to slow down (`rate_limited`) or changed its pages
+  (`layout_changed`) it waits for the next night; passing errors are retried by the next chunk.
+- **The maths.** ~35,000 invoice pages over two logins = ~17,500 per login, plus one Sale List page
+  per 500 invoices. 24 chunks a night (every 15 minutes, 00:00–05:45) × 240 s ÷ ~2.5 s a request
+  (2 s pause + ~0.5 s answer) ≈ 2,300 requests a night per login, capped at 2,500: **about 7–8
+  nights** (more if GitHub delays or skips scheduled runs). On average one request every ~9 s per
+  login over the night. Test: `backfill-config.test.ts`.
+- **The nightly sync comes first.** Runs never overlap for one connection (the lease). A backfill
+  run holds it as `backfill:…`; when the nightly sync (or Sync now) finds it held by a backfill it asks
+  it to step aside (`requestBackfillYield`) and waits up to 60 s: the backfill sees the request at its
+  next lease renewal, stops cleanly before its next request (`partial`, checkpoint kept, warning
+  `backfill_yielded`) and releases the lease (ADR 0010). A chunk that finds the connection held by
+  another sync exits at once (`busy`, no run). The nightly's sweep may read line items of sales the
+  backfill has listed but not read yet (older sales "not synced yet") — no page is read twice.
+- **"Data as of"** is unchanged: a completed month counts for periods within it from its run (or, for
+  a month carried on over several chunks, its chain's first run); months far in the past never make
+  "now" look fresh. Backfill runs never hide a failed nightly sync's banner (`getSyncAlerts`).
+- **Progress** (`getBackfillProgress`; Sync status card per connection, one line on Connections):
+  months done / total and the month it is on; **invoices done / total** (done = cancelled, lines read,
+  or page permanently missing, at the login's branches; total = per month what a complete read stored,
+  else Kreloses's TotalCount once the backfill has listed the month, and the average of those for
+  months not listed yet — shown as "about" until every month is listed); line items read; requests
+  used tonight (or last night) / budget; nights left (invoices to go ÷ budget, rounded up); the last
+  chunk's time and error.
+- **Trigger.** Vercel Hobby allows one cron a day (the nightly), so `.github/workflows/backfill.yml`
+  calls `GET /api/cron/backfill` every 15 minutes from 16:00 to 21:45 UTC (00:00–05:45 KL) plus by
+  hand (`workflow_dispatch`), with `Authorization: Bearer <CRON_SECRET>` (the nightly's secret and
+  check). It is **inert until the owner opts in** (the repository is public): the job runs only when
+  the repository variable `BACKFILL_ENABLED` is `true`; it needs no repository permissions, never
+  overlaps itself, prints only the HTTP status (never the secrets or the answer: public logs), uses
+  HTTPS only and fails on anything but 2xx so the owner gets GitHub's failure email. The endpoint
+  answers at once outside the window, when tonight's budget is spent or when every backfill is
+  complete. The optional "chunk after the nightly cron" was not added: the nightly's own sweep already
+  spends its leftover time reading line items of sales the backfill listed.
+- **Owner setup (production, after #7)** — GitHub → the repository → Settings → Secrets and
+  variables → Actions:
+  1. Secret `APP_URL` = the production URL (`https://…`, no path).
+  2. Secret `CRON_SECRET` = exactly the app's `CRON_SECRET` (Vercel → Environment Variables).
+  3. Variable `BACKFILL_ENABLED` = `true` (set it to anything else, or delete it, to stop the trigger).
+  4. Optionally run it once by hand: Actions → "History backfill" → Run workflow (outside the night
+     window it answers 200 and does nothing).
+  The optional `BACKFILL_*` variables go in Vercel. If you change `BACKFILL_NIGHT_WINDOW`, change the
+  workflow's cron (UTC) to match.
+- By hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/backfill`.
+- Tests: `src/sync/backfill.test.ts` (Seam 1, `__fixtures__/backfill-sales.ts`: several chunks = one
+  uninterrupted load, crash resume, window, budget, nightly mid-backfill, yielding, progress, auto
+  start, pause/start), `backfill-config.test.ts`, `backfill-workflow.test.ts` (the workflow's YAML, and
+  its step run with a stand-in `curl`), `cron.test.ts` (endpoint auth), `e2e/backfill.spec.ts` (the
+  e2e app's window is 08:00–10:00 around its fixed 09:00 clock, budget 50, delay 0.5 s).
 
 ### Analytics Service (`src/analytics/`)
 
@@ -1510,6 +1617,9 @@ When a hosted Supabase project and Vercel are set up:
 - Set `CRON_SECRET` (`openssl rand -hex 32`) as a sensitive variable: Vercel Cron sends it to the
   nightly sync (`vercel.json`, once a day at 19:00 UTC = 03:00 KL, ±59 min on Hobby). Without it the
   nightly endpoint refuses every call and nothing syncs by itself.
+- History backfill (#8): in GitHub (Settings → Secrets and variables → Actions) add the secrets
+  `APP_URL` and `CRON_SECRET` (the same value as in Vercel) and the variable `BACKFILL_ENABLED=true`
+  (see [History backfill](#history-backfill-8)); optionally set `BACKFILL_*` in Vercel.
 - Set `CREDENTIALS_ENCRYPTION_KEY` (`openssl rand -base64 32`, a fresh one — never reuse a local
   key) as a sensitive, server-only variable. Losing or changing it means re-entering every
   Kreloses password. Never set `KRELOSES_BASE_URL_*` there (the app refuses to start a login with

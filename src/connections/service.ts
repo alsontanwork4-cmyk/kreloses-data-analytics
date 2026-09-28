@@ -1,6 +1,7 @@
 import { normaliseEmail } from "@/auth/allow-list";
 import type { Queryable, Sql } from "@/db/sql";
 import { listLocations, login, type KrelosesSession, type ReaderOptions } from "@/kreloses";
+import { ensureBackfill } from "@/sync/backfill-store";
 
 import { CredentialsKeyError, decryptSecret, encryptSecret, type Keyring } from "./encryption";
 import { ConnectionBusy, withConnectionLease } from "./lock";
@@ -160,7 +161,11 @@ async function runLoginTest(context: ConnectionsContext, id: string): Promise<Co
         if (error instanceof ConnectionNotFound) return null;
         outcome = failed(error, id);
       }
-      return recordTestOutcome(context.sql, id, outcome);
+      const summary = await recordTestOutcome(context.sql, id, outcome);
+      // The first time the login works, its history from 1 Jan 2024 is asked for (#8, spec story 10);
+      // a backfill that exists already (running, paused by the owner, complete) is left alone.
+      if (summary?.status === "ok") await ensureBackfill(context.sql, id);
+      return summary;
     },
   );
   if (result.status === "not_found") return null;

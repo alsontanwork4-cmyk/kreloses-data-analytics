@@ -1,0 +1,57 @@
+# History backfill trigger (#8).
+#
+# Vercel's Hobby plan runs a cron job at most once a day (that slot is the nightly sync), so this
+# workflow calls the app's backfill endpoint every 15 minutes during the night window instead. Each
+# call runs ONE small chunk per connection and returns; outside the window, or once tonight's
+# request budget is used up or every backfill is complete, the endpoint does nothing.
+#
+# Inert until the owner opts in (the repository is public): the job only runs when the repository
+# VARIABLE `BACKFILL_ENABLED` is `true`, and it needs two repository SECRETS: `APP_URL` (the
+# production URL, https://…) and `CRON_SECRET` (the same value as the app's CRON_SECRET). See README
+# "History backfill". Nothing secret is printed: GitHub masks secrets, and the step prints only the
+# HTTP status (the logs of a public repository are public).
+
+name: History backfill
+
+on:
+  schedule:
+    # Every 15 minutes from 16:00 to 21:45 UTC = 00:00–05:45 in Kuala Lumpur (UTC+8), inside the
+    # app's default night window (BACKFILL_NIGHT_WINDOW=00:00-06:00). Change both together.
+    - cron: "*/15 16-21 * * *"
+  workflow_dispatch:
+
+# The job needs no access to the repository.
+permissions: {}
+
+# Never two calls at once (a slow chunk and the next trigger): the next one waits.
+concurrency:
+  group: history-backfill
+  cancel-in-progress: false
+
+jobs:
+  chunk:
+    name: Run one backfill chunk
+    if: vars.BACKFILL_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Call /api/cron/backfill
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL}" ] || [ -z "${CRON_SECRET}" ]; then
+            echo "::error::Set the repository secrets APP_URL and CRON_SECRET (README, History backfill)."
+            exit 1
+          fi
+          # -f: fail on HTTP errors; HTTPS only, so the secret never travels in clear text. The body
+          # (connection names and counts) is not printed.
+          status=$(curl -fsS --proto '=https' --max-time 320 -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL%/}/api/cron/backfill")
+          echo "Backfill endpoint answered HTTP ${status}"
+          case "${status}" in
+            2??) ;;
+            *) echo "::error::The backfill endpoint answered HTTP ${status} (expected 2xx)"; exit 1 ;;
+          esac

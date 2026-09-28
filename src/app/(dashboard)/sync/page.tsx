@@ -3,17 +3,24 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import { getDataFreshness } from "@/analytics";
+import { hasRole } from "@/auth/roles";
 import { requireUser } from "@/auth/session";
+import { BackfillCard } from "@/components/backfill/backfill-card";
 import { EmptyState } from "@/components/empty-state";
 import { PageShell } from "@/components/shell/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { getDb } from "@/db/client";
 import { formatClinicDateTime, formatDateRange, formatIsoDate } from "@/filters";
+import { clinicNow } from "@/lib/clinic-clock";
 import { formatCount, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { listSyncRuns, type SyncMode, type SyncRun, type SyncRunStatus } from "@/sync";
+import { backfillConfigFromEnv, formatNightWindow } from "@/sync/backfill-config";
+import { getBackfillProgress } from "@/sync/backfill-progress";
 import { listPermanentlyMissingInvoices, MAX_PAGE_MISSING_ATTEMPTS, type PermanentlyMissingInvoice } from "@/sync/lines";
 import { nightlyWindowDays } from "@/sync/nightly";
+
+import { pauseBackfillAction, startBackfillAction } from "./actions";
 
 export const metadata: Metadata = { title: "Sync status" };
 
@@ -26,11 +33,18 @@ const STATUS: Record<SyncRunStatus, { label: string; className: string }> = {
 
 const MODE: Record<SyncMode, string> = { manual: "Sync now", nightly: "Nightly", backfill: "History backfill" };
 
-/** Every signed-in user: how fresh each branch's data is, and the recent sync runs. */
+/** Every signed-in user: how fresh each branch's data is, the history backfill, and the recent sync runs. */
 export default async function SyncStatusPage() {
-  await requireUser();
+  const user = await requireUser();
   const sql = getDb();
-  const [runs, freshness, missing] = await Promise.all([listSyncRuns(sql, { limit: 50 }), getDataFreshness(sql), listPermanentlyMissingInvoices(sql)]);
+  const backfillConfig = backfillConfigFromEnv();
+  const [runs, freshness, missing, backfill] = await Promise.all([
+    listSyncRuns(sql, { limit: 50 }),
+    getDataFreshness(sql),
+    listPermanentlyMissingInvoices(sql),
+    getBackfillProgress(sql, { now: clinicNow(), config: backfillConfig }),
+  ]);
+  const owner = hasRole(user, "owner");
 
   return (
     <PageShell
@@ -53,6 +67,27 @@ export default async function SyncStatusPage() {
                 <span className="block text-muted-foreground">
                   {branch.dataAsOf ? formatClinicDateTime(branch.dataAsOf) : "Not synced up to today yet"}
                 </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {backfill.length > 0 ? (
+        <section aria-labelledby="backfill-heading" className="flex flex-col gap-2">
+          <h2 id="backfill-heading" className="text-base font-medium">
+            History backfill
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Each connection&apos;s sales from 1 January 2024 are loaded month by month, newest first, in short chunks between{" "}
+            {formatNightWindow(backfillConfig.nightWindow)} (Kuala Lumpur time), at most {formatCount(backfillConfig.maxRequestsPerNight)} Kreloses
+            requests per login per night and one at a time, so Kreloses is not strained. Months a sync has already read completely are skipped,
+            and no invoice page is read twice. The nightly sync always comes first.
+          </p>
+          <ul className="flex flex-col gap-3" aria-label="History backfill per connection">
+            {backfill.map((progress) => (
+              <li key={progress.connectionId}>
+                <BackfillCard progress={progress} actions={owner ? { start: startBackfillAction, pause: pauseBackfillAction } : undefined} />
               </li>
             ))}
           </ul>
@@ -162,6 +197,9 @@ function RunCard({ run }: { run: SyncRun }) {
         <Item label="Lines ≠ invoice net" testId="sync-run-line-gaps">
           {formatCount(counts.lineItemGaps)} {counts.lineItemGaps === 1 ? "invoice" : "invoices"}
         </Item>
+        <Item label="Kreloses requests" testId="sync-run-requests">
+          {formatCount(counts.requests)}
+        </Item>
       </dl>
       {run.chainStartedAt ? (
         <p className="text-muted-foreground" data-testid="sync-run-resumed">
@@ -169,7 +207,17 @@ function RunCard({ run }: { run: SyncRun }) {
           those runs started.
         </p>
       ) : null}
-      {run.status === "partial" && run.checkpoint && !readWholeListing ? (
+      {run.status === "partial" && run.checkpoint && !readWholeListing && run.mode === "backfill" ? (
+        <p className="text-muted-foreground">
+          Stopped{" "}
+          {run.warnings.some((warning) => warning.code === "backfill_request_budget")
+            ? "at tonight's request budget"
+            : run.warnings.some((warning) => warning.code === "backfill_yielded")
+              ? "to let another sync use the login"
+              : "at its time limit"}{" "}
+          at page {run.checkpoint.nextPage}; the history backfill carries on from there in its next chunk.
+        </p>
+      ) : run.status === "partial" && run.checkpoint && !readWholeListing ? (
         <p className="text-muted-foreground">
           Stopped at its time limit
           {run.mode === "nightly" ? "" : ` at page ${run.checkpoint.nextPage}`}; the next {run.mode === "nightly" ? "nightly sync" : "sync of these dates"}{" "}
