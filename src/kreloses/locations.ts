@@ -22,21 +22,50 @@ export function fetchFilterTemplate(session: KrelosesSession, report: number): P
   return session.postJson("/Report/GetFilter", { report });
 }
 
+const saleListTemplates = new WeakMap<KrelosesSession, Promise<unknown>>();
+
+/**
+ * The Sale List's filter template, fetched once per session (it only changes when Kreloses does):
+ * `listLocations` and every `listInvoices` page share it. A failed fetch is not remembered.
+ */
+export function saleListFilterTemplate(session: KrelosesSession): Promise<unknown> {
+  let template = saleListTemplates.get(session);
+  if (!template) {
+    template = fetchFilterTemplate(session, SALE_LIST_REPORT);
+    saleListTemplates.set(session, template);
+    template.catch(() => saleListTemplates.delete(session));
+  }
+  return template;
+}
+
 /** The Kreloses locations (branches) this session's login can see, from the Sale List's Location filter. */
 export async function listLocations(session: KrelosesSession): Promise<KrelosesLocation[]> {
-  return parseLocations(await fetchFilterTemplate(session, SALE_LIST_REPORT));
+  return parseLocations(await saleListFilterTemplate(session));
 }
 
 // The exact JSON of GetFilter has not been recorded yet (see src/kreloses/__fixtures__/README.md),
 // so the parser accepts the usual ASP.NET spellings for each part and fails loudly otherwise.
 const WRAPPER_KEYS = ["Data", "data", "Result", "result"];
 const FILTER_LIST_KEYS = ["Filters", "filters", "Items", "items", "Fields", "fields"];
-const FILTER_LABEL_KEYS = ["Name", "name", "Title", "title", "Label", "label", "DisplayName", "displayName", "Caption", "caption", "FieldName", "fieldName"];
-const OPTION_LIST_KEYS = ["Options", "options", "Items", "items", "Values", "values", "Choices", "choices"];
-const OPTION_ID_KEYS = ["Id", "id", "Value", "value", "Key", "key", "LocationId", "locationId"];
-const OPTION_NAME_KEYS = ["Name", "name", "Text", "text", "Label", "label", "DisplayName", "displayName"];
-const LOCATION_LABEL = /\blocations?\b/i;
+export const FILTER_LABEL_KEYS = ["Name", "name", "Title", "title", "Label", "label", "DisplayName", "displayName", "Caption", "caption", "FieldName", "fieldName"];
+export const OPTION_LIST_KEYS = ["Options", "options", "Items", "items", "Values", "values", "Choices", "choices"];
+export const OPTION_ID_KEYS = ["Id", "id", "Value", "value", "Key", "key", "LocationId", "locationId"];
+export const OPTION_NAME_KEYS = ["Name", "name", "Text", "text", "Label", "label", "DisplayName", "displayName"];
+export const LOCATION_LABEL = /\blocations?\b/i;
 const ALL_OPTION = /^\s*all(\s+locations?)?\s*$/i;
+
+/**
+ * The list of filters in a GetFilter response (the array itself, so changes to its items change
+ * `payload`), unwrapping one `{data: …}`-style envelope. Null if there is none.
+ */
+export function findFilterList(payload: unknown): unknown[] | null {
+  let root = payload;
+  if (isRecord(payload) && !firstArray(payload, FILTER_LIST_KEYS)) {
+    const wrapped = WRAPPER_KEYS.map((key) => payload[key]).find((inner) => isRecord(inner) || Array.isArray(inner));
+    if (wrapped !== undefined) root = wrapped;
+  }
+  return Array.isArray(root) ? root : isRecord(root) ? firstArray(root, FILTER_LIST_KEYS) : null;
+}
 
 /** Extracts the Location filter's options from a GetFilter response. Raises `LayoutChanged` if absent. */
 export function parseLocations(payload: unknown): KrelosesLocation[] {
@@ -44,13 +73,7 @@ export function parseLocations(payload: unknown): KrelosesLocation[] {
     throw new LayoutChanged(`GetFilter: ${message}`, { shape: describeJsonShape(payload) });
   };
 
-  // Unwrap `{data: …}`-style envelopes once.
-  let root = payload;
-  if (isRecord(payload) && !firstArray(payload, FILTER_LIST_KEYS)) {
-    const wrapped = WRAPPER_KEYS.map((key) => payload[key]).find((inner) => isRecord(inner) || Array.isArray(inner));
-    if (wrapped !== undefined) root = wrapped;
-  }
-  const filters = Array.isArray(root) ? root : isRecord(root) ? firstArray(root, FILTER_LIST_KEYS) : null;
+  const filters = findFilterList(payload);
   if (!filters) return fail("no list of filters in the response");
 
   const location = filters.find((filter) => isRecord(filter) && LOCATION_LABEL.test(firstString(filter, FILTER_LABEL_KEYS) ?? ""));

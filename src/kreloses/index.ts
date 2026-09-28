@@ -4,11 +4,21 @@
  *
  *   const session = await login({ email, password }, readerOptionsFromEnv(process.env));
  *   const locations = await listLocations(session);
+ *   const { invoices, hasMore } = await listInvoices(session, { page: 1, dateRange, includeCancelled: true });
  *
  * See `README.md` ("Kreloses Reader") for the login flow, the fixtures and the live smoke test.
  */
 export { login, type KrelosesCredentials } from "./login";
 export { listLocations, fetchFilterTemplate, SALE_LIST_REPORT, type KrelosesLocation } from "./locations";
+export {
+  listInvoices,
+  SALE_LIST_PAGE_SIZE,
+  type InvoiceDateRange,
+  type InvoiceListQuery,
+  type InvoicePage,
+  type KrelosesInvoice,
+  type SaleStatus,
+} from "./sale-list";
 export type { KrelosesSession, HopEvent } from "./session";
 export {
   readerOptionsFromEnv,

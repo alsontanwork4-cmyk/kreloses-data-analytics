@@ -191,4 +191,79 @@ describe("live login diagnostic (redacted)", () => {
     expect(report).toContain("Session probe: still valid after 10 min");
     expect(report).toContain("Session probe: FAILED after 20 min — AuthFailed (session_expired)");
   });
+
+  describe("Sale List page (structure only)", () => {
+    const SEPTEMBER = { from: "2026-09-01", to: "2026-09-30" };
+    // Anything that identifies a sale, a customer, a branch or an amount.
+    const DATA = [
+      "Customer 0001",
+      "Customer 0005",
+      "Branch North",
+      "Branch South",
+      "INV-N-0101",
+      "700101",
+      "90001",
+      "1101",
+      "1,250.00",
+      "1,200.00",
+      "380.50",
+      "(120.00)",
+      "1788193800000",
+    ];
+
+    it("reads one page and prints fields, counts, formats and statuses — never names, amounts or ids", async () => {
+      const fake = createFakeKreloses();
+      const diagnostic = await runLoginDiagnostic(both, {
+        reader: { requestDelayMs: 0, transport: fake.transport },
+        saleListRange: SEPTEMBER,
+      });
+      const report = formatLoginDiagnostic(diagnostic);
+
+      expect(report).toContain("6. POST sea.kreloses.com/Sale/Get -> 200");
+      expect(report).toContain("Sale List (POST /Sale/Get, one page of 2026-09-01..2026-09-30, all statuses):");
+      expect(report).toContain("  TotalCount: 11; rows on the page: 11");
+      expect(report).toContain(
+        "  Expected fields present: SaleId, SaleName, Location, LocationId, CustomerId, CustomerName, SaleDate, SaleStatusName, GrossAmount, Discounts, NetAmount, TaxAmount, Total, PaymentStatusName, TotalPayments, TotalRefunds",
+      );
+      expect(report).toContain("  Expected fields missing: none");
+      expect(report).toContain("  Other fields: none");
+      expect(report).toContain("  SaleDate formats: /Date(9999999999999)/");
+      expect(report).toContain(
+        "  Amounts: strings; thousand separators: yes; negatives in parentheses: yes; minus signs: no; currency prefix: no",
+      );
+      expect(report).toContain("  Sale statuses seen: Active, Cancelled (cancelled sales present: yes)");
+      expect(report).toContain("  Payment statuses seen: Paid, Partially paid, Refunded, Unpaid");
+      expect(report).toContain("  Filter template: Sale status options Active, Cancelled (selected via option flag Selected); Date filter From/To like 99/99/9999");
+      expect(report).toContain("  Reader parse: OK (11 invoices)");
+      for (const secret of [...DATA, ...SECRETS]) expect(report, secret).not.toContain(secret);
+    });
+
+    it("reports a Sale List the Reader cannot parse, still without values", async () => {
+      const fake = createFakeKreloses();
+      fake.intercept((request) =>
+        request.url.pathname === "/Sale/Get"
+          ? Response.json({
+              Results: [{ SaleId: 700101, Customer: "Customer 0001", SaleDate: "2026-09-01 00:30", Net: "1,200.00", Stamp: "Customer 0001 paid" }],
+              TotalCount: 1,
+            })
+          : undefined,
+      );
+      const diagnostic = await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport }, saleListRange: SEPTEMBER });
+      const report = formatLoginDiagnostic(diagnostic);
+      expect(report).toContain("  Expected fields missing: SaleName, Location, LocationId");
+      expect(report).toContain("  Other fields: Customer, Net, Stamp");
+      expect(report).toContain("  SaleDate formats: 9999-99-99 99:99");
+      expect(report).toMatch(/ {2}Reader parse: FAILED — LayoutChanged — Sale\/Get row 1: no SaleName/);
+      for (const secret of [...DATA, "paid"]) expect(report, secret).not.toContain(secret);
+    });
+
+    it("says so when the Sale List request itself fails", async () => {
+      const fake = createFakeKreloses();
+      fake.intercept((request) => (request.url.pathname === "/Sale/Get" ? new Response("Not found", { status: 404 }) : undefined));
+      const report = formatLoginDiagnostic(
+        await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport }, saleListRange: SEPTEMBER }),
+      );
+      expect(report).toMatch(/Sale List: FAILED — LayoutChanged — POST sea\.kreloses\.com\/Sale\/Get returned HTTP 404/);
+    });
+  });
 });

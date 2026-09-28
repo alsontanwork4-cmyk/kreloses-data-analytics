@@ -7,10 +7,13 @@ import {
   LayoutChanged,
   RateLimited,
   Transient,
+  SALE_LIST_REPORT,
+  fetchFilterTemplate,
   listLocations,
   login,
   type HopEvent,
 } from "./index";
+import { parseLocations } from "./locations";
 import { SYNTHETIC_ACCOUNTS, createFakeKreloses, fixtureResponse, readFixture } from "./testing/fake-kreloses";
 
 /** Seam 2: the Reader's login against the synthetic fixtures served by the fake Kreloses. */
@@ -316,9 +319,14 @@ describe("Kreloses Reader: login", () => {
       }
     };
     const session = await login(north, { requestDelayMs: 60, transport });
-    const results = await Promise.all([listLocations(session), listLocations(session), listLocations(session)]);
+    // fetchFilterTemplate always goes to Kreloses (listLocations reuses the session's cached template).
+    const results = await Promise.all([1, 2, 3].map(() => fetchFilterTemplate(session, SALE_LIST_REPORT)));
 
-    expect(results).toEqual([[{ id: "1101", name: "Branch North" }], [{ id: "1101", name: "Branch North" }], [{ id: "1101", name: "Branch North" }]]);
+    expect(results.map((template) => parseLocations(template))).toEqual([
+      [{ id: "1101", name: "Branch North" }],
+      [{ id: "1101", name: "Branch North" }],
+      [{ id: "1101", name: "Branch North" }],
+    ]);
     expect(maxInFlight).toBe(1);
     // The three GetFilter calls (the last three requests) each waited for the delay.
     const lastStarts = starts.slice(-3);

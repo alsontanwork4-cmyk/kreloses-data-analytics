@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": 700101,
+        "number": "INV-N-0101",
+        "branch": { "id": 1101, "name": "Branch North" },
+        "customer": { "id": 90001, "name": "Customer 0001" },
+        "date": "2026-09-01T00:30:00",
+        "status": "Active",
+        "net": "1,200.00"
+      }
+    ],
+    "count": 1
+  }
+}

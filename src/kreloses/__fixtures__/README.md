@@ -23,6 +23,9 @@ its own hosts and fills `{{VAR}}` placeholders (per-login auth tickets).
 | `post-get-filter.response.json` + `report-14-filter.json` | `POST sea…/Report/GetFilter {"report":14}`: the Sale List filter template (Location, Sale status, Payment, Customer, Staff, Invoice category, Date). The fake narrows Location to the signed-in login's locations |
 | `report-14-filter-lowercase.json` | The same data in camelCase, wrapped in `{success, data}`, numeric ids and a duplicate — spellings the parser also accepts |
 | `report-14-filter-changed.json` | A GetFilter body the Reader must reject with `LayoutChanged` |
+| `sale-list-rows.json` + `post-sale-get.response.json` | The Sale List: 20 synthetic sales ("Customer 0001"…, two branches, Aug–Sep 2026 and Sep–Oct 2025; active, cancelled, a partial refund, a walk-in without a customer, a negative "return" sale in parentheses, amounts with thousand separators, `SaleDate` as `/Date(ms)/` around KL month ends). The fake answers `POST sea…/Sale/Get` from them: it applies the request's `filter` (Sale status, Location — only the login's own —, Date `From`/`To`), sorts newest first and pages by `RequestingPage`/`PageSize`, returning `{Columns, Results, TotalCount}`. `fake.saleRows` is the live, mutable copy |
+| `sale-get-formats.json` | One `/Sale/Get` page using every other date and number format the Reader accepts (ISO with/without zone, `/Date(ms+0800)/`, `dd/MM/yyyy hh:mm AM`, `1 Sep 2026`, `15-Sep-2026 14:05`; JSON numbers, `RM` prefixes, minus signs, `-` for empty, `CustomerId` 0/null) |
+| `sale-get-changed.json` | A `/Sale/Get` body in a different layout (`{success, data: {items, count}}`): `LayoutChanged` |
 
 ## Unverified guesses (replace with anonymised real recordings)
 
@@ -37,6 +40,12 @@ Until real responses are recorded, these are guesses:
   Identity's HTTP 200 + `X-Responded-JSON` 401. The Reader handles both; the live report flags
   `X-Responded-JSON` on any hop.
 - Whether a real login ever shows an OTP page (the spec says no captcha was observed; OTP unknown).
+- The Sale List (`/Sale/Get`, #4): the format of `SaleDate` (here `/Date(ms)/`, read as UTC; an
+  ISO string without a zone would be read as KL wall-clock time), how amounts are formatted, the
+  exact status labels ("Active" / "Cancelled"), the sort order (assumed newest first by sale
+  date), and how the filter template records selections (here `Selected` flags on options) and
+  its date range (here `Date.From`/`To` as `dd/MM/yyyy`). The live report prints each of these
+  (as patterns and labels, never values).
 
 When replacing a fixture with a recorded one: strip every cookie value, token, customer name,
 phone number, staff name and amount (the repo is public), keep the structure byte-for-byte
