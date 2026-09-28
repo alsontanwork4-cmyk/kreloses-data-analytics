@@ -182,20 +182,26 @@ export async function getSurgeryDepartment(sql: Sql, filter: GlobalFilter): Prom
         union all
         select 'branch', c.branch_id, a.invoice_id, a.fees from attributed a join cases c on c.invoice_id = a.invoice_id where a.level = 'total'
       ),
-      -- Service visits (any branch) in the window a follow-up of a case in the period can fall in.
-      visits as (
+      through as (select ${syncedThrough(sql, ALL_BRANCHES)} as day),
+      -- Service visits (any branch) in the window a follow-up of a case in the period can fall in. Materialized and
+      -- JOINED (a hash join on the customer), not probed per case: a correlated EXISTS ran once per row (~1 s at 35k sales).
+      visits as materialized (
         select v.customer_id, v.sale_date from (${serviceVisits(sql, ALL_BRANCHES)}) v
         where v.sale_date between ${period.dateFrom}::date + 1 and ${period.dateTo}::date + ${POST_OP_FOLLOW_UP_DAYS}::int
+      ),
+      followed_up as (
+        select distinct c.invoice_id
+        from cases c
+        join visits v on v.customer_id = c.customer_id and v.sale_date between c.sale_date + 1 and c.sale_date + ${POST_OP_FOLLOW_UP_DAYS}::int
       ),
       follow_up as (
         select c.invoice_id,
           c.customer_id is null as walk_in,
-          not coalesce(c.sale_date + ${POST_OP_FOLLOW_UP_DAYS}::int <= ${syncedThrough(sql, ALL_BRANCHES)}, false) as not_mature,
-          exists (
-            select 1 from visits v
-            where v.customer_id = c.customer_id and v.sale_date between c.sale_date + 1 and c.sale_date + ${POST_OP_FOLLOW_UP_DAYS}::int
-          ) as followed_up
+          not coalesce(c.sale_date + ${POST_OP_FOLLOW_UP_DAYS}::int <= t.day, false) as not_mature,
+          f.invoice_id is not null as followed_up
         from cases c
+        cross join through t
+        left join followed_up f on f.invoice_id = c.invoice_id
       ),
       figures as (
         select k.level, k.key,
