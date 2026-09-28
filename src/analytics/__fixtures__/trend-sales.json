@@ -1,0 +1,581 @@
+{
+  "comment": "SYNTHETIC extra sales for src/analytics/trends.test.ts (no real sales, customers, staff or amounts). That test adds them to the shared fixtures (src/kreloses/__fixtures__/sale-list-rows.json and sale-overviews.json) in its own fake Kreloses only: `rows` are Sale List rows (/Sale/Get), `models` their Sale Overview page models (Totals equal to the row). They stretch the history back to 2024 and into early 2026 so monthly trends and year-on-year have many months and three years, including sales at 23:30 KL on 31 Dec and at 00:30 KL on the 1st (when the UTC date is still the day before). Hand-computed figures are in the test.",
+  "rows": [
+    {
+      "SaleId": 500101,
+      "SaleName": "INV-N-500101",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 90001,
+      "CustomerName": "Customer 0001",
+      "SaleDate": "/Date(1710039600000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "1,000.00",
+      "Discounts": "0.00",
+      "NetAmount": "1,000.00",
+      "TaxAmount": "0.00",
+      "Total": "1,000.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "1,000.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 500102,
+      "SaleName": "INV-S-500102",
+      "Location": "Branch South",
+      "LocationId": 1102,
+      "CustomerId": 90005,
+      "CustomerName": "Customer 0005",
+      "SaleDate": "/Date(1732086000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "400.00",
+      "Discounts": "0.00",
+      "NetAmount": "400.00",
+      "TaxAmount": "0.00",
+      "Total": "400.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "400.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 500103,
+      "SaleName": "INV-N-500103",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 90002,
+      "CustomerName": "Customer 0002",
+      "SaleDate": "/Date(1735659000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "250.00",
+      "Discounts": "0.00",
+      "NetAmount": "250.00",
+      "TaxAmount": "0.00",
+      "Total": "250.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "250.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 600101,
+      "SaleName": "INV-N-600101",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 90007,
+      "CustomerName": "Customer 0007",
+      "SaleDate": "/Date(1741140000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "800.00",
+      "Discounts": "0.00",
+      "NetAmount": "800.00",
+      "TaxAmount": "0.00",
+      "Total": "800.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "800.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 600102,
+      "SaleName": "INV-N-600102",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 90001,
+      "CustomerName": "Customer 0001",
+      "SaleDate": "/Date(1765346400000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "655.40",
+      "Discounts": "0.00",
+      "NetAmount": "655.40",
+      "TaxAmount": "0.00",
+      "Total": "655.40",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "655.40",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 800101,
+      "SaleName": "INV-N-800101",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 90002,
+      "CustomerName": "Customer 0002",
+      "SaleDate": "/Date(1767198600000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "300.00",
+      "Discounts": "0.00",
+      "NetAmount": "300.00",
+      "TaxAmount": "0.00",
+      "Total": "300.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "300.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 800102,
+      "SaleName": "INV-S-800102",
+      "Location": "Branch South",
+      "LocationId": 1102,
+      "CustomerId": 90004,
+      "CustomerName": "Customer 0004",
+      "SaleDate": "/Date(1773540000000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "300.00",
+      "Discounts": "30.00",
+      "NetAmount": "270.00",
+      "TaxAmount": "0.00",
+      "Total": "270.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "270.00",
+      "TotalRefunds": "0.00"
+    },
+    {
+      "SaleId": 800103,
+      "SaleName": "INV-N-800103",
+      "Location": "Branch North",
+      "LocationId": 1101,
+      "CustomerId": 90003,
+      "CustomerName": "Customer 0003",
+      "SaleDate": "/Date(1790785800000)/",
+      "SaleStatusName": "Active",
+      "GrossAmount": "150.00",
+      "Discounts": "0.00",
+      "NetAmount": "150.00",
+      "TaxAmount": "0.00",
+      "Total": "150.00",
+      "PaymentStatusName": "Paid",
+      "TotalPayments": "150.00",
+      "TotalRefunds": "0.00"
+    }
+  ],
+  "models": {
+    "500101": {
+      "Sale": {
+        "SaleId": 500101,
+        "SaleName": "INV-N-500101",
+        "SaleDate": "/Date(1710039600000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90001,
+        "Name": "Customer 0001",
+        "Phone": "000-000 0001",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 5001011,
+          "Name": "Surgery - Cryoablation",
+          "Quantity": "1",
+          "UnitPrice": "1,000.00",
+          "Amount": "1,000.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "1,000.00",
+        "Discounts": "0.00",
+        "NetAmount": "1,000.00",
+        "TaxAmount": "0.00",
+        "Total": "1,000.00",
+        "TotalPayments": "1,000.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 5001010,
+          "PaymentMethod": "Card",
+          "Amount": "1,000.00",
+          "TransactionDate": "/Date(1710039600000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "500102": {
+      "Sale": {
+        "SaleId": 500102,
+        "SaleName": "INV-S-500102",
+        "SaleDate": "/Date(1732086000000)/",
+        "LocationId": 1102,
+        "Location": "Branch South",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90005,
+        "Name": "Customer 0005",
+        "Phone": "000-000 0005",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 5001021,
+          "Name": "Hospitalisation (per day)",
+          "Quantity": "2",
+          "UnitPrice": "200.00",
+          "Amount": "400.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "400.00",
+        "Discounts": "0.00",
+        "NetAmount": "400.00",
+        "TaxAmount": "0.00",
+        "Total": "400.00",
+        "TotalPayments": "400.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 5001020,
+          "PaymentMethod": "Card",
+          "Amount": "400.00",
+          "TransactionDate": "/Date(1732086000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "500103": {
+      "Sale": {
+        "SaleId": 500103,
+        "SaleName": "INV-N-500103",
+        "SaleDate": "/Date(1735659000000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90002,
+        "Name": "Customer 0002",
+        "Phone": "000-000 0002",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 5001031,
+          "Name": "Vaccination - Rabies",
+          "Quantity": "1",
+          "UnitPrice": "250.00",
+          "Amount": "250.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "250.00",
+        "Discounts": "0.00",
+        "NetAmount": "250.00",
+        "TaxAmount": "0.00",
+        "Total": "250.00",
+        "TotalPayments": "250.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 5001030,
+          "PaymentMethod": "Card",
+          "Amount": "250.00",
+          "TransactionDate": "/Date(1735659000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "600101": {
+      "Sale": {
+        "SaleId": 600101,
+        "SaleName": "INV-N-600101",
+        "SaleDate": "/Date(1741140000000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90007,
+        "Name": "Customer 0007",
+        "Phone": "000-000 0007",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 6001011,
+          "Name": "Surgery - Neuter",
+          "Quantity": "1",
+          "UnitPrice": "800.00",
+          "Amount": "800.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "800.00",
+        "Discounts": "0.00",
+        "NetAmount": "800.00",
+        "TaxAmount": "0.00",
+        "Total": "800.00",
+        "TotalPayments": "800.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 6001010,
+          "PaymentMethod": "Card",
+          "Amount": "800.00",
+          "TransactionDate": "/Date(1741140000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "600102": {
+      "Sale": {
+        "SaleId": 600102,
+        "SaleName": "INV-N-600102",
+        "SaleDate": "/Date(1765346400000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90001,
+        "Name": "Customer 0001",
+        "Phone": "000-000 0001",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 6001021,
+          "Name": "Blood test panel",
+          "Quantity": "1",
+          "UnitPrice": "655.40",
+          "Amount": "655.40",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "655.40",
+        "Discounts": "0.00",
+        "NetAmount": "655.40",
+        "TaxAmount": "0.00",
+        "Total": "655.40",
+        "TotalPayments": "655.40",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 6001020,
+          "PaymentMethod": "Card",
+          "Amount": "655.40",
+          "TransactionDate": "/Date(1765346400000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "800101": {
+      "Sale": {
+        "SaleId": 800101,
+        "SaleName": "INV-N-800101",
+        "SaleDate": "/Date(1767198600000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90002,
+        "Name": "Customer 0002",
+        "Phone": "000-000 0002",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 8001011,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "300.00",
+          "Amount": "300.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "300.00",
+        "Discounts": "0.00",
+        "NetAmount": "300.00",
+        "TaxAmount": "0.00",
+        "Total": "300.00",
+        "TotalPayments": "300.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 8001010,
+          "PaymentMethod": "Card",
+          "Amount": "300.00",
+          "TransactionDate": "/Date(1767198600000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "800102": {
+      "Sale": {
+        "SaleId": 800102,
+        "SaleName": "INV-S-800102",
+        "SaleDate": "/Date(1773540000000)/",
+        "LocationId": 1102,
+        "Location": "Branch South",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90004,
+        "Name": "Customer 0004",
+        "Phone": "000-000 0004",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 8001021,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "200.00",
+          "Amount": "200.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 8001022,
+          "Name": "X-ray",
+          "Quantity": "1",
+          "UnitPrice": "100.00",
+          "Amount": "100.00",
+          "StaffName": "Dr Alpha",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        },
+        {
+          "SaleItemId": 8001023,
+          "Name": "RM30 OFF",
+          "Quantity": "1",
+          "UnitPrice": "(30.00)",
+          "Amount": "(30.00)",
+          "StaffName": "",
+          "ItemType": 55,
+          "DiscountName": "RM30 OFF",
+          "DiscountAmount": "30.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "300.00",
+        "Discounts": "30.00",
+        "NetAmount": "270.00",
+        "TaxAmount": "0.00",
+        "Total": "270.00",
+        "TotalPayments": "270.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 8001020,
+          "PaymentMethod": "Card",
+          "Amount": "270.00",
+          "TransactionDate": "/Date(1773540000000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    },
+    "800103": {
+      "Sale": {
+        "SaleId": 800103,
+        "SaleName": "INV-N-800103",
+        "SaleDate": "/Date(1790785800000)/",
+        "LocationId": 1101,
+        "Location": "Branch North",
+        "SaleStatusName": "Active",
+        "InvoiceCategory": "Standard",
+        "Notes": null
+      },
+      "Customer": {
+        "CustomerId": 90003,
+        "Name": "Customer 0003",
+        "Phone": "000-000 0003",
+        "Email": null
+      },
+      "Items": [
+        {
+          "SaleItemId": 8001031,
+          "Name": "Consultation",
+          "Quantity": "1",
+          "UnitPrice": "150.00",
+          "Amount": "150.00",
+          "StaffName": "Dr Bravo",
+          "ItemType": 4,
+          "DiscountName": null,
+          "DiscountAmount": "0.00"
+        }
+      ],
+      "Totals": {
+        "GrossAmount": "150.00",
+        "Discounts": "0.00",
+        "NetAmount": "150.00",
+        "TaxAmount": "0.00",
+        "Total": "150.00",
+        "TotalPayments": "150.00",
+        "TotalRefunds": "0.00",
+        "Balance": "0.00"
+      },
+      "Transactions": [
+        {
+          "TransactionId": 8001030,
+          "PaymentMethod": "Card",
+          "Amount": "150.00",
+          "TransactionDate": "/Date(1790785800000)/"
+        }
+      ],
+      "RefundInfo": null,
+      "CreditNoteInfo": null
+    }
+  }
+}

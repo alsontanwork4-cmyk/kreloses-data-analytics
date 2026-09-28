@@ -34,6 +34,27 @@ export {
   type StaffDiscountGroup,
   type StaffDiscountRow,
 } from "./discounts";
+export {
+  availableTrendMeasures,
+  getMonthlyTrends,
+  getYearOnYear,
+  ITEM_GROUP_MEASURES_AVAILABLE,
+  TREND_MEASURES,
+  trendMonths,
+  type DoctorTrend,
+  type MonthlyTrends,
+  type TrendFigures,
+  type TrendMeasure,
+  type TrendMeasureInfo,
+  type TrendMonth,
+  type TrendPoint,
+  type YearColumn,
+  type YearFigures,
+  type YearOnYear,
+  type YearOnYearCell,
+  type YearOnYearRow,
+} from "./trends";
+export { getDoctorDetail, type DoctorDetail } from "./doctor-detail";
 export { getDataFreshness, type BranchFreshness } from "./freshness";
 export { comparisonPeriods, type DateRange } from "./periods";
 export { METRIC_DEFINITIONS, type MetricName } from "./definitions";
