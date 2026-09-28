@@ -831,12 +831,16 @@ getRetention(sql, filter): Promise<Retention>
   who moves branch is neither new nor lost). The doctor filter only picks the doctors listed (the
   whole-clinic rows and "any doctor" never depend on it). The date range applies to new vs
   returning and the 90-day rate, never to cohorts.
-- **Synced history**: `historyFrom` / `syncedThrough` are the earliest / latest clinic day of any
-  synced sale at the selected branches. A visit is mature once visit day + 90 ≤ `syncedThrough`; a
-  cohort Y is listed once `syncedThrough` reaches 1 Jan Y+1, is `accruing` until it reaches 31 Dec
-  Y+1, and is a `partialYear` when `historyFrom` is after 1 Jan Y; `limitedHistory` = the period
-  starts less than 90 days after `historyFrom`. Caveat: when branches were synced from different
-  dates, a customer's earlier visits at a branch whose history starts later are not seen.
+- **Synced history**: `historyFrom` = the earliest clinic day of any synced sale at the SELECTED
+  branches; `syncedThrough` = the latest at ANY branch (`syncedThrough(sql, { all: true })`: returns
+  count at any branch, and a closed or lagging branch never stays "not yet mature" / "still
+  accruing"). A visit is mature once visit day + 90 ≤ `syncedThrough`; a cohort Y is listed once
+  `syncedThrough` reaches 1 Jan Y+1, is `accruing` until it reaches 31 Dec Y+1, and is a
+  `partialYear` when `historyFrom` is after 7 Jan Y (tolerance: a backfill from 1 Jan whose first
+  sale falls in the first week, e.g. after the New Year holiday, is a full year);
+  `limitedHistory` = the period starts less than 90 days after `historyFrom`. Caveat: when branches
+  were synced from different dates, a customer's earlier visits at a branch whose history starts
+  later are not seen.
 - SQL does everything (a `lead()` window for "next visit", `min()` over the customer for "first
   visit", one scan of every branch's visit lines with an `in_scope` flag); ~100 ms for 35k invoices
   / 105k lines on the local stack, so no extra index.

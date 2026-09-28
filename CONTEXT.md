@@ -313,8 +313,9 @@ less than 90 days after it.
 A doctor's cohort for year Y: the customers with a service visit attributed to that doctor in
 calendar year Y. *Retained (any doctor)*: any service visit in Y+1; *retained (same doctor)*: a
 service visit attributed to the same doctor in Y+1. A cohort is *still accruing* until the synced
-sales reach 31 December of Y+1, and a *partial year* when the synced sales start after 1 January
-of Y.
+sales (any branch) reach 31 December of Y+1, and a *partial year* when the synced sales at the
+selected branches start after 7 January of Y (a start in the first week of January counts as a
+full year).
 _Avoid_: Retention rate (without saying any/same doctor)
 
 **90-day return rate**:
@@ -323,6 +324,6 @@ customer (any doctor, any branch) 1–90 days later. A visit is *not yet mature*
 counted separately — until its 90 days have passed in the synced sales.
 
 **Synced through**:
-The latest clinic day with a synced sale at the selected branches; returns and cohorts are only
-seen up to it.
+The latest clinic day with a synced sale at any branch (whatever the branch filter); returns and
+cohorts are only seen up to it.
 _Avoid_: Data as of (that is when a sync ran, per branch)

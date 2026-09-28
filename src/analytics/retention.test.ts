@@ -105,8 +105,9 @@ describe("Analytics Service: retention (fed by the Sync Engine)", () => {
     expect(report.limitedHistory).toBe(false);
     expect(report.pendingInvoices).toBe(1); // 800024
 
+    // History start is per selected branch; the latest synced day is clinic-wide (South's last sale is 2026-08-10).
     const south = await getRetention(db.sql, { ...Q1_2026, branchIds: [branch.south] });
-    expect([south.historyFrom, south.syncedThrough, south.matureThrough, south.pendingInvoices]).toEqual(["2024-10-07", "2026-08-10", "2026-05-12", 0]);
+    expect([south.historyFrom, south.syncedThrough, south.matureThrough, south.pendingInvoices]).toEqual(["2024-10-07", "2026-09-30", "2026-07-02", 0]);
   });
 
   it("counts new vs returning customers per doctor: new = first service visit (any doctor) in the period", async () => {
@@ -208,7 +209,7 @@ describe("Analytics Service: retention (fed by the Sync Engine)", () => {
     expect(south.clinic.newVsReturning).toEqual(nvr(4, 2, 50, 50));
     expect(south.doctors.map((row) => row.name)).toEqual(["Dr Alpha Anderson", "Dr Bravo Brown"]);
     expect(doctor(south, "Dr Bravo Brown")!.newVsReturning).toEqual(nvr(3, 1, 33.3, 66.7));
-    // South is synced through 2026-08-10 (its latest sale) and from 2024-10-07 (so 2024 is a partial year):
+    // South's history starts on 2024-10-07 (so 2024 is a partial year); the clinic is synced through 2026-09-30:
     // 2025 (C1003 C1014; C1003 back) is still accruing, 2024 (C1005, whose return was cancelled) is complete.
     expect(south.clinic.cohorts).toEqual([cohort(2025, "accruing", 2, [1, 50], null), cohort(2024, "complete, partial year", 1, [0, 0], null)]);
   });
@@ -225,22 +226,48 @@ describe("Analytics Service: retention (fed by the Sync Engine)", () => {
     expect((await getRetention(db.sql, { ...YEAR_2026, doctorIds: ["999999", "not-an-id"] })).doctors).toEqual([]);
   });
 
-  it("keeps a cohort accruing until the synced sales reach 31 December of the next year", async () => {
+  it("treats a synced history starting in the first 7 days of January as a full year", async () => {
+    for (const [first, partial] of [
+      ["2025-01-01", false],
+      ["2025-01-07", false],
+      ["2025-01-08", true],
+    ] as const) {
+      await clearSyncTables(db.sql);
+      const h = harness("2026-10-01T02:00:00Z");
+      // A cancelled sale on `first` (synced, never a visit) and a sync from that day: the history starts on it.
+      const template = h.fake.saleRows.find((row) => row.SaleId === 800007)!;
+      h.fake.saleRows.push({ ...template, SaleId: 800099, SaleName: "INV-S-R099", SaleDate: `/Date(${Date.parse(`${first}T10:00:00+08:00`)})/` });
+      const connectionId = await h.connect(both, "Both branches");
+      await runSync(h.deps(), connectionId, "manual", { dateRange: { from: first, to: "2026-09-30" } });
+      const report = await getRetention(db.sql, Q1_2026);
+      expect(report.historyFrom, first).toBe(first);
+      // 2025: C1001 C1002 C1003 C1009 C1010 C1011 C1014 — back in 2026: C1001 C1003 C1009 C1010.
+      expect(report.clinic.cohorts, first).toEqual([cohort(2025, partial ? "accruing, partial year" : "accruing", 7, [4, 57.1], null)]);
+    }
+  });
+
+  it("keeps a cohort accruing until the synced sales (any branch) reach 31 December of the next year", async () => {
     await clearSyncTables(db.sql);
     const h = harness("2026-01-02T02:00:00Z");
     const connectionId = await h.connect(both, "Both branches");
-    // Synced through 30 Dec 2025 (the walk-in): 2024's cohort is still accruing.
+    // Synced through 30 Dec 2025 (a North walk-in): 2024's cohort is still accruing.
     expect(await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2024-01-01", to: "2025-12-30" } })).toMatchObject({ status: "succeeded" });
+    const [northBranch] = await db.sql<{ id: string }[]>`select id::text from branches where kreloses_location_id = '1101'`;
+    const north = { ...Q1_2026, branchIds: [northBranch!.id] };
     const before = await getRetention(db.sql, Q1_2026);
     expect(before.syncedThrough).toBe("2025-12-30");
     expect(before.clinic.cohorts).toEqual([cohort(2024, "accruing, partial year", 5, [3, 60], null)]);
+    expect((await getRetention(db.sql, north)).clinic.cohorts).toEqual([cohort(2024, "accruing, partial year", 4, [3, 75], null)]);
 
-    // 31 Dec 2025 synced too: complete.
+    // 31 Dec 2025 synced too (a South walk-in): complete — at North as well, although North's last sale is on the 30th.
     h.clock.advance(3_600_000);
     expect(await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2025-12-31", to: "2025-12-31" } })).toMatchObject({ status: "succeeded" });
     const after = await getRetention(db.sql, Q1_2026);
     expect(after.syncedThrough).toBe("2025-12-31");
     expect(after.clinic.cohorts).toEqual([cohort(2024, "complete, partial year", 5, [3, 60], null)]);
+    const northAfter = await getRetention(db.sql, north);
+    expect(northAfter.syncedThrough).toBe("2025-12-31");
+    expect(northAfter.clinic.cohorts).toEqual([cohort(2024, "complete, partial year", 4, [3, 75], null)]);
   });
 
   it("returns empty figures when nothing is synced", async () => {

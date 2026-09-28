@@ -27,6 +27,11 @@ import { serviceVisitLines, syncedThrough } from "./service-visits";
 const RETURN_WINDOW_DAYS = 90;
 /** A period starting less than this many days after the synced history begins gets `limitedHistory`. */
 const LIMITED_HISTORY_DAYS = 90;
+/**
+ * A cohort year is only `partialYear` when the synced history starts after this day of January: a
+ * backfill from 1 Jan whose first sale falls a few days later (New Year holidays) is a full year.
+ */
+const FULL_YEAR_HISTORY_BY_DAY = 7;
 const ALL_BRANCHES: BranchScope = { all: true };
 
 /** New vs returning customers in the period (`METRIC_DEFINITIONS.newVsReturning`). */
@@ -63,7 +68,7 @@ export interface YearCohort {
   year: number;
   /** True until the synced data reaches 31 Dec of Y+1: more customers may still come back. */
   accruing: boolean;
-  /** The synced history (`historyFrom`) starts after 1 Jan of Y: customers seen earlier in Y are missing from the cohort. */
+  /** The synced history (`historyFrom`) starts after 7 Jan of Y: customers seen earlier in Y are missing from the cohort. */
   partialYear: boolean;
   /** Cohort size: customers with a service visit at the selected branches in Y (for a doctor: attributed to them). */
   customers: number;
@@ -100,7 +105,10 @@ export interface Retention {
   period: DateRange;
   /** Earliest clinic day with a synced sale at the selected branches; null when nothing is synced. */
   historyFrom: IsoDate | null;
-  /** Latest clinic day with a synced sale at the selected branches (`syncedThrough`): returns and cohorts are seen up to this day. */
+  /**
+   * Latest clinic day with a synced sale at ANY branch (`syncedThrough(sql, { all: true })`): returns
+   * (which count at any branch) and cohorts are seen up to this day, whatever the branch filter.
+   */
   syncedThrough: IsoDate | null;
   /** Latest visit day whose 90 days have passed (`syncedThrough` − 90): later visits are not yet mature. */
   matureThrough: IsoDate | null;
@@ -161,7 +169,7 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
   const doctors = staffScope(filter);
 
   const [bounds] = await sql<Pick<Retention, "historyFrom" | "syncedThrough" | "matureThrough" | "limitedHistory" | "pendingInvoices">[]>`
-    with through as (select ${syncedThrough(sql, branches)} as day)
+    with through as (select ${syncedThrough(sql, ALL_BRANCHES)} as day)
     select
       min(i.sale_date) as history_from,
       (select day from through) as synced_through,
@@ -253,7 +261,7 @@ export async function getRetention(sql: Sql, filter: GlobalFilter): Promise<Rete
       select
         staff_id::text as staff_id, year, customers, retained_any, retained_same,
         ${through}::date < make_date(year + 1, 12, 31) as accruing,
-        ${historyFrom}::date > make_date(year, 1, 1) as partial_year,
+        ${historyFrom}::date > make_date(year, 1, ${FULL_YEAR_HISTORY_BY_DAY}::int) as partial_year,
         round(100.0 * retained_any / nullif(customers, 0), 1)::text as retained_any_percent,
         round(100.0 * retained_same / nullif(customers, 0), 1)::text as retained_same_percent
       from figures

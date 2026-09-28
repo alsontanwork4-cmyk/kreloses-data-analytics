@@ -178,9 +178,10 @@ export default async function RetentionPage({ searchParams }: PageProps<"/retent
         <>
           {report.syncedThrough && report.historyFrom ? (
             <p className="text-sm text-muted-foreground" data-testid="retention-synced-through">
-              Sales synced from <span className="font-medium text-foreground">{formatIsoDate(report.historyFrom)}</span> through{" "}
+              Sales synced from <span className="font-medium text-foreground">{formatIsoDate(report.historyFrom)}</span>
+              {filter.branchIds ? " at the selected branches" : ""} through{" "}
               <span className="font-medium text-foreground">{formatIsoDate(report.syncedThrough)}</span>
-              {filter.branchIds ? " at the selected branches" : ""}. Returns are only seen up to that day.
+              {filter.branchIds ? " (the latest sale at any branch)" : ""}. Returns are only seen up to that day.
             </p>
           ) : null}
           {report.pendingInvoices > 0 ? (
