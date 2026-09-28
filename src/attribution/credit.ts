@@ -11,13 +11,14 @@
  * 2. A line starts from its own charged amount (`Amount`, which already has any item-level discount
  *    taken off). Everything between those amounts and the invoice's revenue base — the invoice's
  *    discount lines (ItemType 55) and any other gap (rounding, adjustments, tax shown on lines) —
- *    is spread across the non-discount lines in proportion to their GROSS amounts (quantity × unit
- *    price), with a largest-remainder allocation in whole sen, ties to the lower line number.
+ *    is spread across the non-discount lines in proportion to what each line CHARGED (its Amount;
+ *    docs/adr/0006 — the spec's "gross" was changed deliberately), with a largest-remainder
+ *    allocation in whole sen, ties to the lower line number.
  * 3. So the credited lines of an invoice add up EXACTLY to its revenue base, to the sen.
  *
  * Edge cases (each unit-tested in credit.test.ts):
- * - Weights are |gross| (so a return line on a mixed invoice never flips a spread's sign). If every
- *   line's gross is zero, the lines' |amounts| are used; if those are all zero too, equal shares.
+ * - Lines that charged ≤ 0 (free lines, returns) take no share while any line charged more than
+ *   zero. If no line did: by |gross| (quantity × unit price); if that is zero everywhere: equally.
  * - No non-discount line at all (only discount lines, or no lines): ONE "unitemised remainder"
  *   (`lineNo: null`, no staff) carries the whole base — even a zero base, so every invoice keeps
  *   at least one credited line and still counts as an invoice.
@@ -113,15 +114,27 @@ export function creditInvoice(invoice: AttributionInvoice, lines: readonly Attri
   }
 
   const poolSen = baseSen - credited.reduce((total, line) => total + line.lineAmountSen, 0);
-  const byGross = credited.map((line) => Math.abs(line.grossSen));
-  const byAmount = credited.map((line) => Math.abs(line.lineAmountSen));
-  const weights = byGross.some((weight) => weight > 0) ? byGross : byAmount.some((weight) => weight > 0) ? byAmount : credited.map(() => 1);
-  const shares = allocateLargestRemainder(poolSen, weights);
+  const shares = allocateLargestRemainder(poolSen, spreadWeights(credited));
   return credited.map((line, index) => ({
     ...line,
     spreadSen: shares[index]!,
     creditedSen: line.lineAmountSen + shares[index]!,
   }));
+}
+
+/**
+ * What each line's share of the invoice-level spread is proportional to (docs/adr/0006): what the
+ * line CHARGED (its `Amount`, after any item-level discount) — a bill discount applies to the amounts
+ * after item discounts, and a line that already gave most of its price away is never pushed negative.
+ * Lines that charged nothing or less (free, returns) take no share while any line charged more than
+ * zero. If none did: by |gross| (quantity × unit price); if that is zero everywhere too: equally.
+ */
+function spreadWeights(lines: readonly { grossSen: number; lineAmountSen: number }[]): number[] {
+  const charged = lines.map((line) => Math.max(line.lineAmountSen, 0));
+  if (charged.some((weight) => weight > 0)) return charged;
+  const gross = lines.map((line) => Math.abs(line.grossSen));
+  if (gross.some((weight) => weight > 0)) return gross;
+  return lines.map(() => 1);
 }
 
 /**

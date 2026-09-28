@@ -15,30 +15,30 @@ import { getDoctorRanking, getOverviewKpis, getStaffAliasRevenue, listDoctors } 
  *
  * Credited lines, September 2026 (active sales; KL days). "→" = credited amount.
  *   North
- *   700101 C1  Dr Alpha: 150 + 900 + 200 less a (50.00) discount line spread by gross → 144.00 + 864.00 + 192.00 = 1,200.00
+ *   700101 C1  Dr Alpha: 150 + 900 + 200 less a (50.00) discount line spread by charged amount → 144.00 + 864.00 + 192.00 = 1,200.00
  *   700102 C2  Dr Bravo 80.00 · Dr Alpha 120.00 + 2.5 × 72.20 = 180.50                         (lines = net, nothing spread)
- *   700104 C3  Dr Bravo 3 × 350 → 1,024.60 and 1,200 less 120 item discount → 1,050.97 · no staff 180 → 175.64
- *              · "North General" 0.5 × 100 → 48.79          (a (60.00) voucher spread by gross 1,050/1,200/180/50)
+ *   700104 C3  Dr Bravo 3 × 350 → 1,023.31 and 1,200 less 120 item discount → 1,052.54 · no staff 180 → 175.42
+ *              · "North General" 0.5 × 100 → 48.73          (a (60.00) voucher spread by charged 1,050/1,080/180/50)
  *   700105 C2  "Charlie" 45.00 · no staff 54.90
  *   South
  *   700201 C4  "Dr Delta" (not in the staff list: a deleted doctor) 90 → 84.37 · 2 × 275 → 515.63 ((40.00) spread; tie → line 1)
  *   700202 C5  Dr Bravo 700.00 + 400.00 = 1,100.00 (refund of 100.00 recorded, not deducted)
- *   700203 C1  Dr Bravo 100 → 96.15 · "Dr. Alpha" 160 → 153.85  (lines 260.00 vs net 250.00: the 10.00 gap spread by gross)
+ *   700203 C1  Dr Bravo 100 → 96.15 · "Dr. Alpha" 160 → 153.85  (lines 260.00 vs net 250.00: the 10.00 gap spread by charged)
  *   700205 —   "South General" 45.00 (walk-in: no customer)
  *   700206 C4  "Dr Delta" return of 1 × 120.00 → (120.00)
  *   Cancelled 700103, 700204: never counted.                                           Total 5,855.40 (= invoice nets)
  *
  * Doctors (ranked by revenue; share = revenue ÷ 5,855.40, one decimal; AOV = revenue ÷ distinct customers):
- *   Dr Bravo Brown     3,351.72 · 4 invoices · 4 customers (C2 C3 C5 C1) · AOV 837.93 · 6 items → 1.50 · 57.2 %
- *     North 2,155.57 · 2 · 2 · 1,077.79 (1,077.785) · 3 → 1.50 · 36.8 %   South 1,196.15 · 2 · 2 · 598.08 (598.075) · 3 → 1.50 · 20.4 %
+ *   Dr Bravo Brown     3,352.00 · 4 invoices · 4 customers (C2 C3 C5 C1) · AOV 838.00 · 6 items → 1.50 · 57.2 %
+ *     North 2,155.85 · 2 · 2 · 1,077.93 (1,077.925) · 3 → 1.50 · 36.8 %   South 1,196.15 · 2 · 2 · 598.08 (598.075) · 3 → 1.50 · 20.4 %
  *   Dr Alpha Anderson  1,654.35 · 3 invoices · 2 customers (C1 C2) · AOV 827.18 (827.175) · 6 items → 2.00 · 28.3 %
  *     North 1,500.50 · 2 · 2 · 750.25 · 5 → 2.50 · 25.6 %                  South 153.85 · 1 · 1 · 153.85 · 1 → 1.00 · 2.6 %
  *   Dr Delta             480.00 · 2 invoices · 1 customer (C4) · AOV 480.00 · 3 items → 1.50 · 8.2 %  (South only)
  * Separate groups (never ranked with doctors):
  *   Other staff: Charlie Chen 45.00 · 1 · 1 · 45.00 · 1 → 1.00 · 0.8 %
- *   Generic accounts: 93.79 · 2 invoices · 1 customer (the walk-in is nobody) · 93.79 · 2 → 1.00 · 1.6 %
- *     Branch North General 48.79 · 1 · 1 · 48.79 · 0.8 %    Branch South General 45.00 · 1 · 0 · no AOV · 0.8 %
- *   No staff on line: 230.54 · 2 invoices · 2 customers · AOV 115.27 · 2 → 1.00 · 3.9 %
+ *   Generic accounts: 93.73 · 2 invoices · 1 customer (the walk-in is nobody) · 93.73 · 2 → 1.00 · 1.6 %
+ *     Branch North General 48.73 · 1 · 1 · 48.73 · 0.8 %    Branch South General 45.00 · 1 · 0 · no AOV · 0.8 %
+ *   No staff on line: 230.32 · 2 invoices · 2 customers · AOV 115.16 · 2 → 1.00 · 3.9 %
  *   Line items not synced yet: 0.00
  *
  * Previous period (2–31 Aug 2026): Dr Alpha 500.00 (700090, C1) · Dr Bravo 1,000.00 (700091) · Dr Delta 800.00 (700092).
@@ -107,10 +107,10 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
         name: "Dr Bravo Brown",
         source: "kreloses",
         active: true,
-        revenue: "3351.72",
+        revenue: "3352.00",
         invoices: 4,
         customers: 4,
-        aovPerCustomer: "837.93",
+        aovPerCustomer: "838.00",
         itemsPerInvoice: 1.5,
         sharePercent: 57.2,
       },
@@ -163,10 +163,10 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
         ],
       },
       generic: {
-        revenue: "93.79",
+        revenue: "93.73",
         invoices: 2,
         customers: 1,
-        aovPerCustomer: "93.79",
+        aovPerCustomer: "93.73",
         itemsPerInvoice: 1,
         sharePercent: 1.6,
         members: [
@@ -175,10 +175,10 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
             name: "Branch North General",
             source: "kreloses",
             active: true,
-            revenue: "48.79",
+            revenue: "48.73",
             invoices: 1,
             customers: 1,
-            aovPerCustomer: "48.79",
+            aovPerCustomer: "48.73",
             itemsPerInvoice: 1,
             sharePercent: 0.8,
           },
@@ -196,7 +196,7 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
           },
         ],
       },
-      noStaff: { revenue: "230.54", invoices: 2, customers: 2, aovPerCustomer: "115.27", itemsPerInvoice: 1, sharePercent: 3.9 },
+      noStaff: { revenue: "230.32", invoices: 2, customers: 2, aovPerCustomer: "115.16", itemsPerInvoice: 1, sharePercent: 3.9 },
       pending: { revenue: "0.00", invoices: 0, customers: 0, aovPerCustomer: null, itemsPerInvoice: null, sharePercent: 0 },
     });
   });
@@ -205,7 +205,7 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     const ranking = await getDoctorRanking(db.sql, SEPTEMBER, { splitByBranch: true });
     const split = Object.fromEntries(ranking.doctors.map((doctor) => [doctor.name, doctor.branches]));
     expect(split["Dr Bravo Brown"]).toEqual([
-      { branchId: branch.north, branchName: "Branch North", revenue: "2155.57", invoices: 2, customers: 2, aovPerCustomer: "1077.79", itemsPerInvoice: 1.5, sharePercent: 36.8 },
+      { branchId: branch.north, branchName: "Branch North", revenue: "2155.85", invoices: 2, customers: 2, aovPerCustomer: "1077.93", itemsPerInvoice: 1.5, sharePercent: 36.8 },
       { branchId: branch.south, branchName: "Branch South", revenue: "1196.15", invoices: 2, customers: 2, aovPerCustomer: "598.08", itemsPerInvoice: 1.5, sharePercent: 20.4 },
     ]);
     expect(split["Dr Alpha Anderson"]).toEqual([
@@ -223,7 +223,7 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     const north = await getDoctorRanking(db.sql, { ...SEPTEMBER, branchIds: [branch.north] });
     expect(north.totalRevenue).toBe("3980.40");
     expect(north.doctors.map((doctor) => [doctor.name, doctor.revenue, doctor.customers, doctor.sharePercent])).toEqual([
-      ["Dr Bravo Brown", "2155.57", 2, 54.2],
+      ["Dr Bravo Brown", "2155.85", 2, 54.2],
       ["Dr Alpha Anderson", "1500.50", 2, 37.7],
     ]);
 
@@ -260,7 +260,7 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
 
     // Two doctors: an invoice or customer they share counts once.
     const two = await getOverviewKpis(db.sql, { ...SEPTEMBER, doctorIds: [staff["Dr Alpha Anderson"]!, staff["Dr Bravo Brown"]!] });
-    expect(two.total.revenue.value).toBe("5006.07");
+    expect(two.total.revenue.value).toBe("5006.35");
     expect(two.total.invoices.value).toBe(5); // 700101 700102 700104 700202 700203
     expect(two.total.customers.value).toBe(4); // C1 C2 C3 C5
   });
@@ -276,10 +276,10 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     expect(Object.fromEntries(names.map((alias) => [alias.rawName, byAlias[alias.id] ?? "0.00"]))).toEqual({
       "Dr Alpha": "1500.50",
       "Dr. Alpha": "153.85",
-      "Dr Bravo": "3351.72",
+      "Dr Bravo": "3352.00",
       "Dr Delta": "480.00",
       Charlie: "45.00",
-      "North General": "48.79",
+      "North General": "48.73",
       "South General": "45.00",
     });
   });
@@ -305,7 +305,7 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     const ranking = await getDoctorRanking(db.sql, SEPTEMBER);
     expect(ranking.totalRevenue).toBe("5855.40");
     expect(ranking.groups.pending).toEqual({ revenue: "2300.00", invoices: 1, customers: 1, aovPerCustomer: "2300.00", itemsPerInvoice: null, sharePercent: 39.3 });
-    expect(ranking.doctors.find((doctor) => doctor.name === "Dr Bravo Brown")!.revenue).toBe("1276.15"); // 3,351.72 − 2,075.57
+    expect(ranking.doctors.find((doctor) => doctor.name === "Dr Bravo Brown")!.revenue).toBe("1276.15"); // 3,352.00 − 2,075.85
     expect(ranking.groups.noStaff.revenue).toBe("54.90");
 
     // The next sync reads the page and everything is credited again.
@@ -314,7 +314,7 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     expect(again).toMatchObject({ counts: { lineItemsRead: 1 } });
     const after = await getDoctorRanking(db.sql, SEPTEMBER);
     expect(after.groups.pending.revenue).toBe("0.00");
-    expect(after.doctors[0]).toMatchObject({ name: "Dr Bravo Brown", revenue: "3351.72" });
+    expect(after.doctors[0]).toMatchObject({ name: "Dr Bravo Brown", revenue: "3352.00" });
   });
 
   it("follows a remapped line name and a changed kind at once, without re-syncing", async () => {
@@ -325,15 +325,15 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     expect(await remapAlias(db.sql, aliasId, staff["Dr Bravo Brown"]!)).toEqual({ status: "saved" });
     let ranking = await getDoctorRanking(db.sql, SEPTEMBER);
     expect(ranking.doctors.map((doctor) => doctor.name)).toEqual(["Dr Bravo Brown", "Dr Alpha Anderson"]);
-    // 3,351.72 + 480.00; invoices 4 + 2; customers C1 C2 C3 C5 + C4; items 6 + 3.
-    expect(ranking.doctors[0]).toMatchObject({ revenue: "3831.72", invoices: 6, customers: 5, aovPerCustomer: "766.34", itemsPerInvoice: 1.5, sharePercent: 65.4 });
+    // 3,352.00 + 480.00; invoices 4 + 2; customers C1 C2 C3 C5 + C4; items 6 + 3.
+    expect(ranking.doctors[0]).toMatchObject({ revenue: "3832.00", invoices: 6, customers: 5, aovPerCustomer: "766.40", itemsPerInvoice: 1.5, sharePercent: 65.4 });
 
     // Charlie Chen is a doctor after all; Dr Alpha Anderson is recorded as "other" staff.
     await setStaffKind(db.sql, staff["Charlie Chen"]!, "doctor");
     await setStaffKind(db.sql, staff["Dr Alpha Anderson"]!, "other");
     ranking = await getDoctorRanking(db.sql, SEPTEMBER);
     expect(ranking.doctors.map((doctor) => [doctor.name, doctor.revenue])).toEqual([
-      ["Dr Bravo Brown", "3831.72"],
+      ["Dr Bravo Brown", "3832.00"],
       ["Charlie Chen", "45.00"],
     ]);
     expect(ranking.groups.other.members.map((member) => [member.name, member.revenue])).toEqual([["Dr Alpha Anderson", "1654.35"]]);

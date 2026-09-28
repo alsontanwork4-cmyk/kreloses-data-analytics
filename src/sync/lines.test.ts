@@ -61,12 +61,12 @@ describe("Sync Engine: line items and credited lines", () => {
       { lineNo: 4, itemName: "IV fluids", itemType: 1, quantity: "0.5000", unitPrice: "100.00", amount: "50.00", rawStaffName: "North General", discountName: null, discountAmount: "0.00" },
       { lineNo: 5, itemName: "RM60 VOUCHER", itemType: 55, quantity: null, unitPrice: null, amount: "-60.00", rawStaffName: null, discountName: "RM60 VOUCHER", discountAmount: "60.00" },
     ]);
-    // −60.00 (the voucher) spread by gross 1,050 / 1,200 / 180 / 50 → −25.40 / −29.03 / −4.36 / −1.21.
+    // −60.00 (the voucher) spread by what each line charged, 1,050 / 1,080 / 180 / 50 → −26.69 / −27.46 / −4.58 / −1.27.
     expect(await creditedOf("700104")).toEqual([
-      { lineNo: 1, alias: "Dr Bravo", grossAmount: "1050.00", lineAmount: "1050.00", spreadAmount: "-25.40", creditedAmount: "1024.60" },
-      { lineNo: 2, alias: "Dr Bravo", grossAmount: "1200.00", lineAmount: "1080.00", spreadAmount: "-29.03", creditedAmount: "1050.97" },
-      { lineNo: 3, alias: null, grossAmount: "180.00", lineAmount: "180.00", spreadAmount: "-4.36", creditedAmount: "175.64" },
-      { lineNo: 4, alias: "North General", grossAmount: "50.00", lineAmount: "50.00", spreadAmount: "-1.21", creditedAmount: "48.79" },
+      { lineNo: 1, alias: "Dr Bravo", grossAmount: "1050.00", lineAmount: "1050.00", spreadAmount: "-26.69", creditedAmount: "1023.31" },
+      { lineNo: 2, alias: "Dr Bravo", grossAmount: "1200.00", lineAmount: "1080.00", spreadAmount: "-27.46", creditedAmount: "1052.54" },
+      { lineNo: 3, alias: null, grossAmount: "180.00", lineAmount: "180.00", spreadAmount: "-4.58", creditedAmount: "175.42" },
+      { lineNo: 4, alias: "North General", grossAmount: "50.00", lineAmount: "50.00", spreadAmount: "-1.27", creditedAmount: "48.73" },
     ]);
 
     const sums = await db.sql`

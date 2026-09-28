@@ -106,8 +106,8 @@ describe("allocateLargestRemainder", () => {
 });
 
 describe("creditInvoice", () => {
-  it("single doctor: every line to that doctor, an invoice discount line spread in proportion to gross", () => {
-    // 700101: 150 + 900 + 200 = 1,250 gross; a (50.00) discount line; net 1,200.
+  it("single doctor: every line to that doctor, an invoice discount line spread in proportion to what each line charged", () => {
+    // 700101: 150 + 900 + 200 = 1,250 charged; a (50.00) discount line; net 1,200.
     const credited = creditInvoice(active(120_000), [
       line({ lineNo: 1, amountSen: 15_000 }),
       line({ lineNo: 2, amountSen: 90_000 }),
@@ -148,10 +148,11 @@ describe("creditInvoice", () => {
     expect(creditInvoice(active(1_000), [line({ lineNo: 1, amountSen: 1_000, staffName: "  Dr  Alpha " })])[0]!.staffName).toBe("Dr Alpha");
   });
 
-  it("item-level discounts stay on their line; invoice discount lines and gaps are spread over all lines by gross", () => {
-    // 700104: 3 × 350 = 1,050 (Dr Bravo) · 1,200 less a 120.00 item discount = 1,080 (Dr Bravo) ·
+  it("item-level discounts stay on their line; invoice discount lines and gaps are spread by what each line charged (not gross)", () => {
+    // 700104: 3 × 350 = 1,050 (Dr Bravo) · 1,200 less a 120.00 item discount = 1,080 charged (Dr Bravo) ·
     // 180 (no staff) · 0.5 × 100 = 50 (North General) · a (60.00) discount line. Net 2,300.00.
-    // Spread −60.00 by gross 1,050 / 1,200 / 180 / 50 (of 2,480): −25.40, −29.03, −4.36, −1.21.
+    // Spread −60.00 by charged 1,050 / 1,080 / 180 / 50 (of 2,360): −26.6949, −27.4576, −4.5763, −1.2712
+    // → floors 26.69 / 27.45 / 4.57 / 1.27 (59.98); the 2 sen left go to the largest remainders (.76, .63).
     const credited = creditInvoice(active(230_000), [
       line({ lineNo: 1, quantity: "3", unitPriceSen: 35_000, amountSen: 105_000, staffName: "Dr Bravo" }),
       line({ lineNo: 2, quantity: "1", unitPriceSen: 120_000, amountSen: 108_000, staffName: "Dr Bravo" }),
@@ -160,13 +161,27 @@ describe("creditInvoice", () => {
       discountLine(5, -6_000),
     ]);
     expect(credited).toEqual([
-      { lineNo: 1, staffName: "Dr Bravo", grossSen: 105_000, lineAmountSen: 105_000, spreadSen: -2_540, creditedSen: 102_460 },
-      { lineNo: 2, staffName: "Dr Bravo", grossSen: 120_000, lineAmountSen: 108_000, spreadSen: -2_903, creditedSen: 105_097 },
-      { lineNo: 3, staffName: null, grossSen: 18_000, lineAmountSen: 18_000, spreadSen: -436, creditedSen: 17_564 },
-      { lineNo: 4, staffName: "North General", grossSen: 5_000, lineAmountSen: 5_000, spreadSen: -121, creditedSen: 4_879 },
+      { lineNo: 1, staffName: "Dr Bravo", grossSen: 105_000, lineAmountSen: 105_000, spreadSen: -2_669, creditedSen: 102_331 },
+      { lineNo: 2, staffName: "Dr Bravo", grossSen: 120_000, lineAmountSen: 108_000, spreadSen: -2_746, creditedSen: 105_254 },
+      { lineNo: 3, staffName: null, grossSen: 18_000, lineAmountSen: 18_000, spreadSen: -458, creditedSen: 17_542 },
+      { lineNo: 4, staffName: "North General", grossSen: 5_000, lineAmountSen: 5_000, spreadSen: -127, creditedSen: 4_873 },
     ]);
     expect(sum(credited)).toBe(230_000);
-    expect(byStaff(credited)).toEqual({ "Dr Bravo": 207_557, "(no staff)": 17_564, "North General": 4_879 });
+    expect(byStaff(credited)).toEqual({ "Dr Bravo": 207_585, "(no staff)": 17_542, "North General": 4_873 });
+  });
+
+  it("a line that already had a big item discount gets only its share of what it charged (never pushed negative)", () => {
+    // Dr A: gross 100.00 with a 90 % item discount → charged 10.00; Dr B: 100.00. A (60.00) bill discount; net 50.00.
+    // By charged 10 / 100: −5.4545 / −54.5454 → −5.45 / −54.55 (by gross it would be −30 / −30: Dr A −20.00).
+    const credited = creditInvoice(active(5_000), [
+      line({ lineNo: 1, quantity: "1", unitPriceSen: 10_000, amountSen: 1_000, staffName: "Dr A" }),
+      line({ lineNo: 2, quantity: "1", unitPriceSen: 10_000, amountSen: 10_000, staffName: "Dr B" }),
+      discountLine(3, -6_000),
+    ]);
+    expect(credited.map((row) => [row.staffName, row.spreadSen, row.creditedSen])).toEqual([
+      ["Dr A", -545, 455],
+      ["Dr B", -5_455, 4_545],
+    ]);
   });
 
   it("spreads a gap between the lines and the net even without a discount line (ties to the earlier line)", () => {
@@ -196,7 +211,7 @@ describe("creditInvoice", () => {
   });
 
   describe("edge cases", () => {
-    it("all-zero gross: spreads by the lines' amounts instead", () => {
+    it("zero gross does not matter while lines charged something: spreads by the charged amounts", () => {
       const credited = creditInvoice(active(9_000), [
         line({ lineNo: 1, quantity: "0", unitPriceSen: 5_000, amountSen: 2_000 }),
         line({ lineNo: 2, quantity: "0", unitPriceSen: 5_000, amountSen: 8_000 }),
@@ -208,7 +223,28 @@ describe("creditInvoice", () => {
       ]);
     });
 
-    it("all-zero gross and amounts: splits equally (leftover sen to the earlier lines)", () => {
+    it("no line charged anything (all ≤ 0): falls back to gross", () => {
+      // Two fully item-discounted lines (gross 100 / 300, charged 0) and a 40.00 gap to the net: +10.00 / +30.00.
+      const free = creditInvoice(active(4_000), [
+        line({ lineNo: 1, quantity: "1", unitPriceSen: 10_000, amountSen: 0 }),
+        line({ lineNo: 2, quantity: "3", unitPriceSen: 10_000, amountSen: 0, staffName: "Dr Bravo" }),
+      ]);
+      expect(free.map((row) => [row.spreadSen, row.creditedSen])).toEqual([
+        [1_000, 1_000],
+        [3_000, 3_000],
+      ]);
+      // A return invoice (all lines negative) with a further (10.00): by |gross| 120 / 30 → −8.00 / −2.00.
+      const returned = creditInvoice(active(-16_000, 16_000), [
+        line({ lineNo: 1, quantity: "-1", unitPriceSen: 12_000, amountSen: -12_000 }),
+        line({ lineNo: 2, quantity: "-1", unitPriceSen: 3_000, amountSen: -3_000 }),
+      ]);
+      expect(returned.map((row) => [row.spreadSen, row.creditedSen])).toEqual([
+        [-800, -12_800],
+        [-200, -3_200],
+      ]);
+    });
+
+    it("all-zero amounts and gross: splits equally (leftover sen to the earlier lines)", () => {
       const credited = creditInvoice(active(1_000), [
         line({ lineNo: 1, amountSen: 0, unitPriceSen: 0 }),
         line({ lineNo: 2, amountSen: 0, unitPriceSen: 0, staffName: "Dr Bravo" }),
@@ -217,20 +253,20 @@ describe("creditInvoice", () => {
       expect(credited.map((row) => row.creditedSen)).toEqual([334, 333, 333]);
     });
 
-    it("negative lines (returns): weights are absolute gross, so the spread keeps the pool's sign", () => {
+    it("negative lines (returns) take no share while other lines charged something", () => {
       // A whole return: nothing to spread.
       expect(
         creditInvoice(active(-12_000, 12_000), [line({ lineNo: 1, itemType: PRODUCT, quantity: "-1", unitPriceSen: 12_000, amountSen: -12_000, staffName: "Dr Delta" })]),
       ).toEqual([{ lineNo: 1, staffName: "Dr Delta", grossSen: -12_000, lineAmountSen: -12_000, spreadSen: 0, creditedSen: -12_000 }]);
-      // A sale and a return on one invoice with a (8.00) discount: −8.00 over |100| / |−20| → −6.67 / −1.33.
+      // A sale and a return on one invoice with a (8.00) discount: the discount is on what was charged (the sale).
       const mixed = creditInvoice(active(7_200), [
         line({ lineNo: 1, amountSen: 10_000 }),
         line({ lineNo: 2, quantity: "-1", unitPriceSen: 2_000, amountSen: -2_000, staffName: "Dr Bravo" }),
         discountLine(3, -800),
       ]);
       expect(mixed.map((row) => [row.spreadSen, row.creditedSen])).toEqual([
-        [-667, 9_333],
-        [-133, -2_133],
+        [-800, 9_200],
+        [0, -2_000],
       ]);
       expect(sum(mixed)).toBe(7_200);
     });
