@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { useTestDatabase } from "@/db/testing";
 import { SYNTHETIC_ACCOUNTS, readFixture } from "@/kreloses/testing/fake-kreloses";
-import { remapAlias, setStaffKind } from "@/staff/store";
+import { listStaffAliases, remapAlias, setStaffKind } from "@/staff/store";
 
 import { runSync, type SyncResult } from "./engine";
 import { listSyncRuns } from "./runs";
@@ -191,7 +191,7 @@ describe("Sync Engine: line items and credited lines", () => {
         return Response.json(template);
       });
 
-    it("matches a name once its staff member appears in the list; the owner's corrections and kinds are never overwritten", async () => {
+    it("never moves a name that already has revenue to a newly listed staff member: it only suggests them; owner's choices stay", async () => {
       const id = await h.connect(both);
       ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
       const alias = async (raw: string) =>
@@ -212,7 +212,10 @@ describe("Sync Engine: line items and credited lines", () => {
       ]);
       ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
 
-      expect(await alias("Dr Delta")).toMatchObject({ match: "auto", staff: "Dr Delta Dunn" });
+      // "Dr Delta" (a doctor who left) keeps its history; the new "Dr Delta Dunn" is only suggested.
+      expect(await alias("Dr Delta")).toMatchObject({ match: "unmatched", staff: "Dr Delta" });
+      const delta = (await listStaffAliases(db.sql)).find((row) => row.rawName === "Dr Delta")!;
+      expect(delta.suggestions.map((suggestion) => suggestion.name)).toEqual(["Dr Delta Dunn"]);
       expect(await alias("Charlie")).toMatchObject({ match: "manual", staff: "Dr Bravo Brown" });
       expect(await db.sql`select kind, kind_source from staff where full_name = 'Charlie Chen'`).toEqual([{ kind: "doctor", kindSource: "manual" }]);
       expect(await db.sql`select kind from staff where full_name = 'Dr Delta Dunn'`).toEqual([{ kind: "doctor" }]);

@@ -126,14 +126,21 @@ export function suggestStaff(raw: string, staff: readonly StaffCandidate[]): str
 }
 
 /**
- * The kind a staff member gets until the owner says otherwise, from all the names known for them
- * (the full name and the names on lines): generic if any name has a shared-account word (general,
- * branch, admin, reception…), else doctor if any has a doctor title or degree (Dr, Doctor, DVM…),
- * else other.
+ * The kind a staff member gets until the owner says otherwise (the owner's choice always wins; the
+ * caller never re-guesses a kind the owner set), from their full name and the names on lines
+ * credited to them:
+ *
+ * 1. doctor — the FULL name has a doctor title or degree (Dr, Doctor, DVM…);
+ * 2. generic — the FULL name has a shared-account word (general, branch, admin, reception…). Only
+ *    the full name counts: crediting a line name such as "North General" to a doctor must never
+ *    turn the doctor into a generic account;
+ * 3. doctor — any name on lines has a doctor title;
+ * 4. other.
  */
-export function defaultStaffKind(names: readonly string[]): StaffKind {
-  const all = names.flatMap(words);
-  if (all.some((word) => GENERIC_WORDS.has(word))) return "generic";
-  if (all.some((word) => DOCTOR_WORDS.has(word))) return "doctor";
+export function defaultStaffKind(fullName: string, lineNames: readonly string[] = []): StaffKind {
+  const own = words(fullName);
+  if (own.some((word) => DOCTOR_WORDS.has(word))) return "doctor";
+  if (own.some((word) => GENERIC_WORDS.has(word))) return "generic";
+  if (lineNames.flatMap(words).some((word) => DOCTOR_WORDS.has(word))) return "doctor";
   return "other";
 }

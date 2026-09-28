@@ -87,23 +87,32 @@ describe("matchStaffName", () => {
 });
 
 describe("defaultStaffKind (a guess the owner can always change)", () => {
-  it("generic accounts: branch / general / admin / reception-style names", () => {
-    expect(defaultStaffKind(["Branch North General"])).toBe("generic");
-    expect(defaultStaffKind(["North General"])).toBe("generic");
-    expect(defaultStaffKind(["Reception"])).toBe("generic");
-    expect(defaultStaffKind(["Admin Account"])).toBe("generic");
+  it("generic accounts: branch / general / admin / reception-style FULL names", () => {
+    expect(defaultStaffKind("Branch North General")).toBe("generic");
+    expect(defaultStaffKind("North General")).toBe("generic");
+    expect(defaultStaffKind("Reception")).toBe("generic");
+    expect(defaultStaffKind("Admin Account")).toBe("generic");
   });
 
-  it("doctors: a Dr / Doctor title or a veterinary degree on any of the names", () => {
-    expect(defaultStaffKind(["Dr Alpha Anderson"])).toBe("doctor");
-    expect(defaultStaffKind(["Alpha Anderson", "Dr. Alpha"])).toBe("doctor");
-    expect(defaultStaffKind(["Doctor Echo"])).toBe("doctor");
-    expect(defaultStaffKind(["Echo Evans DVM"])).toBe("doctor");
+  it("doctors: a Dr / Doctor title or a veterinary degree on the full name or any name on lines", () => {
+    expect(defaultStaffKind("Dr Alpha Anderson")).toBe("doctor");
+    expect(defaultStaffKind("Alpha Anderson", ["Dr. Alpha"])).toBe("doctor");
+    expect(defaultStaffKind("Doctor Echo")).toBe("doctor");
+    expect(defaultStaffKind("Echo Evans DVM")).toBe("doctor");
+  });
+
+  it('a generic-looking name on lines never makes someone generic (e.g. the owner credited "North General" to a doctor)', () => {
+    expect(defaultStaffKind("Dr Alpha Anderson", ["Dr Alpha", "North General"])).toBe("doctor");
+    expect(defaultStaffKind("Charlie Chen", ["Reception"])).toBe("other");
+  });
+
+  it("the full name decides first: a doctor title on it beats a generic word; a generic full name beats a doctor name on lines", () => {
+    expect(defaultStaffKind("Dr Branch")).toBe("doctor");
+    expect(defaultStaffKind("Branch North General", ["Dr Alpha"])).toBe("generic");
   });
 
   it("everyone else is other staff", () => {
-    expect(defaultStaffKind(["Charlie Chen", "Charlie"])).toBe("other");
-    expect(defaultStaffKind(["Drew Adams"])).toBe("other"); // "Drew" is not a title
-    expect(defaultStaffKind([])).toBe("other");
+    expect(defaultStaffKind("Charlie Chen", ["Charlie"])).toBe("other");
+    expect(defaultStaffKind("Drew Adams")).toBe("other"); // "Drew" is not a title
   });
 });

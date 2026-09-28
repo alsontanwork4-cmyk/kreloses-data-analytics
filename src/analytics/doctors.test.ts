@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { useTestDatabase } from "@/db/testing";
 import { SYNTHETIC_ACCOUNTS } from "@/kreloses/testing/fake-kreloses";
-import { remapAlias, setStaffKind } from "@/staff/store";
+import { listStaffMembers, remapAlias, setStaffKind } from "@/staff/store";
 import { runSync } from "@/sync/engine";
 import { clearSyncTables, createSyncHarness, type SyncHarness } from "@/sync/test-support";
 
@@ -315,6 +315,52 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     const after = await getDoctorRanking(db.sql, SEPTEMBER);
     expect(after.groups.pending.revenue).toBe("0.00");
     expect(after.doctors[0]).toMatchObject({ name: "Dr Bravo Brown", revenue: "3352.00" });
+  });
+
+  it("crediting a generic-looking name to a doctor keeps the doctor a doctor; a kind the owner set is never changed by a remap", async () => {
+    const aliasId = async (raw: string) => (await db.sql`select id::text from staff_aliases where raw_name = ${raw}`)[0]!.id as string;
+    const kindOf = async (name: string) => (await listStaffMembers(db.sql)).find((member) => member.name === name)!.kind;
+
+    // "North General" (a generic account's line name) was really Dr Alpha Anderson.
+    expect(await remapAlias(db.sql, await aliasId("North General"), staff["Dr Alpha Anderson"]!)).toEqual({ status: "saved" });
+    expect(await kindOf("Dr Alpha Anderson")).toBe("doctor");
+    const ranking = await getDoctorRanking(db.sql, SEPTEMBER);
+    expect(ranking.doctors.map((doctor) => [doctor.name, doctor.revenue])).toEqual([
+      ["Dr Bravo Brown", "3352.00"],
+      ["Dr Alpha Anderson", "1703.08"], // 1,654.35 + 48.73
+      ["Dr Delta", "480.00"],
+    ]);
+    expect(ranking.groups.generic.members.map((member) => member.name)).toEqual(["Branch South General"]);
+
+    // The owner made Charlie Chen a generic account; crediting a "Dr" name to him does not undo that.
+    await setStaffKind(db.sql, staff["Charlie Chen"]!, "generic");
+    await remapAlias(db.sql, await aliasId("Dr Delta"), staff["Charlie Chen"]!);
+    expect(await kindOf("Charlie Chen")).toBe("generic");
+
+    // Put everything back (the alias-only "Dr Delta" is still listed, so its own entry can be chosen again).
+    const deltaEntry = (await listStaffMembers(db.sql)).find((member) => member.name === "Dr Delta")!;
+    expect(deltaEntry).toMatchObject({ source: "alias_only", aliases: 0 });
+    await remapAlias(db.sql, await aliasId("Dr Delta"), deltaEntry.id);
+    await remapAlias(db.sql, await aliasId("North General"), staff["Branch North General"]!);
+    await setStaffKind(db.sql, staff["Charlie Chen"]!, "other");
+    expect((await getDoctorRanking(db.sql, SEPTEMBER)).doctors.map((doctor) => [doctor.name, doctor.revenue])).toEqual([
+      ["Dr Bravo Brown", "3352.00"],
+      ["Dr Alpha Anderson", "1654.35"],
+      ["Dr Delta", "480.00"],
+    ]);
+  });
+
+  it("a name that matched nobody can be credited to someone and then back to its own entry, restoring every figure", async () => {
+    const [delta] = await db.sql<{ id: string }[]>`select id::text from staff_aliases where raw_name = 'Dr Delta'`;
+    const before = await getDoctorRanking(db.sql, SEPTEMBER, { splitByBranch: true });
+
+    await remapAlias(db.sql, delta!.id, staff["Dr Bravo Brown"]!);
+    // Its own (alias-only) entry stays on the list of people to credit it to, with no names left.
+    const ownEntry = (await listStaffMembers(db.sql)).find((member) => member.source === "alias_only" && member.name === "Dr Delta");
+    expect(ownEntry).toMatchObject({ kind: "doctor", aliases: 0 });
+
+    expect(await remapAlias(db.sql, delta!.id, ownEntry!.id)).toEqual({ status: "saved" });
+    expect(await getDoctorRanking(db.sql, SEPTEMBER, { splitByBranch: true })).toEqual(before);
   });
 
   it("follows a remapped line name and a changed kind at once, without re-syncing", async () => {
