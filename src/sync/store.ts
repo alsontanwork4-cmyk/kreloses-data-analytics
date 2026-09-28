@@ -117,10 +117,12 @@ export async function saveInvoicePage(
       total_payments = excluded.total_payments,
       total_refunds = excluded.total_refunds,
       raw_header = excluded.raw_header,
-      -- Only a change in the columns above counts as a change (and makes #5 re-read the details);
-      -- a change in fields the app does not read just refreshes raw_header.
+      -- Only a change in the columns above counts as a change: a new header_version (so its line
+      -- items are read again, src/sync/lines.ts); a change in fields the app does not read just
+      -- refreshes raw_header.
       sync_run_id = case when ${changed} then excluded.sync_run_id else i.sync_run_id end,
-      fetched_at = case when ${changed} then excluded.fetched_at else i.fetched_at end
+      fetched_at = case when ${changed} then excluded.fetched_at else i.fetched_at end,
+      header_version = case when ${changed} then i.header_version + 1 else i.header_version end
     where ${changed} or i.raw_header is distinct from excluded.raw_header
     returning (xmax = 0) as inserted, sync_run_id = ${values.runId}::bigint as changed
   `;

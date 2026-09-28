@@ -43,6 +43,7 @@ export {
   AuthFailed,
   KrelosesError,
   LayoutChanged,
+  PageMissing,
   RateLimited,
   Transient,
   isKrelosesError,

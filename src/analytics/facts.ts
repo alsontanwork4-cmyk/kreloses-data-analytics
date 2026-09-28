@@ -22,9 +22,10 @@ import type { GlobalFilter } from "@/filters";
  *   gross_amount     numeric(12,2)  quantity × unit price of the line; null on pending rows
  *
  * An active invoice whose line items are not current (`invoices.lines_current` false: never read,
- * or the header changed since) contributes ONE `pending` row carrying its net amount, so revenue
- * never drops between a header sync and its line-item sync. Because an invoice's credited lines
- * add up exactly to its net amount, `sum(revenue)`, `count(distinct invoice_id)` and
+ * or the header changed since) contributes ONE `pending` row carrying its revenue base
+ * (`invoices.revenue_base`, the SQL twin of `invoiceRevenueBaseSen`), so revenue never drops
+ * between a header sync and its line-item sync. Because an invoice's credited lines add up exactly
+ * to its revenue base, `sum(revenue)`, `count(distinct invoice_id)` and
  * `count(distinct customer_id)` mean the same with or without line items.
  *
  * Scope: the filter's branches, and its doctors (`doctorIds` are `staff.id`s): with doctors
@@ -50,7 +51,7 @@ export function revenueFacts(sql: Sql, scope: FactsScope) {
       and ${staffCondition(sql, scope.staff, sql`a.staff_id`)}
     union all
     select
-      i.sale_date, i.branch_id, i.customer_id, i.id, i.net_amount,
+      i.sale_date, i.branch_id, i.customer_id, i.id, i.revenue_base,
       null::bigint, null::bigint, null::bigint, null::bigint, 'pending', null::numeric
     from invoices i
     where i.status = 'active' and not i.lines_current

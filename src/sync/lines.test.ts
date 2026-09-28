@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { getDataFreshness } from "@/analytics";
+import { invoiceRevenueBaseSen } from "@/attribution";
 import { useTestDatabase } from "@/db/testing";
+import { listInvoices, login } from "@/kreloses";
 import { SYNTHETIC_ACCOUNTS, readFixture } from "@/kreloses/testing/fake-kreloses";
+import { moneyToSen } from "@/lib/money";
 import { listStaffAliases, remapAlias, setStaffKind } from "@/staff/store";
 
 import { runSync, type SyncResult } from "./engine";
 import { listSyncRuns } from "./runs";
+import { saveInvoicePage } from "./store";
 import { clearSyncTables, createSyncHarness, type SyncHarness } from "./test-support";
 
 /**
@@ -19,6 +24,13 @@ const SEPTEMBER = { from: "2026-09-01", to: "2026-09-30" };
 function ran(result: SyncResult) {
   if (!("runId" in result)) throw new Error(`expected a run, got ${JSON.stringify(result)}`);
   return result;
+}
+
+/** One sale as the Sale List shows it now (read through the Reader in a session of its own). */
+async function listInvoicesFor(h: SyncHarness, saleId: string) {
+  const session = await login(both, { requestDelayMs: 0, transport: h.fake.transport });
+  const page = await listInvoices(session, { page: 1, dateRange: SEPTEMBER, includeCancelled: true });
+  return page.invoices.filter((invoice) => invoice.saleId === saleId);
 }
 
 describe("Sync Engine: line items and credited lines", () => {
@@ -182,6 +194,105 @@ describe("Sync Engine: line items and credited lines", () => {
     expect(result.error!.message).toMatch(/exceed TotalCount/);
   });
 
+  describe("invoice pages that are not there (404, or sent elsewhere)", () => {
+    const missing = (...saleIds: string[]) => {
+      let active = true;
+      h.fake.intercept((request) => {
+        const saleId = /^\/Sale\/Overview\/(\d+)$/.exec(request.url.pathname)?.[1];
+        if (!active || !saleId || !saleIds.includes(saleId)) return undefined;
+        return saleId === saleIds[0]
+          ? new Response("<html><body>404</body></html>", { status: 404, headers: { "Content-Type": "text/html" } })
+          : new Response(null, { status: 302, headers: { Location: "/Sale/List" } });
+      });
+      return () => (active = false);
+    };
+
+    it("skips them: the others get their lines, they stay 'not synced yet' at their net, the run ends partial; the next run retries them", async () => {
+      const id = await h.connect(both);
+      const restore = missing("700202", "700206");
+      const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+
+      expect(result).toMatchObject({ status: "partial", counts: { invoicesSeen: 11, lineItemsRead: 7, lineItemsFailed: 2 } });
+      const [run] = await listSyncRuns(db.sql);
+      expect(run).toMatchObject({
+        status: "partial",
+        errorCode: null,
+        // The whole listing was read: it counts for "data as of", and "Sync now" starts over (retrying the pages).
+        coveredLocationIds: ["1101", "1102"],
+        checkpoint: { nextPage: 1 },
+        warnings: [{ code: "invoice_pages_missing", message: expect.stringMatching(/2 invoice pages could not be opened/) }],
+      });
+      expect((await getDataFreshness(db.sql, { dateFrom: "2026-09-01", dateTo: "2026-09-30" })).map((branch) => branch.dataAsOf)).toEqual([
+        run!.finishedAt,
+        run!.finishedAt,
+      ]);
+      const current = await db.sql`
+        select kreloses_sale_id, lines_current from invoices where status = 'active' and not lines_current order by 1
+      `;
+      expect(current).toEqual([
+        { krelosesSaleId: "700202", linesCurrent: false },
+        { krelosesSaleId: "700206", linesCurrent: false },
+      ]);
+
+      restore();
+      h.clock.advance(60_000);
+      const next = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+      expect(next).toMatchObject({ status: "succeeded", counts: { lineItemsRead: 2, lineItemsFailed: 0 } });
+      expect((await listSyncRuns(db.sql))[0]).toMatchObject({ status: "succeeded", warnings: [] });
+      expect(await db.sql`select 1 from invoices where status = 'active' and not lines_current`).toEqual([]);
+    });
+
+    it("fails the run loudly when the first three pages it tries are all missing (something is systematically wrong)", async () => {
+      const id = await h.connect(both);
+      missing("700105", "700205", "700104");
+      const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+      expect(result).toMatchObject({ status: "failed", error: { code: "layout_changed" }, counts: { lineItemsRead: 0, lineItemsFailed: 3 } });
+      expect(result.error!.message).toMatch(/could not open invoice pages/i);
+    });
+  });
+
+  it("records, per invoice and per run, when an invoice's lines do not add up to its net amount (the gap monitor)", async () => {
+    const id = await h.connect(both);
+    const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+    // 700203: lines 100.00 + 160.00 = 260.00 against a net of 250.00. Every other invoice adds up.
+    expect(result.counts).toMatchObject({ lineItemsRead: 9, lineItemGaps: 1 });
+    expect(await db.sql`select kreloses_sale_id, line_gap_amount from invoices where line_gap_amount <> 0`).toEqual([
+      { krelosesSaleId: "700203", lineGapAmount: "-10.00" },
+    ]);
+    expect(await db.sql`select count(*)::int as n from invoices where status = 'active' and line_gap_amount = 0`).toEqual([{ n: 8 }]);
+  });
+
+  it("keeps the revenue base defined the same in TypeScript and SQL (invoiceRevenueBaseSen = invoices.revenue_base)", async () => {
+    const id = await h.connect(both);
+    ran(await runSync(h.deps(), id, "manual", { dateRange: { from: "2025-09-01", to: "2026-09-30" } }));
+    const rows = await db.sql<{ status: "active" | "cancelled"; netAmount: string; totalRefunds: string; revenueBase: string }[]>`
+      select status, net_amount, total_refunds, revenue_base from invoices
+    `;
+    expect(rows).toHaveLength(20);
+    expect(rows.some((row) => row.status === "cancelled")).toBe(true);
+    expect(rows.some((row) => row.totalRefunds !== "0.00")).toBe(true);
+    for (const row of rows) {
+      const ts = invoiceRevenueBaseSen({ status: row.status, netSen: moneyToSen(row.netAmount), totalRefundsSen: moneyToSen(row.totalRefunds) });
+      expect(moneyToSen(row.revenueBase), JSON.stringify(row)).toBe(ts);
+    }
+  });
+
+  it("never marks lines current for a header they were not read for (another sync changed it meanwhile)", async () => {
+    const id = await h.connect(both);
+    // While this run opens 700202's page, another connection's sync stores a newer header for it.
+    h.fake.intercept(async (request) => {
+      if (request.url.pathname !== "/Sale/Overview/700202") return undefined;
+      const [running] = await db.sql<{ id: string }[]>`select id::text from sync_runs where status = 'running'`;
+      const invoices = (await listInvoicesFor(h, "700202")).map((invoice) => ({ ...invoice, netSen: 90_000, totalSen: 90_000 }));
+      await saveInvoicePage(db.sql, { runId: running!.id, connectionId: id, invoices, fetchedAt: h.clock.now });
+      return undefined;
+    });
+    ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+    const [invoice] = await db.sql`select net_amount, lines_current from invoices where kreloses_sale_id = '700202'`;
+    expect(invoice).toEqual({ netAmount: "900.00", linesCurrent: false });
+    expect(await db.sql`select 1 from credited_lines c join invoices i on i.id = c.invoice_id where i.kreloses_sale_id = '700202'`).toEqual([]);
+  });
+
   describe("the staff list over time", () => {
     const withStaff = (options: { Value: string; Text: string }[]) =>
       h.fake.intercept((request) => {
@@ -219,6 +330,32 @@ describe("Sync Engine: line items and credited lines", () => {
       expect(await alias("Charlie")).toMatchObject({ match: "manual", staff: "Dr Bravo Brown" });
       expect(await db.sql`select kind, kind_source from staff where full_name = 'Charlie Chen'`).toEqual([{ kind: "doctor", kindSource: "manual" }]);
       expect(await db.sql`select kind from staff where full_name = 'Dr Delta Dunn'`).toEqual([{ kind: "doctor" }]);
+    });
+
+    it("a template without a readable Staff filter is a warning, not a failure: lines are still credited (names unmatched), nobody is marked inactive", async () => {
+      const id = await h.connect(both);
+      ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+      h.fake.intercept((request) => {
+        if (request.url.pathname !== "/Report/GetFilter") return undefined;
+        const template = JSON.parse(readFixture("report-14-filter.json")) as { Filters: { Name: string }[] };
+        template.Filters = template.Filters.filter((filter) => filter.Name !== "Staff");
+        return Response.json(template);
+      });
+      // A sale with a new staff name arrives.
+      (h.fake.saleOverviews["700105"] as { Items: { StaffName: string }[] }).Items[0]!.StaffName = "Dr Echo";
+      h.fake.saleRows.find((row) => row.SaleId === 700105)!.PaymentStatusName = "Paid";
+      h.clock.advance(60_000);
+
+      const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+      expect(result).toMatchObject({ status: "succeeded", counts: { lineItemsRead: 1 } });
+      expect((await listSyncRuns(db.sql))[0]).toMatchObject({
+        status: "succeeded",
+        warnings: [{ code: "staff_list_unreadable", message: expect.stringMatching(/Staff/) }],
+      });
+      expect(await db.sql`select a.match, s.source from staff_aliases a join staff s on s.id = a.staff_id where a.raw_name = 'Dr Echo'`).toEqual([
+        { match: "unmatched", source: "alias_only" },
+      ]);
+      expect(await db.sql`select count(*)::int as n from staff where source = 'kreloses' and not active`).toEqual([{ n: 0 }]);
     });
 
     it("marks staff Kreloses no longer lists as inactive, keeping them and their names", async () => {

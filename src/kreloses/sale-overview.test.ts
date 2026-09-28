@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AuthFailed, getInvoice, LayoutChanged, listLocations, listStaff, login, type KrelosesInvoiceDetail } from "./index";
+import { AuthFailed, getInvoice, LayoutChanged, listLocations, listStaff, login, PageMissing, type KrelosesInvoiceDetail } from "./index";
 import { extractPageModel } from "./sale-overview";
 import { SYNTHETIC_ACCOUNTS, createFakeKreloses, readFixture, readSaleOverviewModels, type FakeKreloses } from "./testing/fake-kreloses";
 
@@ -187,11 +187,40 @@ describe("Kreloses Reader: getInvoice", () => {
       for (const value of NOTHING_PERSONAL) expect(told, value).not.toContain(value);
     });
 
+  });
+
+  describe("a page that is not there is told apart (PageMissing, a kind of LayoutChanged) so the sync can carry on", () => {
     it("an unknown sale (HTTP 404)", async () => {
       const { session } = await signedIn();
       const error = await failure(getInvoice(session, "999999"));
+      expect(error).toBeInstanceOf(PageMissing);
       expect(error).toBeInstanceOf(LayoutChanged);
+      expect(error).toMatchObject({ reason: "not_found", status: 404 });
       expect((error as Error).message).toMatch(/GET sea\.kreloses\.com\/Sale\/Overview\/999999 returned HTTP 404/);
+    });
+
+    it("a redirect somewhere other than the login page (e.g. back to the sale list)", async () => {
+      const { fake, session } = await signedIn();
+      fake.intercept((request) =>
+        request.url.pathname === "/Sale/Overview/700101" ? new Response(null, { status: 302, headers: { Location: "/Sale/List" } }) : undefined,
+      );
+      const error = await failure(getInvoice(session, "700101"));
+      expect(error).toBeInstanceOf(PageMissing);
+      expect(error).toMatchObject({ reason: "redirected" });
+    });
+
+    it("but a redirect to the login page is still an expired session, and a changed page still a plain LayoutChanged", async () => {
+      const { fake, session } = await signedIn();
+      fake.intercept((request) =>
+        request.url.pathname === "/Sale/Overview/700101"
+          ? new Response(null, { status: 302, headers: { Location: "https://www.kreloses.com/account/login?ReturnUrl=x" } })
+          : undefined,
+      );
+      expect(await failure(getInvoice(session, "700101"))).toBeInstanceOf(AuthFailed);
+      answerOverview(fake, "700102", readFixture("sale-overview-no-model.html"));
+      const changed = await failure(getInvoice(session, "700102"));
+      expect(changed).toBeInstanceOf(LayoutChanged);
+      expect(changed).not.toBeInstanceOf(PageMissing);
     });
   });
 

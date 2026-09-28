@@ -6,9 +6,11 @@ import { clinicToday, endOfMonth, isIsoDate, startOfMonth, type IsoDate } from "
 import {
   AuthFailed,
   getInvoice,
+  LayoutChanged,
   listInvoices,
   listLocations,
   listStaff,
+  PageMissing,
   RateLimited,
   SALE_LIST_PAGE_SIZE,
   Transient,
@@ -21,7 +23,8 @@ import {
 } from "@/kreloses";
 import { upsertStaffDirectory } from "@/staff/store";
 
-import { describeSyncFailure, isLoginFailure, type SyncFailure } from "./messages";
+import { invoicesNeedingLines, saveInvoiceLines } from "./lines";
+import { describeSyncFailure, isLoginFailure, missingPagesWarning, staffListWarning, type SyncFailure } from "./messages";
 import {
   finishRun,
   markInterruptedRuns,
@@ -32,8 +35,8 @@ import {
   type SyncCheckpoint,
   type SyncCounts,
   type SyncMode,
+  type SyncWarning,
 } from "./runs";
-import { invoicesNeedingLines, saveInvoiceLines } from "./lines";
 import { saveInvoicePage, upsertBranches } from "./store";
 
 /**
@@ -111,7 +114,19 @@ export interface SyncOptions {
 }
 
 export type SyncResult =
-  | { status: "succeeded" | "partial" | "failed"; runId: string; counts: SyncCounts; error?: SyncFailure }
+  | {
+      status: "succeeded" | "partial" | "failed";
+      runId: string;
+      counts: SyncCounts;
+      error?: SyncFailure;
+      /** Things to tell the owner even though the run did not fail (also on Sync status). */
+      warnings: SyncWarning[];
+      /**
+       * For `partial`: true = stopped at the time budget (carry on from `checkpoint`); false = read
+       * everything but some invoice pages were missing (`counts.lineItemsFailed`).
+       */
+      stoppedAtTimeLimit?: boolean;
+    }
   /** Another sync or a login test holds the connection; nothing was done. */
   | { status: "busy"; heldFor: LeasePurpose; until: Date }
   | { status: "not_found" };
@@ -128,6 +143,8 @@ export const DEFAULT_TIME_BUDGET_MS = 200_000;
 const LEASE_MARGIN_MS = 120_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
 const DEFAULT_MAX_RETRIES = 3;
+/** A run fails when this many invoice pages are missing before any could be read. */
+export const MISSING_PAGES_TO_FAIL = 3;
 
 const DEFAULT_READER: SyncReader = { listLocations, listStaff, listInvoices, getInvoice };
 
@@ -187,6 +204,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
   const reader = deps.reader ?? DEFAULT_READER;
   const pageSize = options.pageSize ?? SALE_LIST_PAGE_SIZE;
   let counts: SyncCounts = { ...NO_COUNTS };
+  const warnings: SyncWarning[] = [];
   let page = options.startPage ?? 1;
   // Handed back to the Reader with the next page, so paging that does not advance fails loudly.
   let previous: InvoicePage | undefined;
@@ -197,14 +215,23 @@ async function execute(run: RunContext): Promise<SyncResult> {
     const locations = await client.call((session) => reader.listLocations(session));
     await recordLoginOutcome(deps.sql, connectionId, { ok: true, visibleLocations: locations });
     await upsertBranches(deps.sql, connectionId, locations);
-    const staff = await client.call((session) => reader.listStaff(session));
-    await upsertStaffDirectory(deps.sql, connectionId, staff);
+    try {
+      const staff = await client.call((session) => reader.listStaff(session));
+      await upsertStaffDirectory(deps.sql, connectionId, staff);
+    } catch (error) {
+      // The staff list only improves name matching: without it, lines are still credited (to
+      // unmatched names), so it is a warning, never a reason to stop the sync.
+      if (!(error instanceof LayoutChanged)) throw error;
+      warnings.push(staffListWarning(error));
+    }
 
     const outOfTime = () => now().getTime() >= run.deadline;
     const stopPartial = async (): Promise<SyncResult> => {
-      await finishRun(deps.sql, runId, { status: "partial", finishedAt: now(), counts, checkpoint: checkpoint() });
-      return { status: "partial", runId, counts };
+      await finishRun(deps.sql, runId, { status: "partial", finishedAt: now(), counts, checkpoint: checkpoint(), warnings: withMissingPages() });
+      return { status: "partial", runId, counts, warnings: withMissingPages(), stoppedAtTimeLimit: true };
     };
+    let lastMissing: PageMissing | null = null;
+    const withMissingPages = (): SyncWarning[] => (counts.lineItemsFailed > 0 ? [...warnings, missingPagesWarning(counts.lineItemsFailed)] : warnings);
     for (;;) {
       if (outOfTime()) return await stopPartial();
       const result = await client.call((session) =>
@@ -227,9 +254,25 @@ async function execute(run: RunContext): Promise<SyncResult> {
       // Line items of the page's new and changed invoices, one Sale Overview page at a time.
       for (const invoice of await invoicesNeedingLines(deps.sql, result.invoices.map((invoice) => invoice.saleId))) {
         if (outOfTime()) return await stopPartial();
-        const detail = await client.call((session) => reader.getInvoice(session, invoice.saleId));
-        await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, detail, fetchedAt: now() });
-        counts = { ...counts, lineItemsRead: counts.lineItemsRead + 1 };
+        let detail: KrelosesInvoiceDetail;
+        try {
+          detail = await client.call((session) => reader.getInvoice(session, invoice.saleId));
+        } catch (error) {
+          // One page that is not there must not stop every other invoice (nor "data as of"): skip
+          // it — it stays "not synced yet" at its net amount — and try again next run. Pages whose
+          // content changed (LayoutChanged proper) stay fatal, and so does a run whose first
+          // MISSING_PAGES_TO_FAIL pages are all missing (something systematic, e.g. a new URL).
+          if (!(error instanceof PageMissing)) throw error;
+          lastMissing = error;
+          counts = { ...counts, lineItemsFailed: counts.lineItemsFailed + 1 };
+          await recordProgress(deps.sql, runId, counts, checkpoint());
+          if (counts.lineItemsRead === 0 && counts.lineItemsFailed >= MISSING_PAGES_TO_FAIL) throw lastMissing;
+          continue;
+        }
+        const saved = await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, headerVersion: invoice.headerVersion, detail, fetchedAt: now() });
+        if (saved.status === "stored") {
+          counts = { ...counts, lineItemsRead: counts.lineItemsRead + 1, lineItemGaps: counts.lineItemGaps + (saved.gapSen !== 0 ? 1 : 0) };
+        }
         await recordProgress(deps.sql, runId, counts, checkpoint());
       }
       await recordProgress(deps.sql, runId, counts, result.hasMore ? { nextPage: page + 1, pageSize } : null);
@@ -238,13 +281,22 @@ async function execute(run: RunContext): Promise<SyncResult> {
       page += 1;
     }
 
-    await finishRun(deps.sql, runId, {
-      status: "succeeded",
-      finishedAt: now(),
-      counts,
-      coveredLocationIds: locations.map((location) => location.id),
-    });
-    return { status: "succeeded", runId, counts };
+    const coveredLocationIds = locations.map((location) => location.id);
+    if (counts.lineItemsFailed > 0) {
+      // The whole listing was read (it counts for "data as of"), but some invoices still need
+      // their lines: "Sync now" starts over from page 1, which retries them.
+      await finishRun(deps.sql, runId, {
+        status: "partial",
+        finishedAt: now(),
+        counts,
+        checkpoint: { nextPage: 1, pageSize },
+        coveredLocationIds,
+        warnings: withMissingPages(),
+      });
+      return { status: "partial", runId, counts, warnings: withMissingPages(), stoppedAtTimeLimit: false };
+    }
+    await finishRun(deps.sql, runId, { status: "succeeded", finishedAt: now(), counts, coveredLocationIds, warnings });
+    return { status: "succeeded", runId, counts, warnings };
   } catch (error) {
     const failure = describeSyncFailure(error);
     if (failure.code === "internal") {
@@ -258,8 +310,9 @@ async function execute(run: RunContext): Promise<SyncResult> {
       checkpoint: counts.pages > 0 || page > 1 ? checkpoint() : null,
       errorCode: failure.code,
       error: failure.message,
+      warnings,
     });
-    return { status: "failed", runId, counts, error: failure };
+    return { status: "failed", runId, counts, error: failure, warnings };
   }
 }
 

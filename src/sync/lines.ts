@@ -1,4 +1,4 @@
-import { aliasKey, creditInvoice, type AttributionLine } from "@/attribution";
+import { aliasKey, creditInvoice, invoiceRevenueBaseSen, type AttributionLine } from "@/attribution";
 import type { JsonValue, Sql } from "@/db/sql";
 import type { KrelosesInvoiceDetail } from "@/kreloses";
 import { moneyToSen, senToMoney } from "@/lib/money";
@@ -15,19 +15,21 @@ import { ensureAliases } from "@/staff/store";
 export interface InvoiceNeedingLines {
   invoiceId: string;
   saleId: string;
+  /** The header version the lines will be computed for (see `saveInvoiceLines`). */
+  headerVersion: number;
 }
 
 /**
  * THE rule for which invoices need their line items (re)read (#6 refines change detection here):
  * active invoices whose lines are not current — never read, or the header changed since they were
- * (`invoices.lines_current`, i.e. `detail_fetched_at >= fetched_at`, and `fetched_at` moves only
+ * (`invoices.lines_current`: `lines_header_version = header_version`, and the version moves only
  * when a parsed header column changes). Cancelled invoices are never read (they credit nothing).
  * Only among `saleIds` (the Sale List page just stored), in the page's order.
  */
 export async function invoicesNeedingLines(sql: Sql, saleIds: readonly string[]): Promise<InvoiceNeedingLines[]> {
   if (saleIds.length === 0) return [];
   const rows = await sql<InvoiceNeedingLines[]>`
-    select i.id::text as invoice_id, i.kreloses_sale_id as sale_id
+    select i.id::text as invoice_id, i.kreloses_sale_id as sale_id, i.header_version
     from invoices i
     where i.kreloses_sale_id = any(${[...saleIds]}::text[]) and i.status = 'active' and not i.lines_current
   `;
@@ -35,29 +37,37 @@ export async function invoicesNeedingLines(sql: Sql, saleIds: readonly string[])
   return rows.sort((a, b) => order.get(a.saleId)! - order.get(b.saleId)!);
 }
 
+export type SaveLinesResult =
+  /** Stored and current. `gapSen` = net amount − Σ all line amounts (0 when the lines add up). */
+  | { status: "stored"; gapSen: number }
+  /** The header changed (another sync) since the page was chosen: nothing written; still pending. */
+  | { status: "header_changed" };
+
 /**
  * Stores an invoice's line items and derives its credited lines, in one transaction:
  *
- * 1. locks the invoice row and reads its current header (status, net, refunds), so the credited
- *    lines are computed from exactly the header they will be counted with;
+ * 1. locks the invoice row; if its `header_version` is no longer `headerVersion` (the version the
+ *    page was opened for) nothing is written — the lines might belong to another state of the
+ *    invoice; it stays "not synced yet" and the next sync reads it again;
  * 2. upserts `invoice_lines` by (invoice, line_no), deleting lines beyond the new count;
  * 3. makes sure every staff name on the lines has an alias (matching new names);
  * 4. `creditInvoice` (pure) → upserts `credited_lines`, deleting rows no longer produced;
- * 5. sets `detail_fetched_at` (never before `fetched_at`: the lines ARE current for this header)
- *    and `raw_detail`.
+ * 5. sets `lines_header_version` (so the lines are current for exactly this header),
+ *    `detail_fetched_at`, `raw_detail` and `line_gap_amount`.
  *
  * Idempotent: reading the same page again leaves the same rows (ids included).
  */
 export async function saveInvoiceLines(
   sql: Sql,
-  values: { invoiceId: string; detail: KrelosesInvoiceDetail; fetchedAt: Date },
-): Promise<void> {
-  const { invoiceId, detail, fetchedAt } = values;
-  await sql.begin(async (tx) => {
-    const [header] = await tx<{ status: "active" | "cancelled"; netAmount: string; totalRefunds: string }[]>`
-      select status, net_amount, total_refunds from invoices where id = ${invoiceId} for update
+  values: { invoiceId: string; headerVersion: number; detail: KrelosesInvoiceDetail; fetchedAt: Date },
+): Promise<SaveLinesResult> {
+  const { invoiceId, headerVersion, detail, fetchedAt } = values;
+  return sql.begin(async (tx): Promise<SaveLinesResult> => {
+    const [header] = await tx<{ status: "active" | "cancelled"; netAmount: string; totalRefunds: string; revenueBase: string; headerVersion: number }[]>`
+      select status, net_amount, total_refunds, revenue_base, header_version from invoices where id = ${invoiceId} for update
     `;
     if (!header) throw new Error(`invoice ${invoiceId} does not exist`);
+    if (header.headerVersion !== headerVersion) return { status: "header_changed" };
 
     const lines = detail.lines.map((line) => ({
       line_no: line.lineNo,
@@ -105,10 +115,13 @@ export async function saveInvoiceLines(
       amountSen: line.amountSen,
       staffName: line.staffName,
     }));
-    const credited = creditInvoice(
-      { status: header.status, netSen: moneyToSen(header.netAmount), totalRefundsSen: moneyToSen(header.totalRefunds) },
-      attributionLines,
-    );
+    const invoice = { status: header.status, netSen: moneyToSen(header.netAmount), totalRefundsSen: moneyToSen(header.totalRefunds) };
+    // The revenue base has a TypeScript and an SQL definition (invoices.revenue_base); they must agree.
+    if (invoiceRevenueBaseSen(invoice) !== moneyToSen(header.revenueBase)) {
+      throw new Error(`invoice ${invoiceId}: invoiceRevenueBaseSen and invoices.revenue_base disagree; change both together`);
+    }
+    const credited = creditInvoice(invoice, attributionLines);
+    const gapSen = invoice.netSen - detail.lines.reduce((total, line) => total + (line.amountSen ?? 0), 0);
     const aliases = await ensureAliases(tx, credited.flatMap((row) => (row.staffName ? [row.staffName] : [])));
     const rows = credited.map((row) => ({
       invoice_line_id: row.lineNo === null ? null : lineIds.get(row.lineNo)!,
@@ -157,9 +170,12 @@ export async function saveInvoiceLines(
 
     await tx`
       update invoices set
-        detail_fetched_at = greatest(${fetchedAt}::timestamptz, fetched_at),
-        raw_detail = ${tx.json(detail.raw as JsonValue)}
+        lines_header_version = ${headerVersion},
+        detail_fetched_at = ${fetchedAt},
+        raw_detail = ${tx.json(detail.raw as JsonValue)},
+        line_gap_amount = ${senToMoney(gapSen)}
       where id = ${invoiceId}
     `;
+    return { status: "stored", gapSen };
   });
 }

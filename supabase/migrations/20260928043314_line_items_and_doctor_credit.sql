@@ -140,15 +140,41 @@ comment on table public.credited_lines is
 -- worked out from stored data.
 alter table public.invoices add column raw_detail jsonb;
 
--- Whether the stored line items (and credited lines) belong to the header as it is now: read at
--- or after the header was last written. False = never read, or the header changed since (the
--- next sync re-reads them); meanwhile the Analytics Service counts the invoice's net amount as
--- "line items not synced yet" so revenue never drops. THE one definition of "lines are current".
+-- The header's version: 1 when first stored, +1 each time the sync writes a change to a parsed
+-- header column (src/sync/store.ts). Compared for equality, never by clock, so two connections
+-- syncing the same branch cannot mark lines read for one header current for another.
+alter table public.invoices add column header_version integer not null default 1
+  constraint invoices_header_version_valid check (header_version >= 1);
+-- The header version the stored line items and credited lines were computed from (null = never).
+alter table public.invoices add column lines_header_version integer;
+
+-- Whether the stored line items (and credited lines) belong to the header as it is now. False =
+-- never read, or the header changed since (the next sync re-reads them); meanwhile the Analytics
+-- Service counts the invoice's revenue base as "line items not synced yet" so revenue never drops.
+-- THE one definition of "lines are current".
 alter table public.invoices add column lines_current boolean
-  generated always as (detail_fetched_at is not null and detail_fetched_at >= fetched_at) stored;
+  generated always as (coalesce(lines_header_version = header_version, false)) stored;
+
+-- What the invoice's credited lines add up to — the SQL twin of invoiceRevenueBaseSen()
+-- (src/attribution/credit.ts; a test keeps the two equal): the net amount of an active invoice,
+-- zero for a cancelled one. Refunds are not deducted (pending live verification, #6). Change both
+-- together.
+alter table public.invoices add column revenue_base numeric(12, 2)
+  generated always as (case when status = 'active' then net_amount else 0 end) stored;
+
+-- The gap monitor: net amount − the sum of ALL line amounts (discount lines included) when the
+-- lines were read. Normally 0; anything else is spread over the lines and counted on the run.
+alter table public.invoices add column line_gap_amount numeric(12, 2);
 
 comment on column public.invoices.lines_current is
-  'Line items read since the header last changed. Only then do its credited lines count; otherwise its net amount counts as pending.';
+  'Line items read for the current header version. Only then do its credited lines count; otherwise its revenue_base counts as pending.';
+comment on column public.invoices.revenue_base is
+  'What credited lines add up to (active: net_amount; cancelled: 0). Twin of invoiceRevenueBaseSen() in src/attribution/credit.ts.';
+
+-- Things a run wants the owner to know even though it did not fail: [{"code", "message"}]
+-- (src/sync/runs.ts: e.g. invoice pages that could not be opened, an unreadable staff list).
+alter table public.sync_runs add column warnings jsonb not null default '[]'::jsonb
+  constraint sync_runs_warnings_array check (jsonb_typeof(warnings) = 'array');
 
 alter table public.staff enable row level security;
 alter table public.staff_aliases enable row level security;
