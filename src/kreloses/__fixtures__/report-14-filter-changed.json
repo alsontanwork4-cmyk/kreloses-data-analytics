@@ -1,0 +1,8 @@
+{
+  "reportDefinition": {
+    "id": 14,
+    "sections": [
+      { "heading": "Where", "controls": [{ "type": "branchPicker", "branches": [1101, 1102] }] }
+    ]
+  }
+}

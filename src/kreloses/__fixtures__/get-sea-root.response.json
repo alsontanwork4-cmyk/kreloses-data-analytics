@@ -1,0 +1,11 @@
+{
+  "comment": "GET https://sea.kreloses.com/ (signed in): relative redirect to the dashboard.",
+  "status": 302,
+  "headers": {
+    "Location": "/Home/Index",
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [],
+  "body": "<html><head><title>Object moved</title></head><body>\r\n<h2>Object moved to <a href=\"/Home/Index\">here</a>.</h2>\r\n</body></html>\r\n"
+}

@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -12,6 +12,8 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.ts"],
+    // Opt-in tests against the real Kreloses run only via `npm run test:live` (vitest.live.config.mts).
+    exclude: [...configDefaults.exclude, "**/*.live.test.ts"],
     environment: "node",
     globalSetup: ["src/db/vitest-global-setup.ts"],
     testTimeout: 30_000,

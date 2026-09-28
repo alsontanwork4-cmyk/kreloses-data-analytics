@@ -1,0 +1,13 @@
+{
+  "comment": "POST https://www.kreloses.com/account/login for an account with two-factor sign-in (ASP.NET Identity RequiresVerification): redirect to the code page instead of the app.",
+  "status": 302,
+  "headers": {
+    "Location": "/Account/VerifyCode?Provider=Email%20Code&ReturnUrl=%2F&RememberMe=False",
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [
+    ".AspNet.TwoFactorCookie={{AUTH_TICKET}}; path=/; secure; HttpOnly; SameSite=Lax"
+  ],
+  "body": "<html><head><title>Object moved</title></head><body>\r\n<h2>Object moved to <a href=\"/Account/VerifyCode\">here</a>.</h2>\r\n</body></html>\r\n"
+}

@@ -1,0 +1,158 @@
+import type { ReaderOptions } from "./config";
+import type { CookieChange, CookieSummary } from "./cookie-jar";
+import { AuthFailed, isKrelosesError, LayoutChanged } from "./errors";
+import { describeJsonShape, fetchFilterTemplate, parseLocations, SALE_LIST_REPORT } from "./locations";
+import { login, type KrelosesCredentials } from "./login";
+import type { HopEvent, KrelosesSession } from "./session";
+
+/**
+ * A redacted account of one real login, for the opt-in live smoke test (`npm run test:live`).
+ * It answers the spec's open questions about server-side login — is there a one-time-code step,
+ * which host does the session cookie work on, what are the cookies' scopes and lifetimes, how
+ * long does a session last — without recording anything secret or personal: no email, password,
+ * cookie values, tokens, query strings or location names. The owner pastes it into the ticket.
+ */
+export interface LoginDiagnostic {
+  hops: HopEvent[];
+  login: { ok: true; durationMs: number } | { ok: false; durationMs: number; error: string };
+  oneTimeCodeStep: boolean;
+  /** The host an authenticated request succeeded on, or null. */
+  sessionWorksOn: string | null;
+  /** Null when the login failed (not checked). */
+  locations: { ok: true; count: number } | { ok: false; error: string } | null;
+  filterShape: string | null;
+  cookies: CookieSummary[];
+  probes: { afterMinutes: number; ok: boolean; error?: string }[];
+}
+
+export interface DiagnosticOptions {
+  reader?: ReaderOptions;
+  /** Keep re-checking the session for this many minutes (0 = don't). */
+  probeMinutes?: number;
+  probeIntervalMinutes?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export async function runLoginDiagnostic(
+  credentials: KrelosesCredentials,
+  options: DiagnosticOptions = {},
+): Promise<LoginDiagnostic> {
+  const hops: HopEvent[] = [];
+  const reader: ReaderOptions = {
+    ...options.reader,
+    observer: (hop) => {
+      hops.push(hop);
+      options.reader?.observer?.(hop);
+    },
+  };
+  const diagnostic: LoginDiagnostic = {
+    hops,
+    login: { ok: true, durationMs: 0 },
+    oneTimeCodeStep: false,
+    sessionWorksOn: null,
+    locations: null,
+    filterShape: null,
+    cookies: [],
+    probes: [],
+  };
+
+  const startedAt = Date.now();
+  let session: KrelosesSession;
+  try {
+    session = await login(credentials, reader);
+    diagnostic.login = { ok: true, durationMs: Date.now() - startedAt };
+  } catch (error) {
+    diagnostic.login = { ok: false, durationMs: Date.now() - startedAt, error: describeError(error) };
+    diagnostic.oneTimeCodeStep = error instanceof AuthFailed && error.step === "one_time_code";
+    return diagnostic;
+  }
+
+  try {
+    const template = await fetchFilterTemplate(session, SALE_LIST_REPORT);
+    diagnostic.sessionWorksOn = session.appHost;
+    diagnostic.filterShape = describeJsonShape(template);
+    diagnostic.locations = { ok: true, count: parseLocations(template).length };
+  } catch (error) {
+    diagnostic.locations = { ok: false, error: describeError(error) };
+    if (error instanceof LayoutChanged) diagnostic.filterShape = error.shape ?? null;
+  }
+
+  const probeMinutes = options.probeMinutes ?? 0;
+  const interval = options.probeIntervalMinutes ?? 5;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  if (diagnostic.sessionWorksOn) {
+    for (let minutes = interval; minutes <= probeMinutes; minutes += interval) {
+      await sleep(interval * 60_000);
+      try {
+        await fetchFilterTemplate(session, SALE_LIST_REPORT);
+        diagnostic.probes.push({ afterMinutes: minutes, ok: true });
+      } catch (error) {
+        diagnostic.probes.push({ afterMinutes: minutes, ok: false, error: describeError(error) });
+        break;
+      }
+    }
+  }
+
+  diagnostic.cookies = session.describeCookies();
+  return diagnostic;
+}
+
+export function formatLoginDiagnostic(diagnostic: LoginDiagnostic): string {
+  const lines = ["Kreloses live login check (redacted: no email, password, cookie values, tokens or query strings)", ""];
+  lines.push("HTTP exchanges:");
+  for (const hop of diagnostic.hops) {
+    const outcome = hop.status === null ? `no response (${hop.failure})` : String(hop.status);
+    const extras = [hop.location ? `-> ${hop.location}` : null, hop.contentType ? `[${hop.contentType}]` : null];
+    lines.push(`  ${hop.seq}. ${hop.method} ${hop.url} -> ${outcome}${extras.filter(Boolean).map((x) => ` ${x}`).join("")} (${hop.durationMs} ms)`);
+    for (const change of hop.setCookies) lines.push(`       ${describeCookieChange(change)}`);
+  }
+  lines.push("");
+  lines.push(
+    diagnostic.login.ok
+      ? `Login: OK (${(diagnostic.login.durationMs / 1000).toFixed(1)} s incl. polite delays)`
+      : `Login: FAILED — ${diagnostic.login.error}`,
+  );
+  lines.push(`One-time code / 2FA step detected: ${diagnostic.oneTimeCodeStep ? "YES" : "no"}`);
+  lines.push(`Session works on: ${diagnostic.sessionWorksOn ?? "not established"}`);
+  if (diagnostic.locations === null) lines.push("Visible locations: not checked (login failed)");
+  else if (diagnostic.locations.ok) lines.push(`Visible locations: ${diagnostic.locations.count}`);
+  else lines.push(`Visible locations: FAILED — ${diagnostic.locations.error}`);
+  if (diagnostic.filterShape) lines.push(`GetFilter (report 14) JSON shape: ${diagnostic.filterShape}`);
+  for (const probe of diagnostic.probes) {
+    lines.push(
+      probe.ok
+        ? `Session probe: still valid after ${probe.afterMinutes} min`
+        : `Session probe: FAILED after ${probe.afterMinutes} min — ${probe.error}`,
+    );
+  }
+  if (diagnostic.cookies.length > 0) {
+    lines.push("Cookies held at the end:");
+    for (const cookie of diagnostic.cookies) lines.push(`  ${describeCookie(cookie)}`);
+  }
+  return lines.join("\n");
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof AuthFailed) {
+    return `AuthFailed (${error.reason}${error.step ? `: ${error.step}` : ""})${error.detail && error.reason !== "bad_credentials" ? ` — ${error.detail}` : ""}`;
+  }
+  if (isKrelosesError(error)) return `${error.name} — ${error.message}`;
+  return `Unexpected ${error instanceof Error ? error.name : "error"}`;
+}
+
+function describeCookieChange(change: CookieChange): string {
+  if (change.action === "rejected") return `rejected ${change.name} (Domain=${change.domain} does not cover this host)`;
+  return `${change.action} ${describeCookie(change as CookieSummary)}`;
+}
+
+function describeCookie(cookie: CookieSummary): string {
+  const flags = [
+    cookie.hostOnly ? `host-only ${cookie.domain}` : `Domain=${cookie.domain}`,
+    `Path=${cookie.path}`,
+    cookie.expiresAt ? `expires ${cookie.expiresAt}` : "session cookie",
+    cookie.secure ? "Secure" : null,
+    cookie.httpOnly ? "HttpOnly" : null,
+    cookie.sameSite ? `SameSite=${cookie.sameSite}` : null,
+  ];
+  return `${cookie.name} (${flags.filter(Boolean).join(", ")})`;
+}

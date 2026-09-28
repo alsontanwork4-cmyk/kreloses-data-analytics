@@ -1,0 +1,14 @@
+{
+  "comment": "GET https://www.kreloses.com/account/login (not signed in). Sets the anti-forgery cookie that pairs with the form's hidden __RequestVerificationToken.",
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-cache, no-store",
+    "X-Frame-Options": "SAMEORIGIN"
+  },
+  "setCookie": [
+    "ASP.NET_SessionId={{ASPNET_SESSION}}; path=/; HttpOnly; SameSite=Lax",
+    "__RequestVerificationToken=SYNTHETIC-COOKIE-TOKEN-51c0ffee; path=/; HttpOnly"
+  ],
+  "bodyFile": "login-page.html"
+}

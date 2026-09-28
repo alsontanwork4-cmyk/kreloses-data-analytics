@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:live": "vitest run --config vitest.live.config.mts",
     "db:create-dev": "tsx scripts/db-create-dev.ts",
     "db:drop-dev": "tsx scripts/db-drop-dev.ts"
   },

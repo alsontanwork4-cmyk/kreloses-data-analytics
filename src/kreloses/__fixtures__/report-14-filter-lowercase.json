@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "data": {
+    "reportId": 14,
+    "filters": [
+      {
+        "key": "locationId",
+        "label": "Locations",
+        "items": [
+          { "id": 1101, "name": "Branch North" },
+          { "id": 1102, "name": "Branch South" },
+          { "id": 1101, "name": "Branch North" }
+        ]
+      },
+      {
+        "key": "saleStatus",
+        "label": "Sale status",
+        "items": [
+          { "id": 1, "name": "Active" },
+          { "id": 2, "name": "Cancelled" }
+        ]
+      }
+    ]
+  }
+}

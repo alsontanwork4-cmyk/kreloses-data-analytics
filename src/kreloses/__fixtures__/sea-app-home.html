@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Kreloses</title>
+    <link href="/Content/css?v=SYNTHETIC" rel="stylesheet"/>
+    <script>
+        var appSettings = {"culture":"en-MY","currency":"RM","dateFormat":"dd/MM/yyyy","region":"sea"};
+    </script>
+</head>
+<body class="app">
+    <nav class="navbar navbar-default navbar-fixed-top">
+        <div class="navbar-header"><a class="navbar-brand" href="/">Kreloses</a></div>
+        <ul class="nav navbar-nav navbar-right">
+            <li class="dropdown"><a href="#" class="dropdown-toggle" data-toggle="dropdown">Synthetic User <span class="caret"></span></a>
+                <ul class="dropdown-menu">
+                    <li><a href="/Account/Profile">Profile</a></li>
+                    <li>
+<form action="/Account/LogOff" class="navbar-right" id="logoutForm" method="post"><input name="__RequestVerificationToken" type="hidden" value="SYNTHETIC-FORM-TOKEN-app-0001" />                            <a href="javascript:document.getElementById('logoutForm').submit()">Log off</a>
+</form>                    </li>
+                </ul>
+            </li>
+        </ul>
+    </nav>
+    <div id="root" data-page="dashboard"></div>
+    <script src="/bundles/vendor?v=SYNTHETIC"></script>
+    <script src="/bundles/app?v=SYNTHETIC"></script>
+</body>
+</html>

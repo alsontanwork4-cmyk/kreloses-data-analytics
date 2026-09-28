@@ -5,7 +5,10 @@
  *   npm run db:create-dev -- kx_dev_issue5            # create + migrate + seed OWNER_EMAIL
  *   npm run db:create-dev -- kx_dev_issue5 --reset    # drop and start again
  *   npm run db:create-dev -- kx_dev_issue5 --env      # also write .env.local for this worktree
+ *                                                     # (DB + Supabase URLs, and a CREDENTIALS_ENCRYPTION_KEY if unset)
  */
+import { randomBytes } from "node:crypto";
+
 import { upsertOwner } from "../src/auth/allow-list";
 import {
   assertManagedDatabaseName,
@@ -58,12 +61,15 @@ async function main() {
 
   if (args.includes("--env")) {
     const supabase = localSupabaseAuthEnv();
-    upsertEnvFile(".env.local", {
+    const values: Record<string, string> = {
       DATABASE_URL: url,
       NEXT_PUBLIC_SUPABASE_URL: supabase.url,
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: supabase.publishableKey,
-    });
-    console.log("Updated .env.local (DATABASE_URL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)");
+    };
+    // A local-only key for encrypting Kreloses passwords; kept if one is already set.
+    if (!process.env.CREDENTIALS_ENCRYPTION_KEY) values.CREDENTIALS_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    upsertEnvFile(".env.local", values);
+    console.log(`Updated .env.local (${Object.keys(values).join(", ")})`);
   } else {
     console.log(`\nPoint your dev server at it:\nDATABASE_URL=${url}`);
   }
