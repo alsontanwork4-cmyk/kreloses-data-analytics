@@ -12,6 +12,13 @@ export function normaliseEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** A plausible email address (checked after `normaliseEmail`). Supabase Auth has the final say. */
+export function isValidEmail(email: string): boolean {
+  return email.length <= 254 && EMAIL.test(email);
+}
+
 export type Access =
   | { status: "anonymous" }
   | { status: "denied"; email: string }
@@ -45,6 +52,30 @@ export async function addAppUser(sql: Sql, email: string, role: Role): Promise<A
 export async function removeAppUser(sql: Sql, email: string): Promise<boolean> {
   const rows = await sql`delete from app_users where email = ${normaliseEmail(email)}`;
   return rows.count > 0;
+}
+
+/** One row of the allow-list as the owner sees it on Settings → Users. */
+export interface AllowListEntry extends AppUser {
+  /** When the email was added to the allow-list (for a manager: when they were invited). */
+  addedAt: Date;
+  /** The owner who invited them from Settings → Users; null for seeded owners. */
+  invitedBy: string | null;
+  /** When they last opened a magic link; null if never. */
+  lastSignInAt: Date | null;
+}
+
+/** Everyone on the allow-list: owners first, then managers, each in the order they were added. */
+export async function listAllowList(sql: Sql): Promise<AllowListEntry[]> {
+  return sql<AllowListEntry[]>`
+    select email, role, created_at as added_at, invited_by, last_sign_in_at
+    from app_users
+    order by role = 'owner' desc, created_at, email
+  `;
+}
+
+/** Notes that `email` just signed in (opened a magic link). No-op for emails not on the list. */
+export async function recordSignIn(sql: Sql, email: string): Promise<void> {
+  await sql`update app_users set last_sign_in_at = now() where email = ${normaliseEmail(email)}`;
 }
 
 /** Ensures `email` is on the list as an owner (promoting a manager). Never demotes anyone. */

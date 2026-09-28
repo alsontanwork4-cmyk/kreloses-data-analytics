@@ -13,7 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { Role } from "@/auth/roles";
+import { hasRole, type Role } from "@/auth/roles";
 
 /**
  * The single source of the dashboard navigation (sidebar, mobile menu and the e2e smoke test all
@@ -48,3 +48,30 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/sync", label: "Sync status", icon: RefreshCw, section: "admin" },
   { href: "/settings", label: "Settings", icon: Settings, section: "admin", role: "owner" },
 ];
+
+/**
+ * The Settings sub-navigation (tabs under the "Settings" heading), in display order. `/settings`
+ * itself redirects to the first entry the user's role may see. To add a settings page: create
+ * `src/app/(dashboard)/settings/<name>/page.tsx` (it must call `requireRole(...)` itself and render
+ * its content in `<SettingsSection>`), then add one entry here. The sub-nav and the e2e suite pick
+ * it up. Reserved slots are below; replace your ticket's comment with the entry.
+ */
+export interface SettingsNavItem {
+  href: `/settings/${string}`;
+  label: string;
+  /** Minimum role to see the tab. Omitted = every signed-in user. The page must still call `requireRole`. */
+  role?: Role;
+}
+
+export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
+  // #5 doctor-name mapping: { href: "/settings/doctors", label: "Doctors", role: "owner" },
+
+  // #9 item → service-mix group mapping: { href: "/settings/items", label: "Items", role: "owner" },
+
+  { href: "/settings/users", label: "Users", role: "owner" },
+];
+
+/** The settings tabs `role` may see, in order (the first is where `/settings` lands). */
+export function settingsNavItemsFor(role: Role): SettingsNavItem[] {
+  return SETTINGS_NAV_ITEMS.filter((item) => !item.role || hasRole({ role }, item.role));
+}

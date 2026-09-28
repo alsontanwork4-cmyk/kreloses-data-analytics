@@ -33,3 +33,14 @@ export async function createSupabaseServerClient() {
     },
   });
 }
+
+/**
+ * A Supabase Auth client with no cookies: it never reads or writes the current request's session.
+ * For acting on behalf of someone else, e.g. emailing an invited manager their sign-in link.
+ */
+export function createDetachedSupabaseClient() {
+  const { url, publishableKey } = supabaseAuthConfig();
+  return createServerClient(url, publishableKey, {
+    cookies: { getAll: () => [], setAll: () => {} },
+  });
+}

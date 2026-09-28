@@ -18,6 +18,16 @@ The emails allowed to sign in, each with a role (Owner or Manager). Proving you 
 enough; it must be on the allow-list.
 _Avoid_: Whitelist, invite list, users table
 
+**Invite**:
+The owner putting an email on the allow-list as a Manager (never as an Owner) and emailing them a
+sign-in link. The invite stands even if that email fails to send. Inviting an email already on the
+allow-list changes nothing.
+
+**Remove (a manager)**:
+Taking a Manager off the allow-list; they are refused from their next request. Owners cannot be
+removed this way.
+_Avoid_: Revoke, delete user
+
 ## Clinic structure
 
 **Branch**:

@@ -1,19 +1,12 @@
-import { Settings } from "lucide-react";
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { requireRole } from "@/auth/session";
-import { EmptyState } from "@/components/empty-state";
-import { PageShell } from "@/components/shell/page-shell";
+import { FORBIDDEN_PATH } from "@/auth/paths";
+import { requireUser } from "@/auth/session";
+import { settingsNavItemsFor } from "@/components/shell/nav-config";
 
-export const metadata: Metadata = { title: "Settings" };
-
+/** `/settings` opens the first settings page the user may see (none for a manager today). */
 export default async function SettingsPage() {
-  await requireRole("owner");
-  return (
-    <PageShell title="Settings" description="Doctor-name mapping, item groups and who can sign in.">
-      <EmptyState icon={Settings} title="Nothing to configure yet">
-        <p>Doctor and item mappings appear here after the first sync.</p>
-      </EmptyState>
-    </PageShell>
-  );
+  const user = await requireUser();
+  const [first] = settingsNavItemsFor(user.role);
+  redirect(first?.href ?? FORBIDDEN_PATH);
 }
