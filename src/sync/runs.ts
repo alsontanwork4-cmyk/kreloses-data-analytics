@@ -49,6 +49,11 @@ export interface SyncCounts {
   lineItemGaps: number;
   /** Of `lineItemsRead`: invoices outside the run's listing picked up by the nightly sweep. */
   lineItemsSwept: number;
+  /**
+   * Older invoices (the nightly sweep) whose page came back in a layout the app does not know: skipped
+   * with a warning, still "not synced yet", retried like a missing page. (In the listing that fails the run.)
+   */
+  lineItemsUnreadable: number;
 }
 
 export const NO_COUNTS: SyncCounts = {
@@ -61,6 +66,7 @@ export const NO_COUNTS: SyncCounts = {
   lineItemsFailed: 0,
   lineItemGaps: 0,
   lineItemsSwept: 0,
+  lineItemsUnreadable: 0,
 };
 
 /**
@@ -69,10 +75,12 @@ export const NO_COUNTS: SyncCounts = {
  * - `staff_list_unreadable` — the Sale List filter had no readable Staff list, so new staff names
  *   could not be matched to full names this time (they are still credited);
  * - `line_items_left` — (nightly) the time budget ran out before every older sale left "not synced
- *   yet" was read; the next nightly sync carries on.
+ *   yet" was read; the next nightly sync carries on;
+ * - `invoice_pages_unreadable` — (nightly sweep) some older invoice pages came back in a layout the
+ *   app does not know: skipped (the run ends `partial`, its listing still counts), retried later.
  */
 export interface SyncWarning {
-  code: "invoice_pages_missing" | "staff_list_unreadable" | "line_items_left";
+  code: "invoice_pages_missing" | "staff_list_unreadable" | "line_items_left" | "invoice_pages_unreadable";
   message: string;
 }
 

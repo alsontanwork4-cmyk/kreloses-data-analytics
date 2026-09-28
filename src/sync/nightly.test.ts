@@ -230,6 +230,105 @@ describe("Nightly sync", () => {
     });
   });
 
+  describe("an older invoice page the app cannot read, met by the sweep", () => {
+    /** Autumn 2025 synced, the window synced, then these older invoices left without current lines. */
+    async function olderPending(id: string, saleIds: string[]) {
+      ran(await runSync(h.deps(), id, "manual", { dateRange: { from: "2025-09-01", to: "2025-10-31" } }));
+      ran(await runSync(h.deps(), id, "nightly"));
+      await db.sql`update invoices set header_version = header_version + 1 where kreloses_sale_id = any(${saleIds}::text[])`;
+    }
+    /** These invoices' pages come back in a layout the Reader does not know (LayoutChanged). */
+    const unreadable = (...saleIds: string[]) =>
+      h.fake.intercept((request) => {
+        const saleId = /^\/Sale\/Overview\/(\d+)$/.exec(request.url.pathname)?.[1];
+        return saleId && saleIds.includes(saleId)
+          ? new Response(readFixture("sale-overview-changed.html"), { headers: { "Content-Type": "text/html" } })
+          : undefined;
+      });
+
+    it("is a warning and skipped, not a failed night: the listing still counts for 'data as of', the rest of the sweep goes on", async () => {
+      const id = await h.connect(both);
+      await olderPending(id, ["600001", "600002"]);
+      unreadable("600002");
+      h.clock.advance(24 * 3_600_000);
+      const before = h.fake.requests.length;
+      const night = ran(await runSync(h.deps(), id, "nightly"));
+      expect(night).toMatchObject({
+        status: "partial",
+        stoppedAtTimeLimit: false,
+        counts: { lineItemsRead: 1, lineItemsSwept: 1, lineItemsUnreadable: 1, lineItemsFailed: 0 },
+        warnings: [{ code: "invoice_pages_unreadable", message: expect.stringMatching(/^1 older invoice page could not be read.*no Items list/) }],
+      });
+      expect(night.error).toBeUndefined();
+      expect(pagesOpened(before)).toEqual(["600002", "600001"]);
+      expect((await getDataFreshness(db.sql)).map((branch) => branch.dataAsOf)).toEqual([h.clock.now, h.clock.now]);
+      expect(await pendingSales()).toEqual([{ krelosesSaleId: "600002" }]);
+    });
+
+    it("never fails the night, even when every page it sweeps is unreadable; after three tries it stops asking", async () => {
+      const id = await h.connect(both);
+      await olderPending(id, ["600002", "600003", "600004"]);
+      unreadable("600002", "600003", "600004");
+      for (let night = 1; night <= 3; night += 1) {
+        h.clock.advance(24 * 3_600_000);
+        expect(ran(await runSync(h.deps(), id, "nightly")), `night ${night}`).toMatchObject({
+          status: "partial",
+          counts: { lineItemsRead: 0, lineItemsUnreadable: 3 },
+        });
+      }
+      h.clock.advance(24 * 3_600_000);
+      const before = h.fake.requests.length;
+      expect(ran(await runSync(h.deps(), id, "nightly"))).toMatchObject({ status: "succeeded", counts: { lineItemsUnreadable: 0 } });
+      expect(pagesOpened(before)).toEqual([]);
+      expect((await listPermanentlyMissingInvoices(db.sql)).total).toBe(3);
+    });
+
+    it("a page the app cannot read in the nightly WINDOW (a new or changed sale) still fails the run loudly", async () => {
+      const id = await h.connect(both);
+      unreadable("700202");
+      expect(ran(await runSync(h.deps(), id, "nightly"))).toMatchObject({ status: "failed", error: { code: "layout_changed" } });
+    });
+  });
+
+  describe("the time budget covers logging in too", () => {
+    const logins = (from = 0) => h.fake.requests.slice(from).filter((request) => request.method === "POST" && request.url.pathname === "/account/login").length;
+
+    it("does not go on to read anything when the login itself used up the budget", async () => {
+      const id = await h.connect(both);
+      h.fake.intercept((request) => {
+        if (request.method === "POST" && request.url.pathname === "/account/login") h.clock.advance(20_000);
+        return undefined;
+      });
+      const before = h.fake.requests.length;
+      const result = ran(await runSync(h.deps(), id, "nightly", { timeBudgetMs: 15_000 }));
+      expect(result).toMatchObject({ status: "partial", stoppedAtTimeLimit: true, counts: { pages: 0 } });
+      expect(h.fake.requests.slice(before).filter((request) => /^\/(Report|Sale)\//.test(request.url.pathname))).toEqual([]);
+    });
+
+    it("does not start a login (nor a second one after the session expires) with too little time left", async () => {
+      const id = await h.connect(both);
+      // The Sale List takes 50 s of a 60 s budget and the session expires meanwhile: logging in again
+      // with 10 s left could run past the function's limit, so the run stops cleanly instead.
+      let saleGets = 0;
+      h.fake.intercept((request) => {
+        if (request.url.pathname !== "/Sale/Get" || ++saleGets !== 1) return undefined;
+        h.clock.advance(50_000);
+        h.fake.expireSessions();
+        return undefined;
+      });
+      const before = h.fake.requests.length;
+      const result = ran(await runSync(h.deps(), id, "nightly", { timeBudgetMs: 60_000 }));
+      expect(result).toMatchObject({ status: "partial", stoppedAtTimeLimit: true });
+      expect(logins(before)).toBe(1);
+
+      // With too little time for even the first login, nothing is requested at all.
+      h.clock.advance(60_000);
+      const none = h.fake.requests.length;
+      expect(ran(await runSync(h.deps(), id, "nightly", { timeBudgetMs: 5_000 }))).toMatchObject({ status: "partial", stoppedAtTimeLimit: true });
+      expect(h.fake.requests.length).toBe(none);
+    });
+  });
+
   describe("invoice pages that stay missing (#5 review)", () => {
     /** 700091, 700092 and 700093 (August 2026) answer 404 for good. */
     const missingForGood = () =>

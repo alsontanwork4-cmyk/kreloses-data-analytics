@@ -74,6 +74,15 @@ export function lineItemsLeftWarning(count: number): SyncWarning {
   };
 }
 
+/** The warning for a nightly run whose sweep met older invoice pages it could not read. */
+export function unreadablePagesWarning(count: number, example: LayoutChanged): SyncWarning {
+  const one = count === 1;
+  return {
+    code: "invoice_pages_unreadable",
+    message: `${count} older invoice ${one ? "page" : "pages"} could not be read (${example.message}), so ${one ? "it was" : "they were"} skipped. ${one ? "That sale counts" : "Those sales count"} at the revenue base as "line items not synced yet"; the nightly sync tries again (at most three times). If new sales start showing this too, the app needs an update.`,
+  };
+}
+
 /** The warning for a run whose Sale List filter had no readable Staff list. */
 export function staffListWarning(error: LayoutChanged): SyncWarning {
   return {

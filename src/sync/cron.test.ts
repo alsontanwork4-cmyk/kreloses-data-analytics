@@ -63,7 +63,7 @@ describe("nightly cron authentication", () => {
         outcome: {
           status: "succeeded",
           runId: "7",
-          counts: { pages: 1, invoicesSeen: 3, inserted: 1, updated: 0, unchanged: 2, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0 },
+          counts: { pages: 1, invoicesSeen: 3, inserted: 1, updated: 0, unchanged: 2, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0 },
           warnings: [],
         },
       },
@@ -81,7 +81,7 @@ describe("nightly cron authentication", () => {
           timeBudgetMs: 125_000,
           status: "succeeded",
           runId: "7",
-          counts: { pages: 1, invoicesSeen: 3, inserted: 1, updated: 0, unchanged: 2, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0 },
+          counts: { pages: 1, invoicesSeen: 3, inserted: 1, updated: 0, unchanged: 2, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0 },
           error: null,
         },
         { connectionId: "2", connectionLabel: "Branch South", timeBudgetMs: 125_000, status: "busy" },

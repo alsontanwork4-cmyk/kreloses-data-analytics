@@ -24,7 +24,15 @@ import {
 import { upsertStaffDirectory } from "@/staff/store";
 
 import { countInvoicesNeedingLines, invoicesNeedingLines, recordMissingPage, saveInvoiceLines, type InvoiceNeedingLines, type SweepCursor } from "./lines";
-import { describeSyncFailure, isLoginFailure, lineItemsLeftWarning, missingPagesWarning, staffListWarning, type SyncFailure } from "./messages";
+import {
+  describeSyncFailure,
+  isLoginFailure,
+  lineItemsLeftWarning,
+  missingPagesWarning,
+  staffListWarning,
+  unreadablePagesWarning,
+  type SyncFailure,
+} from "./messages";
 import {
   abandonRun,
   findResumableRun,
@@ -178,8 +186,17 @@ export const DEFAULT_TIME_BUDGET_MS = 200_000;
 export const LEASE_TTL_MS = 240_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
 const DEFAULT_MAX_RETRIES = 3;
-/** A run fails when this many invoice pages, tried for the first time, are missing before any could be read. */
+/**
+ * A run fails when this many invoice pages of its LISTING (new or changed sales), tried for the first
+ * time, are missing before any could be read. The sweep of older invoices never fails a run.
+ */
 export const MISSING_PAGES_TO_FAIL = 3;
+/**
+ * A login (the first, or the one fresh login after an expired session) is not started with less of
+ * the time budget left than this: it takes several requests, and must not run past the function's
+ * limit. The run stops cleanly (`partial`) instead and the next sync carries on.
+ */
+export const MIN_LOGIN_BUDGET_MS = 15_000;
 /** The nightly window: this many days back from today (spec story 13: edits, cancellations, refunds). */
 export const NIGHTLY_WINDOW_DAYS = 45;
 /** Invoices the sweep loads at a time. */
@@ -304,7 +321,13 @@ async function execute(run: RunContext): Promise<SyncResult> {
       return write(tx);
     }) as Promise<T>;
   const outOfTime = () => now().getTime() >= run.deadline;
-  const withMissingPages = (): SyncWarning[] => (counts.lineItemsFailed > 0 ? [...warnings, missingPagesWarning(counts.lineItemsFailed)] : warnings);
+  let firstUnreadable: LayoutChanged | null = null;
+  /** The run's warnings, plus the invoice pages it could not open or read. */
+  const withPageWarnings = (): SyncWarning[] => [
+    ...warnings,
+    ...(counts.lineItemsFailed > 0 ? [missingPagesWarning(counts.lineItemsFailed)] : []),
+    ...(counts.lineItemsUnreadable > 0 && firstUnreadable ? [unreadablePagesWarning(counts.lineItemsUnreadable, firstUnreadable)] : []),
+  ];
 
   /** Reads one invoice's page and stores its lines (or records it missing). Check the time budget first. */
   const readLines = async (invoice: InvoiceNeedingLines, swept: boolean) => {
@@ -315,18 +338,27 @@ async function execute(run: RunContext): Promise<SyncResult> {
     } catch (error) {
       // One page that is not there must not stop every other invoice (nor "data as of"): skip it —
       // it stays "not synced yet" at its revenue base — and try again next run (up to
-      // MAX_PAGE_MISSING_ATTEMPTS times). Pages whose content changed (LayoutChanged proper) stay
-      // fatal, and so does a run whose first MISSING_PAGES_TO_FAIL never-tried pages are all
-      // missing (something systematic, e.g. a new URL). Pages that were already missing in earlier
-      // runs do not count towards that, so a few permanently missing pages never fail every sync.
-      if (!(error instanceof PageMissing)) throw error;
-      counts = { ...counts, lineItemsFailed: counts.lineItemsFailed + 1 };
-      if (invoice.missingAttempts === 0) firstTimeMissing += 1;
+      // MAX_PAGE_MISSING_ATTEMPTS times). In the LISTING, a page whose content changed
+      // (LayoutChanged proper) stays fatal — a new or changed sale the app cannot read means
+      // Kreloses changed — and so does a run whose first MISSING_PAGES_TO_FAIL never-tried pages
+      // are all missing (something systematic, e.g. a new URL); pages already missing in earlier
+      // runs do not count, so a few permanently missing pages never fail every sync. In the SWEEP
+      // (older sales), neither ever fails the run: one odd old page must not stop every night (and
+      // "data as of"); it is a warning, retried like a missing page, and the listing still counts.
+      const missing = error instanceof PageMissing;
+      const unreadable = swept && !missing && error instanceof LayoutChanged;
+      if (!missing && !unreadable) throw error;
+      if (missing) counts = { ...counts, lineItemsFailed: counts.lineItemsFailed + 1 };
+      else {
+        counts = { ...counts, lineItemsUnreadable: counts.lineItemsUnreadable + 1 };
+        firstUnreadable ??= error as LayoutChanged;
+      }
+      if (!swept && invoice.missingAttempts === 0) firstTimeMissing += 1;
       await fenced(async (tx) => {
         await recordMissingPage(tx, invoice.invoiceId, invoice.headerVersion);
         await recordProgress(tx, runId, counts, checkpoint);
       });
-      if (counts.lineItemsRead === 0 && firstTimeMissing >= MISSING_PAGES_TO_FAIL) throw error;
+      if (!swept && counts.lineItemsRead === 0 && firstTimeMissing >= MISSING_PAGES_TO_FAIL) throw error;
       return;
     }
     const saved = await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, headerVersion: invoice.headerVersion, detail, fetchedAt: now() }, { fence });
@@ -342,6 +374,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
   };
 
   try {
+    // KrelosesClient.call stops the run (OutOfTime) instead of starting a request or a login past the budget.
     const locations = await client.call((session) => reader.listLocations(session));
     // The Kreloses locations (branches) this login can see: what it covers, and all its sweep may open.
     const locationIds = locations.map((location) => location.id);
@@ -427,13 +460,13 @@ async function execute(run: RunContext): Promise<SyncResult> {
     }
 
     const coveredLocationIds = locationIds;
-    if (counts.lineItemsFailed > 0) {
+    if (counts.lineItemsFailed > 0 || counts.lineItemsUnreadable > 0) {
       // The whole listing was read (it counts for "data as of" and is complete: never resumed), but
       // some invoices still need their lines: the next sync retries them.
       await fenced((tx) =>
-        finishRun(tx, runId, { status: "partial", finishedAt: now(), counts, checkpoint: { nextPage: 1, pageSize }, coveredLocationIds, warnings: withMissingPages() }),
+        finishRun(tx, runId, { status: "partial", finishedAt: now(), counts, checkpoint: { nextPage: 1, pageSize }, coveredLocationIds, warnings: withPageWarnings() }),
       );
-      return { status: "partial", runId, counts, warnings: withMissingPages(), stoppedAtTimeLimit: false, ...resumed(run) };
+      return { status: "partial", runId, counts, warnings: withPageWarnings(), stoppedAtTimeLimit: false, ...resumed(run) };
     }
     await fenced((tx) => finishRun(tx, runId, { status: "succeeded", finishedAt: now(), counts, coveredLocationIds, warnings }));
     return { status: "succeeded", runId, counts, warnings, ...resumed(run) };
@@ -441,8 +474,8 @@ async function execute(run: RunContext): Promise<SyncResult> {
     if (error instanceof LeaseLost) return await leaseLost(run, counts, warnings);
     try {
       if (error instanceof OutOfTime) {
-        await fenced((tx) => finishRun(tx, runId, { status: "partial", finishedAt: now(), counts, checkpoint, warnings: withMissingPages() }));
-        return { status: "partial", runId, counts, warnings: withMissingPages(), stoppedAtTimeLimit: true, ...resumed(run) };
+        await fenced((tx) => finishRun(tx, runId, { status: "partial", finishedAt: now(), counts, checkpoint, warnings: withPageWarnings() }));
+        return { status: "partial", runId, counts, warnings: withPageWarnings(), stoppedAtTimeLimit: true, ...resumed(run) };
       }
       const failure = describeSyncFailure(error);
       if (failure.code === "internal") {
@@ -509,15 +542,24 @@ class KrelosesClient {
   }
 
   async call<T>(request: (session: KrelosesSession) => Promise<T>): Promise<T> {
-    this.#session ??= await this.#retrying(() => this.#run.deps.login(this.#run.connectionId));
+    this.#session ??= await this.#login();
+    // No new request once the budget is spent (the listing and the line items check before each
+    // one too; this also covers the start: locations and the staff list after a slow login).
+    if (this.#run.now().getTime() >= this.#run.deadline) throw new OutOfTime();
     try {
       return await this.#retrying(() => request(this.#session!));
     } catch (error) {
       if (!(error instanceof AuthFailed && error.reason === "session_expired") || this.#loggedInAgain) throw error;
       this.#loggedInAgain = true;
-      this.#session = await this.#retrying(() => this.#run.deps.login(this.#run.connectionId));
+      this.#session = await this.#login();
       return this.#retrying(() => request(this.#session!));
     }
+  }
+
+  /** Logs in, unless too little of the budget is left for a login to finish (then the run stops cleanly). */
+  async #login(): Promise<KrelosesSession> {
+    if (this.#run.now().getTime() + MIN_LOGIN_BUDGET_MS > this.#run.deadline) throw new OutOfTime();
+    return this.#retrying(() => this.#run.deps.login(this.#run.connectionId));
   }
 
   async #retrying<T>(attempt: () => Promise<T>): Promise<T> {

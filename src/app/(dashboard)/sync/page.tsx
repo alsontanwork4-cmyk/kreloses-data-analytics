@@ -87,12 +87,13 @@ function PermanentlyMissing({ total, invoices }: { total: number; invoices: Perm
   return (
     <section aria-labelledby="missing-heading" data-testid="permanently-missing" className="flex flex-col gap-2 rounded-xl border bg-card p-4 text-sm">
       <h2 id="missing-heading" className="text-base font-medium">
-        Invoice pages Kreloses would not open
+        Invoice pages the sync gave up on
       </h2>
       <p className="text-muted-foreground">
-        {formatCount(total)} {total === 1 ? "sale's" : "sales'"} invoice page could not be opened {MAX_PAGE_MISSING_ATTEMPTS} times in a row, so the sync
-        stopped trying. {total === 1 ? "It counts" : "They count"} at the net amount as &quot;line items not synced yet&quot; (credited to no doctor). If
-        the sale is edited in Kreloses the sync tries again; otherwise check it in Kreloses.
+        {formatCount(total)} {total === 1 ? "sale's" : "sales'"} invoice page could not be opened (or, for older sales, read){" "}
+        {MAX_PAGE_MISSING_ATTEMPTS} times in a row, so the sync stopped trying. {total === 1 ? "It counts" : "They count"} at the revenue base (net
+        less refunds) as &quot;line items not synced yet&quot; (credited to no doctor). If the sale is edited in Kreloses the sync tries again;
+        otherwise check it in Kreloses.
       </p>
       <ul className="flex flex-col gap-1">
         {invoices.map((invoice, index) => (
@@ -150,6 +151,12 @@ function RunCard({ run }: { run: SyncRun }) {
         </Item>
         <Item label="Invoice pages missing" testId="sync-run-line-items-failed">
           {formatCount(counts.lineItemsFailed)}
+          {counts.lineItemsUnreadable > 0 ? (
+            <span className="text-muted-foreground" data-testid="sync-run-line-items-unreadable">
+              {" "}
+              (+{formatCount(counts.lineItemsUnreadable)} older unreadable)
+            </span>
+          ) : null}
         </Item>
         <Item label="Lines ≠ invoice net" testId="sync-run-line-gaps">
           {formatCount(counts.lineItemGaps)} {counts.lineItemGaps === 1 ? "invoice" : "invoices"}
