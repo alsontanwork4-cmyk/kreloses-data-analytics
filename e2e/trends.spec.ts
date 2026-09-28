@@ -112,7 +112,7 @@ test.describe("Trends → doctor detail", () => {
     await page.goto(`/trends?${AUG_SEP}`);
     const yoy = page.getByTestId("year-on-year");
     expect(await tableText(yoy, ["doctor", "branch", "rev-2025", "rev-2026", "revchg-2026"])).toEqual([
-      ["Dr Alpha Anderson", "All branches", "RM 12,345.60", "RM 2,154.35", "−82.6%"],
+      ["Dr Alpha Anderson", "All branches", "RM 12,345.60", "RM 2,154.35", "−82.5%"], // −10,191.25 ÷ 12,345.60
       ["Dr Alpha Anderson", "Branch North", "RM 12,345.60", "RM 2,000.50", "−83.8%"],
       ["Dr Alpha Anderson", "Branch South", "RM 0.00", "RM 153.85", "—"],
       ["Dr Bravo Brown", "All branches", "RM 654.40", "RM 4,652.00", "+610.9%"],
