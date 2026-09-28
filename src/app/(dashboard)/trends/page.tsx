@@ -58,7 +58,7 @@ const CHART_TITLES: Record<TrendMeasure, string> = {
   consultRevenue: "Monthly consult revenue by doctor",
 };
 
-const DEFINITIONS: MetricName[] = ["monthlyTrend", "yearOnYear", "revenue", "aovPerCustomer", "doctor", "pendingLineItems"];
+const DEFINITIONS: MetricName[] = ["monthlyTrend", "yearOnYear", "revenue", "aovPerCustomer", "surgeryRevenue", "consultRevenue", "doctor", "pendingLineItems"];
 
 /** One doctor's row of the monthly table: the selected measure per month (and over the whole period). */
 interface MonthlyRow {

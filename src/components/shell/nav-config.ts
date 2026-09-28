@@ -84,7 +84,7 @@ export interface SettingsNavItem {
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   { href: "/settings/doctors", label: "Doctors", role: "owner" },
 
-  // #9 item → service-mix group mapping: { href: "/settings/items", label: "Items", role: "owner" },
+  { href: "/settings/items", label: "Items", role: "owner" },
 
   { href: "/settings/users", label: "Users", role: "owner" },
 ];

@@ -273,6 +273,73 @@ split by who each line is credited to. With a doctor filter an invoice is found 
 of its lines is credited to one of those doctors, and it is still shown whole.
 _Avoid_: Transaction search, order lookup
 
+## Items and service mix
+
+**Item**:
+What is sold on a line (a service or a product), identified by its name ignoring case, extra spaces
+and Unicode width ("Consultation" and "CONSULTATION " are one item). Discount lines are not items.
+_Avoid_: Product (only ItemType 1 is a product), SKU
+
+**Service-mix group**:
+One of eight groups every item belongs to: Consult, Surgery, Diagnostics, Hospital & treatment,
+Rehab & TCVM, Medicines & supplements, Preventive, Retail & other. An item may also carry flags:
+*surgery*, *consult*, *vaccine*, *dental scaling* and *operation* (procedure).
+_Avoid_: Category (Kreloses's invoice category is something else), department
+
+**Item rule**:
+An exact item name or a pattern (SQL ILIKE style: `%` any characters, `_` one character) with a
+group, flags and a priority. Exact rules are tried first, then patterns, each highest priority
+first (ties: the older rule); the first rule that matches decides. A rule can also *leave
+matching items unmapped* (e.g. cancellation fees), so no broader rule guesses them. The app ships
+starting rules built from the spec's surgery and consult definitions and common veterinary item
+names — NOT the owner's original hand-built rules, which were not available; the owner reconciles
+them in Settings → Items.
+
+**Item assignment**:
+The owner's group and flags for one item (Settings → Items). It beats every rule.
+_Avoid_: Override, mapping
+
+**Unmapped**:
+An item no assignment or rule recognises; its revenue shows in its own "Unmapped" bucket and the
+item is listed in Settings → Items (by revenue) until the owner assigns it. The starting rules are
+deliberately conservative: an unknown item stays unmapped rather than being guessed into a group.
+
+**Surgery line / consult line**:
+A credited line whose item has the surgery / consult flag. Surgery: the SURGERY service, neutering
+and spay, cryoablation, cystotomy, tooth extraction, pyometra, C-section, FHO, hernia repair, closed
+reduction, wound stitching, anaesthesia / sedation and related surgical charges. Consult:
+CONSULTATION services and the TCVM examination (grouped under Consult).
+
+**Operation (procedure)**:
+A surgery line that is an actual operation. A sedation or anaesthesia charge is a surgery line but
+not an operation (also when it is for something else, e.g. "Sedation for X-ray"), so a surgery case
+with only such lines is "sedation only". Post-op visits (follow-up, recheck, wound check) are
+consult lines, not surgery. A dental scaling done under anaesthesia, sold as one item, is dental
+scaling (Preventive), not a surgery line; a separate anaesthesia line on the same invoice is.
+
+**Surgery revenue / consult revenue**:
+Revenue of surgery lines / consult lines. Line items not synced yet are in neither.
+
+**Service mix**:
+Revenue split by the service-mix group of each credited line's item. Every credited sen is in
+exactly one bucket: a group, Unmapped, "No item on invoice" (an invoice amount with no sold line) or
+Line items not synced yet — so the groups add up to revenue.
+
+**Clinic average (mix)**:
+The service mix of all doctors together (revenue-weighted) in the period and branches; the doctor
+filter never changes it. A doctor's group share is *above* / *below* it when it differs by 5.0
+percentage points or more, otherwise *in line*.
+
+**Working day**:
+A clinic day with at least one consult or surgery line credited to the doctor, at either branch (a
+consult at one branch and a surgery at the other the same day is one working day). The branch
+filter never removes working days.
+
+**Revenue per working day**:
+A doctor's revenue in the period (and selected branches) divided by their working days at any
+branch, rounded to the sen. With one branch selected: that branch's revenue per day worked
+anywhere, so the branches' figures add up to the total.
+
 ## Syncing
 
 **Sync run**:

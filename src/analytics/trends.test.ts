@@ -7,7 +7,18 @@ import { SYNTHETIC_ACCOUNTS, type SaleListRow, type SaleOverviewModel } from "@/
 import { runSync } from "@/sync/engine";
 import { clearSyncTables, createSyncHarness, type SyncHarness } from "@/sync/test-support";
 
-import { getDoctorDetail, getDoctorRanking, getMonthlyTrends, getYearOnYear, listTrendDoctors, trendMonths, type DoctorTrend, type TrendMonth } from "./index";
+import {
+  availableTrendMeasures,
+  getDoctorDetail,
+  getDoctorRanking,
+  getMonthlyServiceLineRevenue,
+  getMonthlyTrends,
+  getYearOnYear,
+  listTrendDoctors,
+  trendMonths,
+  type DoctorTrend,
+  type TrendMonth,
+} from "./index";
 
 /**
  * Seam 1: the Sync Engine reads the shared synthetic Sale List + invoice pages
@@ -138,10 +149,44 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       expect(trends.doctors.every((doctor) => doctor.points.every((point, index) => point.month === LONG_MONTHS[index]))).toBe(true);
       // Totals over the whole range (AOV counted over the range: a customer seen in two months counts once).
       expect(Object.fromEntries(trends.doctors.map((doctor) => [doctor.name, doctor.total]))).toEqual({
-        "Dr Alpha Anderson": { revenue: "16544.35", invoices: 9, customers: 4, aovPerCustomer: "4136.09", surgeryRevenue: null, consultRevenue: null },
-        "Dr Bravo Brown": { revenue: "5536.40", invoices: 9, customers: 7, aovPerCustomer: "790.91", surgeryRevenue: null, consultRevenue: null },
-        "Dr Delta": { revenue: "1280.00", invoices: 3, customers: 1, aovPerCustomer: "1280.00", surgeryRevenue: null, consultRevenue: null },
+        "Dr Alpha Anderson": { revenue: "16544.35", invoices: 9, customers: 4, aovPerCustomer: "4136.09", surgeryRevenue: "13209.60", consultRevenue: "544.00" },
+        "Dr Bravo Brown": { revenue: "5536.40", invoices: 9, customers: 7, aovPerCustomer: "790.91", surgeryRevenue: "1636.36", consultRevenue: "560.55" },
+        "Dr Delta": { revenue: "1280.00", invoices: 3, customers: 1, aovPerCustomer: "1280.00", surgeryRevenue: "0.00", consultRevenue: "84.37" },
       });
+    });
+
+    it("gives each doctor's surgery and consult revenue per month (the item groups' surgery / consult flags, #9)", async () => {
+      // Surgery lines (seeded item rules): 600001 Surgery - FHO (Dr Alpha, Sep 2025) 12,345.60 · 700091 Surgery - Tooth
+      // extraction (Dr Bravo, Aug 2026) 1,000.00 · 700101 Surgery - Spay (Dr Alpha, Sep 2026) 864.00 · 700202 Surgery -
+      // Wound stitching (Dr Bravo, Sep 2026) 636.36 (700.00 less its share of the invoice's 100.00 refund, spread by what
+      // each line charged: 100.00 × 700/1,100 = 63.636… → 63.64, the injection 36.36). Consult lines: Consultation — Dr Bravo 600002 54.40 (Sep 2025),
+      // 800102 180.00 (Mar 2026: 200.00 less its share of the 30.00 discount), 700102 80.00 + 700203 96.15 (Sep 2026),
+      // 800103 150.00 (1 Oct 2026 00:30 KL); Dr Alpha 800101 300.00 (1 Jan 2026 00:30 KL), 700090 100.00 (31 Aug 23:50
+      // KL), 700101 144.00 (Sep 2026); Dr Delta 700201 84.37 (Sep 2026). 600003's consult names no staff (no series).
+      const trends = await getMonthlyTrends(db.sql, LONG, { now: NOW });
+      const measure = (field: "surgeryRevenue" | "consultRevenue") =>
+        Object.fromEntries(trends.doctors.map((doctor) => [doctor.name, doctor.points.map((point) => point[field])]));
+      //                                  2025-09     10      11      12      2026-01   02      03       04      05      06      07      08         09        10
+      expect(measure("surgeryRevenue")).toEqual({
+        "Dr Alpha Anderson": ["12345.60", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "864.00", "0.00"],
+        "Dr Bravo Brown": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "1000.00", "636.36", "0.00"],
+        "Dr Delta": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00"],
+      });
+      expect(measure("consultRevenue")).toEqual({
+        "Dr Alpha Anderson": ["0.00", "0.00", "0.00", "0.00", "300.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "100.00", "144.00", "0.00"],
+        "Dr Bravo Brown": ["54.40", "0.00", "0.00", "0.00", "0.00", "0.00", "180.00", "0.00", "0.00", "0.00", "0.00", "0.00", "176.15", "150.00"],
+        "Dr Delta": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "84.37", "0.00"],
+      });
+      // The same figures as the Mix page's monthly service-line revenue (one definition).
+      for (const line of ["surgery", "consult"] as const) {
+        const monthly = await getMonthlyServiceLineRevenue(db.sql, LONG, line);
+        expect(monthly.length).toBeGreaterThan(0);
+        for (const row of monthly) {
+          const doctor = trends.doctors.find((candidate) => candidate.staffId === row.staffId)!;
+          expect(doctor.points.find((point) => point.month === row.month)![line === "surgery" ? "surgeryRevenue" : "consultRevenue"]).toBe(row.revenue);
+        }
+      }
+      expect(availableTrendMeasures().map((info) => info.measure)).toEqual(["revenue", "aovPerCustomer", "surgeryRevenue", "consultRevenue"]);
     });
 
     it("gives each doctor's AOV per customer per month: the month's revenue ÷ that month's distinct customers", async () => {
@@ -167,8 +212,8 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
         "Dr Delta": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "800.00", "480.00", "0.00"],
         "Dr Alpha Anderson": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "90.00", "0.00", "0.00", "0.00", "0.00", "0.00", "153.85", "0.00"],
       });
-      // 1,096.15 ÷ 2 (C5, C1) = 548.075 → 548.08
-      expect(south.doctors[0]!.points[12]).toEqual({ month: "2026-09", revenue: "1096.15", invoices: 2, customers: 2, aovPerCustomer: "548.08", surgeryRevenue: null, consultRevenue: null });
+      // 1,096.15 ÷ 2 (C5, C1) = 548.075 → 548.08; surgery 700202's wound stitching 636.36 (after its refund share), consult 700203 96.15
+      expect(south.doctors[0]!.points[12]).toEqual({ month: "2026-09", revenue: "1096.15", invoices: 2, customers: 2, aovPerCustomer: "548.08", surgeryRevenue: "636.36", consultRevenue: "96.15" });
 
       const north = await getMonthlyTrends(db.sql, { ...LONG, branchIds: [branch.north] }, { now: NOW });
       expect(north.doctors.map((doctor) => [doctor.name, doctor.total.revenue])).toEqual([

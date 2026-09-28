@@ -14,7 +14,9 @@ import type { SaleListRow, SaleOverviewModel } from "./fake-kreloses";
  * Shapes follow the shared fixtures: `/Date(ms)/` sale dates, formatted amounts ("1,234.50",
  * negatives in parentheses), ItemType 1 (product) / 4 (service), short staff names on lines. The
  * lines add up to the net amount (no discount lines, no tax), so each line is credited exactly its
- * own amount. Customer `n` is Kreloses customer `90000 + n`, "Customer 000n"; `null` is a walk-in.
+ * own amount. A line is one unit at its amount unless it gives `quantity` and `unitPrice` (a charged
+ * amount below quantity × unit price is an item-level discount). Customer `n` is Kreloses customer
+ * `90000 + n`, "Customer 000n"; `null` is a walk-in.
  *
  * No `import.meta` and no file reads: the Playwright specs import this module too.
  */
@@ -36,10 +38,14 @@ export interface SyntheticLine {
   name: string;
   /** Short staff name as Kreloses prints it on the line ("Dr Alpha"); null = no staff. */
   staff: string | null;
-  /** The charged amount (quantity 1 at this unit price). */
+  /** The charged amount (after any item-level discount); by default quantity 1 at this unit price. */
   amount: Money;
   /** Default 4 (service). */
   itemType?: 1 | 4;
+  /** Quantity as Kreloses writes it ("2", "0.5", "(1)" for a return is written from a negative). Default 1. */
+  quantity?: number;
+  /** Price per unit; required with a `quantity` other than 1. Default: `amount`. */
+  unitPrice?: Money;
 }
 
 const BRANCHES = {
@@ -102,17 +108,20 @@ function saleOverviewModel(sale: SyntheticSale): SaleOverviewModel {
       sale.customer === null
         ? null
         : { CustomerId: customerId(sale.customer), Name: customerName(sale.customer), Phone: `000-000 ${String(sale.customer).padStart(4, "0")}`, Email: null },
-    Items: sale.lines.map((line, index) => ({
-      SaleItemId: sale.saleId * 10 + index + 1,
-      Name: line.name,
-      Quantity: "1",
-      UnitPrice: formatAmount(moneyToSen(line.amount)),
-      Amount: formatAmount(moneyToSen(line.amount)),
-      StaffName: line.staff ?? "",
-      ItemType: line.itemType ?? 4,
-      DiscountName: null,
-      DiscountAmount: "0.00",
-    })),
+    Items: sale.lines.map((line, index) => {
+      const { quantity, unitPriceSen, discountSen } = lineUnits(line);
+      return {
+        SaleItemId: sale.saleId * 10 + index + 1,
+        Name: line.name,
+        Quantity: quantity < 0 ? `(${-quantity})` : String(quantity),
+        UnitPrice: formatAmount(unitPriceSen),
+        Amount: formatAmount(moneyToSen(line.amount)),
+        StaffName: line.staff ?? "",
+        ItemType: line.itemType ?? 4,
+        DiscountName: discountSen > 0 ? "Item discount" : null,
+        DiscountAmount: formatAmount(discountSen),
+      };
+    }),
     Totals: {
       GrossAmount: net,
       Discounts: "0.00",
@@ -127,6 +136,15 @@ function saleOverviewModel(sale: SyntheticSale): SaleOverviewModel {
     RefundInfo: null,
     CreditNoteInfo: null,
   };
+}
+
+/** A line's quantity and unit price, and the item-level discount (quantity × unit price − amount, when positive). */
+function lineUnits(line: SyntheticLine): { quantity: number; unitPriceSen: number; discountSen: number } {
+  const quantity = line.quantity ?? 1;
+  if (quantity !== 1 && line.unitPrice === undefined) throw new Error(`Synthetic line "${line.name}": a quantity other than 1 needs a unitPrice`);
+  const unitPriceSen = line.unitPrice === undefined ? moneyToSen(line.amount) : moneyToSen(line.unitPrice);
+  const grossSen = Math.round(quantity * unitPriceSen);
+  return { quantity, unitPriceSen, discountSen: Math.max(0, grossSen - moneyToSen(line.amount)) };
 }
 
 function netSen(sale: SyntheticSale): number {

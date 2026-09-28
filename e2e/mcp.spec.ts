@@ -81,7 +81,9 @@ test.describe("MCP server for Claude", () => {
     const table = page.getByTestId("doctor-ranking");
     const [download] = await Promise.all([page.waitForEvent("download"), table.getByRole("button", { name: "Export CSV" }).click()]);
     const csv = (await readFile((await download.path())!, "utf8")).replace(/^\uFEFF/, "").trim().split("\r\n");
-    expect(csv.slice(1)).toEqual(
+    // The ranking's columns (the page also has working-day columns, #9, which doctor_performance does not return).
+    expect(csv[0]!.split(",").slice(0, 7)).toEqual(["Doctor", "Revenue (RM)", "Share of revenue (%)", "AOV per customer (RM)", "Invoices", "Items per invoice", "Customers"]);
+    expect(csv.slice(1).map((line) => line.split(",").slice(0, 7).join(","))).toEqual(
       ranking.doctors.map((d) => [d.name, d.revenue, d.sharePercent.toFixed(1), d.aovPerCustomer, d.invoices, d.itemsPerInvoice.toFixed(2), d.customers].join(",")),
     );
     expect(csv.slice(1)).toHaveLength(3);

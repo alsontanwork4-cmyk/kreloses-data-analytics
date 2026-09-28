@@ -2,7 +2,15 @@ import { Stethoscope } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { getDataFreshness, getDoctorRanking, getPendingLineItems, METRIC_DEFINITIONS, type MetricName, type StaffFigures } from "@/analytics";
+import {
+  getDataFreshness,
+  getDoctorRanking,
+  getPendingLineItems,
+  getRevenuePerWorkingDay,
+  METRIC_DEFINITIONS,
+  type MetricName,
+  type StaffFigures,
+} from "@/analytics";
 import { requireUser } from "@/auth/session";
 import { HorizontalBarChart } from "@/components/charts/horizontal-bar-chart";
 import { DataTable, type DataTableColumn } from "@/components/data-table/data-table";
@@ -24,6 +32,9 @@ interface RankingRow extends StaffFigures {
   name: string;
   aliasOnly: boolean;
   branchName?: string;
+  /** Days with a consult or surgery line at either branch (#9). */
+  workingDays: number | null;
+  revenuePerWorkingDay: string | null;
 }
 
 /** A row of the "not in the ranking" table. */
@@ -46,6 +57,8 @@ const DEFINITIONS: MetricName[] = [
   "genericAccounts",
   "noStaffOnLine",
   "pendingLineItems",
+  "workingDay",
+  "revenuePerWorkingDay",
 ];
 
 /** Doctor ranking (spec stories 31–34) from the Analytics Service; no maths here. */
@@ -56,10 +69,11 @@ export default async function DoctorsPage({ searchParams }: PageProps<"/doctors"
   const { filter } = filterState;
   const splitByBranch = params.split === "branch";
   const sql = getDb();
-  const [ranking, freshness, pending] = await Promise.all([
+  const [ranking, freshness, pending, workingDays] = await Promise.all([
     getDoctorRanking(sql, filter, { splitByBranch }),
     getDataFreshness(sql, { dateFrom: filter.dateFrom, dateTo: filter.dateTo }),
     getPendingLineItems(sql, filter),
+    getRevenuePerWorkingDay(sql, filter, { splitByBranch }),
   ]);
 
   const filterQuery = filterSearchParamsOnly(params);
@@ -71,10 +85,17 @@ export default async function DoctorsPage({ searchParams }: PageProps<"/doctors"
   };
 
   const rankingRows = ranking.doctors.flatMap((doctor): RankingRow[] => {
-    const base = { staffId: doctor.staffId, name: doctor.name, aliasOnly: doctor.source === "alias_only" };
+    const days = workingDays[doctor.staffId];
+    const base = { staffId: doctor.staffId, name: doctor.name, aliasOnly: doctor.source === "alias_only", workingDays: days?.workingDays ?? 0 };
     return splitByBranch
-      ? (doctor.branches ?? []).map((branch) => ({ ...branch, ...base, key: `${doctor.staffId}:${branch.branchId}`, branchName: branch.branchName }))
-      : [{ ...doctor, ...base, key: doctor.staffId }];
+      ? (doctor.branches ?? []).map((branch) => ({
+          ...branch,
+          ...base,
+          key: `${doctor.staffId}:${branch.branchId}`,
+          branchName: branch.branchName,
+          revenuePerWorkingDay: days?.branches?.find((row) => row.branchId === branch.branchId)?.revenuePerWorkingDay ?? null,
+        }))
+      : [{ ...doctor, ...base, key: doctor.staffId, revenuePerWorkingDay: days?.revenuePerWorkingDay ?? null }];
   });
   const rankingColumns: DataTableColumn<RankingRow>[] = [
     {
@@ -97,6 +118,9 @@ export default async function DoctorsPage({ searchParams }: PageProps<"/doctors"
     },
     ...(splitByBranch ? [{ key: "branch", header: "Branch", kind: "text" as const, value: (row: RankingRow) => row.branchName ?? "" }] : []),
     ...figureColumns<RankingRow>(),
+    // Working days are counted at any branch, so split by branch every row of a doctor repeats the same count.
+    { key: "working-days", header: splitByBranch ? "Working days (any branch)" : "Working days", kind: "count", value: (row) => row.workingDays, priority: "secondary" },
+    { key: "per-working-day", header: "Revenue per working day", kind: "money", value: (row) => row.revenuePerWorkingDay },
   ];
 
   const groupRows: GroupRow[] = [
@@ -168,7 +192,7 @@ export default async function DoctorsPage({ searchParams }: PageProps<"/doctors"
 
           <DataTable
             caption={splitByBranch ? "Doctor ranking by branch" : "Doctor ranking"}
-            description="Highest revenue first. Share is of all revenue in the period and branches."
+            description={`Highest revenue first. Share is of all revenue in the period and branches. Working days are days with a consult or surgery line at either branch${filter.branchIds || splitByBranch ? ", so revenue per working day is this branch's revenue per day worked anywhere" : ""}.`}
             columns={rankingColumns}
             rows={rankingRows}
             rowKey={(row) => row.key}

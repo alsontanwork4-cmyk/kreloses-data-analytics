@@ -26,6 +26,18 @@ import type { GlobalFilter } from "@/filters";
  *                              on pending rows. Discount = gross_amount − credited_amount (#12), so a
  *                              refund never counts as a discount.
  *
+ * and the item sold (#9, resolved at query time from the owner's item rules and assignments via
+ * `item_classifications`, so a rule change changes every figure at once, like a staff remap):
+ *
+ *   item_name        text     the line's item name as sent; null on the unitemised remainder / pending rows
+ *   item_type        integer  Kreloses ItemType (1 product, 4 service); null likewise
+ *   item_key         text     the item's identity (`itemKey`: spelling variants share it); null likewise
+ *   mix_group        text     one of the eight groups (`MIX_GROUPS`) | 'unmapped' (no rule/assignment
+ *                              matches the item) | 'no_item' (an invoice's unitemised remainder) |
+ *                              'pending' (line items not synced yet)
+ *   is_surgery, is_consult, is_vaccine, is_dental_scaling, is_procedure   boolean flags of the item
+ *                              (false on unmapped / no_item / pending rows); is_procedure ⇒ is_surgery
+ *
  * An active invoice whose line items are not current (`invoices.lines_current` false: never read,
  * or the header changed since) contributes ONE `pending` row carrying its revenue base
  * (`invoices.revenue_base`, the SQL twin of `invoiceRevenueBaseSen`), so revenue never drops
@@ -36,9 +48,8 @@ import type { GlobalFilter } from "@/filters";
  * Scope: the filter's branches, and its doctors (`doctorIds` are `staff.id`s): with doctors
  * selected, only lines credited to them (no `no_staff` / `pending` rows).
  *
- * #9 (item groups) joins `invoice_lines` on `invoice_line_id` for the item name/type and adds the
- * mix group and surgery / consult / vaccine / dental flags as more columns here, resolved at query
- * time from its item rules (so changing a rule changes every figure, like a staff remap).
+ * Every credited sen lands in exactly one `mix_group` (the eight groups, unmapped, no_item or
+ * pending), so group totals always add up to revenue.
  */
 export function revenueFacts(sql: Sql, scope: FactsScope) {
   return sql`
@@ -46,18 +57,26 @@ export function revenueFacts(sql: Sql, scope: FactsScope) {
       i.sale_date, i.branch_id, i.customer_id, i.id as invoice_id, c.revenue_amount as revenue,
       c.id as credited_line_id, c.invoice_line_id, c.staff_alias_id, a.staff_id,
       case when a.staff_id is null then 'no_staff' else s.kind end as credit_group,
-      c.gross_amount, c.credited_amount
+      c.gross_amount, c.credited_amount,
+      l.item_name, l.item_type, coalesce(k.item_key, l.item_name) as item_key,
+      case when c.invoice_line_id is null then 'no_item' else coalesce(k.mix_group, 'unmapped') end as mix_group,
+      coalesce(k.is_surgery, false) as is_surgery, coalesce(k.is_consult, false) as is_consult,
+      coalesce(k.is_vaccine, false) as is_vaccine, coalesce(k.is_dental_scaling, false) as is_dental_scaling,
+      coalesce(k.is_procedure, false) as is_procedure
     from invoices i
     join credited_lines c on c.invoice_id = i.id
     left join staff_aliases a on a.id = c.staff_alias_id
     left join staff s on s.id = a.staff_id
+    left join invoice_lines l on l.id = c.invoice_line_id
+    left join item_classifications k on k.item_name = l.item_name
     where i.status = 'active' and i.lines_current
       and ${branchCondition(sql, scope.branches, sql`i.branch_id`)}
       and ${staffCondition(sql, scope.staff, sql`a.staff_id`)}
     union all
     select
       i.sale_date, i.branch_id, i.customer_id, i.id, i.revenue_base,
-      null::bigint, null::bigint, null::bigint, null::bigint, 'pending', null::numeric, null::numeric
+      null::bigint, null::bigint, null::bigint, null::bigint, 'pending', null::numeric, null::numeric,
+      null::text, null::integer, null::text, 'pending', false, false, false, false, false
     from invoices i
     where i.status = 'active' and not i.lines_current
       and ${branchCondition(sql, scope.branches, sql`i.branch_id`)}

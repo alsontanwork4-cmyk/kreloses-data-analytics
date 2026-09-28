@@ -1,7 +1,8 @@
-import { aliasKey, creditInvoice, invoiceRevenueBaseSen, type AttributionLine } from "@/attribution";
+import { aliasKey, creditInvoice, DISCOUNT_ITEM_TYPE, invoiceRevenueBaseSen, type AttributionLine } from "@/attribution";
 import type { JsonValue, Queryable, Sql } from "@/db/sql";
 import type { KrelosesInvoiceDetail } from "@/kreloses";
 import { moneyToSen, senToMoney } from "@/lib/money";
+import { classifyItemNames } from "@/items/store";
 import { ensureAliases } from "@/staff/store";
 
 /**
@@ -144,7 +145,8 @@ export type SaveLinesResult =
  *    page was opened for) nothing is written — the lines might belong to another state of the
  *    invoice; it stays "not synced yet" and the next sync reads it again;
  * 2. upserts `invoice_lines` by (invoice, line_no), deleting lines beyond the new count;
- * 3. makes sure every staff name on the lines has an alias (matching new names);
+ * 3. makes sure every staff name on the lines has an alias (matching new names) and every item name
+ *    on its sold lines a service-mix classification (#9, `classifyItemNames`);
  * 4. `creditInvoice` (pure) → upserts `credited_lines` (credited amount before refunds, refund
  *    share; `revenue_amount` is generated from them), deleting rows no longer produced;
  * 5. sets `lines_header_version` (so the lines are current for exactly this header),
@@ -205,6 +207,7 @@ export async function saveInvoiceLines(
       for (const row of written) lineIds.set(row.lineNo, row.id);
     }
     await tx`delete from invoice_lines where invoice_id = ${invoiceId} and line_no > ${lines.length}`;
+    await classifyItemNames(tx, detail.lines.filter((line) => line.itemType !== DISCOUNT_ITEM_TYPE).map((line) => line.name));
 
     const attributionLines: AttributionLine[] = detail.lines.map((line) => ({
       lineNo: line.lineNo,

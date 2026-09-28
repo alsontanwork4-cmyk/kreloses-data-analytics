@@ -5,6 +5,7 @@ import { moneyToSen, type Money } from "@/lib/money";
 import { branchScope, factsScope, revenueFacts } from "./facts";
 import { percentChange } from "./overview";
 import type { DateRange } from "./periods";
+import { serviceLineCondition } from "./service-lines";
 
 /**
  * Trends (spec stories 37–39): each doctor's figures per clinic month, and year on year per doctor
@@ -17,20 +18,19 @@ import type { DateRange } from "./periods";
  */
 
 /**
- * Surgery and consult revenue need the item → service-mix groups of #9 (the `surgery` / `consult`
- * flags on `revenueFacts`). Until those exist this is `false`: the two measures are hidden
- * (`availableTrendMeasures`, the Trends page's measure switch) and their figures are `null`.
- * WIRING (whichever of #9 / #10 merges second): set it to `true` and check that the flag columns
- * in `ITEM_GROUP_REVENUE` below match #9's `revenueFacts` column names.
+ * Surgery and consult revenue come from the item → service-mix groups of #9: the `is_surgery` /
+ * `is_consult` flags on `revenueFacts` (`serviceLineCondition`, ./service-lines.ts — the same
+ * definition as the Mix page and the Overview tiles). With item groups in place this is `true`, so
+ * the two measures are offered (`availableTrendMeasures`) and their figures are never `null`.
  */
-export const ITEM_GROUP_MEASURES_AVAILABLE: boolean = false;
+export const ITEM_GROUP_MEASURES_AVAILABLE: boolean = true;
 
-/** Surgery / consult revenue, summed from `revenueFacts` rows aliased `f` (only used once `ITEM_GROUP_MEASURES_AVAILABLE`). */
+/** Surgery / consult revenue, summed from `revenueFacts` rows aliased `f`. */
 function itemGroupRevenue(sql: Sql) {
   return ITEM_GROUP_MEASURES_AVAILABLE
     ? sql`
-        coalesce(sum(f.revenue) filter (where f.surgery), 0)::text as surgery_revenue,
-        coalesce(sum(f.revenue) filter (where f.consult), 0)::text as consult_revenue
+        coalesce(sum(f.revenue) filter (where ${serviceLineCondition(sql, "surgery")}), 0)::numeric(14, 2)::text as surgery_revenue,
+        coalesce(sum(f.revenue) filter (where ${serviceLineCondition(sql, "consult")}), 0)::numeric(14, 2)::text as consult_revenue
       `
     : sql`null::text as surgery_revenue, null::text as consult_revenue`;
 }
@@ -86,9 +86,9 @@ export interface TrendFigures {
   customers: number;
   /** revenue ÷ customers, rounded to the sen; null without customers. */
   aovPerCustomer: Money | null;
-  /** Revenue of surgery lines; null until item groups exist (`ITEM_GROUP_MEASURES_AVAILABLE`). */
+  /** Revenue of surgery lines (`METRIC_DEFINITIONS.surgeryRevenue`); null only if item groups were unavailable. */
   surgeryRevenue: Money | null;
-  /** Revenue of consult lines; null until item groups exist. */
+  /** Revenue of consult lines (`METRIC_DEFINITIONS.consultRevenue`); null only if item groups were unavailable. */
   consultRevenue: Money | null;
 }
 
@@ -176,8 +176,8 @@ function toFigures(row: FigureRow): TrendFigures {
 }
 
 /**
- * Each doctor's revenue, invoices, customers and AOV per customer (and, once item groups exist,
- * surgery and consult revenue) per clinic month of the global filter's dates (`trendMonths`: months
+ * Each doctor's revenue, invoices, customers, AOV per customer, surgery revenue and consult revenue
+ * (#9 item groups) per clinic month of the global filter's dates (`trendMonths`: months
  * after the current one are left out), within its branches and doctors. AOV per customer in a month
  * = the doctor's revenue that month ÷ distinct customers with at least one line credited to them
  * that month (in the filter's branches together). `options.now` sets "today" (default: now).
