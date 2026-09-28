@@ -60,9 +60,11 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * 4. After each page, reads the Sale Overview page of each of its invoices whose line items are
  *    missing or stale (`invoicesNeedingLines`, in ./lines.ts: the ONE place deciding that) and
  *    stores lines + credited lines per invoice in one transaction (`saveInvoiceLines`). The page
- *    stays the checkpoint until its line items are done.
- * 5. Finishes `succeeded`, `partial` (time budget reached; `checkpoint` says where to carry on) or
- *    `failed`.
+ *    stays the checkpoint until its line items are done. A page that is not there (`PageMissing`)
+ *    is skipped and counted (`lineItemsFailed`); the invoice stays "not synced yet".
+ * 5. Finishes `succeeded`, `partial` (time budget reached — `checkpoint` says where to carry on —
+ *    or everything read but some invoice pages missing) or `failed` (also when the first
+ *    MISSING_PAGES_TO_FAIL invoice pages it tries are all missing). Warnings go on the run.
  *
  * Errors: `AuthFailed` and `LayoutChanged` are never retried (the owner or a code fix must act); an
  * expired session gets ONE fresh login per run; `RateLimited` / `Transient` are retried with

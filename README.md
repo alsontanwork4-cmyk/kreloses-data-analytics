@@ -363,8 +363,10 @@ session.getHtml(path): Promise<string>                             // page load 
   asked, more rows read so far than TotalCount, or a page repeating the previous one's first/last
   sale (RequestingPage ignored).
 - **`getInvoice`** (`src/kreloses/sale-overview.ts`): the invoice page embeds `var model = {…};`.
-  The Reader finds the assignment (HTML comments skipped), reads the object to its matching brace
-  (braces inside strings ignored), `JSON.parse`s it and checks what it relies on: `Items[]` with
+  The Reader scans the page (never rewriting it): only an assignment inside a `<script>` counts,
+  not one in HTML text, an HTML comment, a JS string or a JS comment; it reads the object to its
+  matching brace (braces inside strings ignored), `JSON.parse`s it (two models that parse →
+  `LayoutChanged`) and checks what it relies on: `Items[]` with
   `Name`, `Quantity`, `UnitPrice`, `Amount`, `StaffName`, `ItemType` (1 product, 4 service,
   **55 discount line**; other values kept as sent), `DiscountName`, `DiscountAmount`; `Sale.SaleId`
   (if present) must be the sale asked for; `Totals` amounts (if present) must be readable. Money →
@@ -372,12 +374,16 @@ session.getHtml(path): Promise<string>                             // page load 
   up to 4 places, stored `numeric(12,4)`); a blank `StaffName` → null ("No staff on line"). Only a
   discount line may lack Quantity/UnitPrice/Amount. No model, JSON that does not parse, a missing
   item field or an unreadable number → `LayoutChanged` naming the item and field (never a value).
-  `Customer` is never returned. UNVERIFIED until the live check: `Totals` key names, that `Amount`
+  `Customer` is never returned. A page that is not there — HTTP 404/410 or a redirect anywhere but
+  the login page (`session.getHtml`) — raises **`PageMissing`**, a subclass of `LayoutChanged`
+  (`reason` `not_found` | `redirected`, `status`), so the Sync Engine can skip one missing invoice
+  while treating a changed page as fatal. UNVERIFIED until the live check: `Totals` key names, that `Amount`
   is after the item discount, the discount line's sign, and how refunds show in
   `RefundInfo`/`CreditNoteInfo` (kept raw in `invoices.raw_detail` for #6).
 - **`listStaff`** (`src/kreloses/staff.ts`): full staff names from the Sale List filter template's
-  Staff filter (shared with `listLocations`); no Staff filter → `LayoutChanged`; an empty one
-  (e.g. loaded on demand) → `[]` (names on lines then stay unmatched, still credited).
+  Staff filter (shared with `listLocations`); no Staff filter → `LayoutChanged` (the Sync Engine
+  records it as a warning and carries on); an empty one (e.g. loaded on demand) → `[]` (names on
+  lines then stay unmatched, still credited).
 
 #### Live login check (real Kreloses)
 
@@ -399,13 +405,16 @@ mean `/Date()/` holds KL time sent as UTC), whether rows come newest first, how 
 outside the requested range, how amounts are
 formatted (separators / parentheses / minus / currency: yes or no), the status labels seen, whether
 cancelled sales appear, and whether the Reader parses the page. Then it counts the staff in the
-Sale List filter and opens ONE invoice page (the first active sale of that page) and prints its
-structure: the page model's keys and types, the item fields present/missing/other, how many lines
-have each ItemType, number formats, how many lines name a staff member, and yes/no or counts for
-the Reader's assumptions (Amount = Quantity × UnitPrice − DiscountAmount, the discount lines' sign,
-the lines adding up to `Totals.NetAmount`, `Totals.NetAmount` = the Sale List's NetAmount,
-`Sale.SaleId` = the sale asked for) and whether the Reader parses it — never a name, amount,
-quantity, number or id. It is skipped unless credentials are set, needs no database, and is never part of `npm test`. Run it from a terminal without saving the password in
+Sale List filter and opens up to THREE invoice pages of that Sale List page (the first active sale,
+the first with a discount, the first with a refund or a negative net) and prints their structure in
+aggregate: the first page's model keys and types, whether every page has the same top-level keys,
+the item fields present/missing/other, how many lines have each ItemType, number formats, how many
+lines name a staff member, and counts for the Reader's assumptions (Amount = Quantity × UnitPrice −
+DiscountAmount, the discount lines' sign, pages whose lines add up to `Totals.NetAmount` and to the
+Sale List's NetAmount — the gap monitor —, `Totals.NetAmount` = the Sale List's NetAmount,
+`Sale.SaleId` = the sale asked for), the shapes of `RefundInfo` / `CreditNoteInfo`, and whether the
+Reader parses each page — never a name, amount, quantity, number or id (sale ids become `<sale>`,
+even in error messages). It is skipped unless credentials are set, needs no database, and is never part of `npm test`. Run it from a terminal without saving the password in
 your shell history:
 
 ```bash
@@ -464,9 +473,12 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   header was last written, i.e. first read or changed — an identical re-read leaves the row alone),
   `detail_fetched_at` (#5: line items need a (re)fetch when null or `< fetched_at`). `raw_header`
   is refreshed on its own when only unparsed fields change (no new `fetched_at`). #5 added
-  `raw_detail` (the invoice page's `Sale`/`Totals`/`Transactions`/`RefundInfo`/`CreditNoteInfo`) and
-  `lines_current` (**generated**: `detail_fetched_at >= fetched_at` — THE definition of "its line
-  items belong to the header as it is now").
+  `raw_detail` (the invoice page's `Sale`/`Totals`/`Transactions`/`RefundInfo`/`CreditNoteInfo`),
+  `header_version` (+1 whenever a parsed header column changes), `lines_header_version` (the
+  version the stored lines were computed for), `lines_current` (**generated**: the two are equal —
+  THE definition of "its line items belong to the header as it is now"), `revenue_base`
+  (**generated**: what its credited lines add up to; twin of `invoiceRevenueBaseSen`) and
+  `line_gap_amount` (net − Σ all line amounts when last read; the gap monitor).
 - `invoice_lines` (migration `…_line_items_and_doctor_credit.sql`) — the invoice page's `Items[]`
   as read: `invoice_id`, `line_no` (1-based; unique per invoice), `item_name`, `item_type` (55 =
   discount line), `quantity` `numeric(12,4)`, `unit_price`, `amount` (the charged amount, after any
@@ -480,39 +492,55 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   `connection_id`. Never deleted.
 - `staff_aliases` — every distinct staff name seen on lines: `raw_name`, `normalised_name`
   (unique: trimmed, spaces collapsed, lower case), `staff_id` (always set), `match` (`auto` |
-  `manual` | `unmatched`).
+  `manual` | `unmatched`). A name is matched when first seen; once it has credited lines a sync
+  never moves it (unmatched names get suggestions, `listStaffAliases`). Kinds follow
+  `defaultStaffKind(fullName, lineNames)` until the owner sets one (generic only from the full name).
+- `sync_runs.warnings` — `[{code, message}]` (see Sync Engine).
 - `sync_runs` — `connection_id`, `connection_label`, `mode` (`nightly` | `backfill` | `manual`),
   `status` (`running` | `succeeded` | `partial` | `failed`), `date_from` / `date_to`, `started_at`,
   `finished_at`, `counts` (`{pages, invoicesSeen, inserted, updated, unchanged}`), `checkpoint`
   (`{nextPage, pageSize}` — saved with every page, kept on partial/failed), `covered_location_ids`
-  (set on success; drives "data as of"), `error_code` (`auth_failed` | `layout_changed` |
+  (set when the run read its whole listing — succeeded, or partial only for missing invoice pages; drives "data as of"), `error_code` (`auth_failed` | `layout_changed` |
   `rate_limited` | `transient` | `key_problem` | `interrupted` | `internal`) + `error` (shown to users).
   At most one `running` run per connection (unique partial index).
 - `connection_locks` — the per-connection lease (above).
 
 ### Credited lines: the revenue model
 
-Every revenue figure is a sum of **credited lines** (spec: Attribution & Rules; ADR 0005):
+Every revenue figure is a sum of **credited lines** (spec: Attribution & Rules; ADRs 0005, 0006):
 
-- **Derived once per invoice read**, in the transaction that stores its lines
-  (`saveInvoiceLines`, `src/sync/lines.ts`), by the PURE `creditInvoice(invoice, lines)`
-  (`src/attribution/credit.ts`, unit-tested edge by edge). One row per non-discount line:
-  `gross_amount` (qty × unit price, half away from zero), `line_amount` (its own Amount),
-  `spread_amount` (its share of the discount lines + any gap to the net, by gross, largest
-  remainder in whole sen, ties to the lower line_no), `credited_amount = line_amount +
-  spread_amount`, `staff_alias_id` (null = "No staff on line"). An invoice with no non-discount
-  line gets one "unitemised remainder" row (`invoice_line_id` null, no staff). **An invoice's
-  credited lines add up exactly to `invoiceRevenueBaseSen`** — today its `net_amount` if active, 0
-  if cancelled (only active invoices' lines are read). Refunds are recorded, not subtracted.
+- **The rule** (`creditInvoice`, `src/attribution/credit.ts`, PURE, unit-tested edge by edge): each
+  non-discount line starts from its own `Amount` (what it charged, after any item-level discount).
+  The invoice's discount lines (ItemType 55) and any gap between the lines and the revenue base are
+  spread over the non-discount lines **in proportion to what each line charged** (lines that
+  charged ≤ 0 take no share while any line charged more; if none did, by |quantity × unit price|;
+  if that is zero too, equally), in whole sen by largest remainder, ties to the lower line_no. An
+  invoice with no non-discount line gets one "unitemised remainder" row (`invoice_line_id` null, no
+  staff). **An invoice's credited lines add up exactly to its revenue base.**
+- **The revenue base** is defined twice, kept equal by a test (`src/sync/lines.test.ts`) and a
+  runtime check in `saveInvoiceLines`: `invoiceRevenueBaseSen()` in TypeScript (what credited lines
+  add up to) and the generated `invoices.revenue_base` in SQL (what pending rows and reconciliations
+  use) — today `net_amount` if active, 0 if cancelled; refunds recorded, not subtracted. Change both
+  together (one migration + one function).
+- **Stored per invoice read** (`saveInvoiceLines`, `src/sync/lines.ts`, one transaction): the
+  lines, the credited lines (`gross_amount`, `line_amount`, `spread_amount`, `credited_amount =
+  line_amount + spread_amount`, `staff_alias_id` — null = "No staff on line"), and on the invoice
+  `lines_header_version` (the `header_version` the lines were computed for), `detail_fetched_at`,
+  `raw_detail` and `line_gap_amount` (net − Σ all line amounts: the gap monitor; ≠ 0 is counted on
+  the run as `lineItemGaps`). If the header changed while its page was being read, nothing is
+  written and the invoice stays pending.
+- **Current or pending**: `invoices.lines_current` (generated) = `lines_header_version =
+  header_version`. The sync bumps `header_version` whenever a parsed header column changes, so lines
+  are compared with the header they were computed for — by version, never by clock.
 - **Who and what kind are resolved at query time**: `credited_lines.staff_alias_id →
   staff_aliases.staff_id → staff.kind`. A remap (Settings → Doctors) or a kind change changes every
   figure at once, with no re-sync and nothing re-derived (the amounts do not depend on the staff).
 - **Query them only through `revenueFacts`** (`src/analytics/facts.ts`), which adds the invoice's
   `sale_date`/`branch_id`/`customer_id`, the resolved `staff_id` and `credit_group` (`doctor` |
   `other` | `generic` | `no_staff` | `pending`), applies the branch and doctor filters, keeps only
-  active invoices whose `lines_current` is true, and adds ONE `pending` row (its net amount) per
+  active invoices whose `lines_current` is true, and adds ONE `pending` row (its `revenue_base`) per
   active invoice whose lines are missing or stale — so revenue never drops between a header sync
-  and its line sync. Reconciliation (tested per branch and month): Σ credited = Σ active net.
+  and its line sync. Reconciliation (tested per branch and month): Σ credited = Σ `revenue_base`.
 
 **#9 (item groups / mix)**: keep the item → group rules in their own table(s) and resolve them at
 query time, exactly like staff: add a pure matcher in `src/attribution/` (item name/type →
@@ -524,13 +552,17 @@ item (group "Line items not synced yet"); the unitemised remainder has none eith
 
 **#6 (nightly / change detection / refunds)**: which invoices get their lines (re)read is decided
 in ONE place, `invoicesNeedingLines()` (`src/sync/lines.ts`: active and `not lines_current`, i.e.
-never read or header changed since). To re-read only on line-relevant header changes, add a
-`lines_changed_at` column written by `saveInvoicePage` and redefine the generated
-`invoices.lines_current` against it (one migration; the facts' pending fallback follows). Refund
-handling changes ONE function, `invoiceRevenueBaseSen()` (`src/attribution/credit.ts`) — once the
-live check shows how Kreloses represents refunds (`total_refunds`, `raw_detail.RefundInfo` /
-`CreditNoteInfo`), re-derive by re-reading lines (clear `detail_fetched_at`) or add a re-credit
-step that recomputes `credited_lines` from stored `invoice_lines`.
+never read, or the header version moved). To re-read only on line-relevant header changes, bump
+`header_version` in `saveInvoicePage` (`src/sync/store.ts`) only for those columns. Refund handling
+changes `invoiceRevenueBaseSen()` AND `invoices.revenue_base` together — once the live check shows
+how Kreloses represents refunds (`total_refunds`, `raw_detail.RefundInfo` / `CreditNoteInfo`).
+Existing credited lines then need re-deriving: bump `header_version` for the affected invoices (they
+turn pending and the next sync re-reads them), or add a re-credit step that recomputes
+`credited_lines` from stored `invoice_lines`.
+
+**#12 (discounts)**: per line, discount = `gross_amount − credited_amount` (independent of the spread
+rule); discount types and amounts come from `invoice_lines` with `item_type = 55` and
+`discount_name` / `discount_amount` on item lines.
 
 ### Sync Engine (`src/sync/`)
 
@@ -553,7 +585,22 @@ Reader's polite delay). After each page it opens the invoice page of each of the
 in `invoicesNeedingLines()` and stores lines + aliases + credited lines per invoice in one
 transaction (`saveInvoiceLines`), checking the time budget before each; the page stays the
 checkpoint until its line items are done (so carrying on re-reads that page, a no-op for headers,
-then the missing line items). `counts.lineItemsRead` counts invoice pages read. Each page is upserted
+then the missing line items). `counts.lineItemsRead` counts invoice pages read.
+
+- **A missing invoice page** (the Reader's `PageMissing`: HTTP 404/410, or a redirect anywhere but the
+  login page) is skipped: `counts.lineItemsFailed` +1, the invoice stays pending at its revenue base
+  and the next run tries it again. A run that read its whole listing but skipped pages ends
+  **`partial`** with `coveredLocationIds` set (so it counts for "data as of"), `checkpoint`
+  `{nextPage: 1}` (Sync now starts over) and an `invoice_pages_missing` warning; `SyncResult` says
+  `stoppedAtTimeLimit: false`. If the first `MISSING_PAGES_TO_FAIL` (3) pages a run tries are all
+  missing, it fails (`layout_changed`: something systematic). A page whose content changed
+  (`LayoutChanged` proper) still fails the run at once.
+- **Warnings** (`sync_runs.warnings`, `SyncResult.warnings`, `SyncWarning` in `src/sync/runs.ts`):
+  `invoice_pages_missing`, `staff_list_unreadable` (no readable Staff filter in report 14: the run
+  carries on, names stay unmatched, nobody is marked inactive). Sync status and the "Sync now"
+  message show them.
+- **Counts** (`SyncCounts`): `pages, invoicesSeen, inserted, updated, unchanged, lineItemsRead,
+  lineItemsFailed, lineItemGaps`. Older rows lack the new keys; `listSyncRuns` fills them with 0. Each page is upserted
 **idempotently** (`on conflict … do update … where (…) is distinct from (…)`: a re-run writes
 nothing and counts `unchanged`; a change only in fields the app does not parse refreshes
 `raw_header` without counting as a change or moving `fetched_at`) together with the run's counts
@@ -574,8 +621,7 @@ from a cron route (under `PUBLIC_PATHS`, secret-authenticated); the lease alread
 runs. #8 (backfill): `mode: "backfill"` over bounded date ranges; `partial` + checkpoint says where
 the chunk stopped. Tests: `createSyncHarness(sql)` / `clearSyncTables(sql)` in
 `src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps; `h.fake.saleOverviews`
-edits line items). Advance `h.clock` between runs: a header written in the same instant its lines
-were read counts as current.
+edits line items; `clearSyncTables` empties staff too).
 
 ### Analytics Service (`src/analytics/`)
 
@@ -589,7 +635,8 @@ getOverviewKpis(sql, filter): Promise<OverviewKpis>
   // KpiSet = { revenue: Kpi<Money>, invoices: Kpi<number>, customers: Kpi<number>, aovPerCustomer: Kpi<Money | null> }
   // Kpi<T> = { value, previousPeriod: { base, change, changePercent }, lastYear: { … } }  (changePercent null when base is 0)
 getDataFreshness(sql, { dateFrom?, dateTo?, branchIds? }?): Promise<{ branchId, branchName, dataAsOf: Date | null }[]>
-  // latest succeeded run covering the branch whose dates include least(dateTo, the day it started);
+  // latest run that read the branch's whole listing (succeeded, or partial only for missing invoice
+  // pages) whose dates include least(dateTo, the day it started);
   // no dateTo = "now" (runs that read the day they ran). An old month never makes today look fresh.
 getDoctorRanking(sql, filter, { splitByBranch? }?): Promise<DoctorRanking>
   // { period, totalRevenue (all revenue in the dates + branches: the share denominator; the doctor filter does not apply),
@@ -598,6 +645,9 @@ getDoctorRanking(sql, filter, { splitByBranch? }?): Promise<DoctorRanking>
   // StaffFigures = { revenue: Money, invoices, customers, aovPerCustomer: Money | null, itemsPerInvoice: number | null, sharePercent: number | null }
   // DoctorRow/StaffRow = StaffFigures & { staffId, name, source: "kreloses" | "alias_only", active }; StaffGroup = StaffFigures & { members: StaffRow[] }
 listDoctors(sql): Promise<{ id, name }[]>          // kind doctor with a name on lines; the filter bar's doctor options
+getPendingLineItems(sql, { dateFrom, dateTo, branchIds? }): Promise<{ invoices, revenue: Money }>
+  // sales whose line items are not synced yet (doctor filter ignored on purpose): pages show
+  // <PendingLineItemsNote> (src/components/pending-line-items-note.tsx) under a doctor filter
 getStaffAliasRevenue(sql, { dateFrom, dateTo, branchIds? }): Promise<Record<aliasId, Money>>   // Settings → Doctors
 METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); #17's MCP answers quote them
 ```
@@ -716,7 +766,8 @@ const columns: DataTableColumn<Row>[] = [
 - Colours: `--chart-1` … `--chart-8` in `globals.css` (light and `.dark`), a categorical palette
   validated for colour-blind separation in that order; `seriesColor(slot)` returns `var(--chart-N)`.
   Assign slots in fixed order by a stable key (`stableSeriesSlots(ids)`), never by rank, so a filter
-  never repaints the survivors; more than 8 series fold into "Other". One series = slot 1, no legend.
+  never repaints the survivors — pass it the FULL key set (e.g. every doctor from `listDoctors`),
+  not the rows a filter left; more than 8 series fold into "Other". One series = slot 1, no legend.
   Text (labels, values) uses text colours, never the series colour.
 - Marks: bars ≤ 24px with a 4px rounded data end, 2px lines, recessive grid, the exact value
   (pre-formatted `formatRinggit`) at the bar tip / line end, a hover tooltip. Pass numbers for

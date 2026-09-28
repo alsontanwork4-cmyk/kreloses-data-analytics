@@ -21,6 +21,9 @@ export function seriesColor(slot: number): string {
 /**
  * Slot per series key, stable across filters: keys are ordered by `compare` (default: as strings)
  * and take slots 1, 2, 3… Keys beyond the 8th get `null` (fold them into "Other").
+ *
+ * Pass the FULL key set — every entity that could appear (e.g. every doctor from `listDoctors`),
+ * NOT the rows the current filter left — or filtering would shift the survivors' colours.
  */
 export function stableSeriesSlots(keys: readonly string[], compare: (a: string, b: string) => number = (a, b) => (a < b ? -1 : a > b ? 1 : 0)): Map<string, number | null> {
   const ordered = [...new Set(keys)].sort(compare);
