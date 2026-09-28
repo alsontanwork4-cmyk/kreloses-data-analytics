@@ -656,26 +656,38 @@ then the missing line items). `counts.lineItemsRead` counts invoice pages read.
   until its header changes; listed on Sync status). A run that read its whole listing but skipped
   pages ends **`partial`** with `coveredLocationIds` set (so it counts for "data as of" and is never
   resumed), `checkpoint` `{nextPage: 1}` and an `invoice_pages_missing` warning; `SyncResult` says
-  `stoppedAtTimeLimit: false`. If the first `MISSING_PAGES_TO_FAIL` (3) pages a run tries FOR THE
-  FIRST TIME are all missing (pages already missing in earlier runs do not count), it fails
-  (`layout_changed`: something systematic). A page whose content changed (`LayoutChanged` proper)
-  still fails the run at once.
+  `stoppedAtTimeLimit: false`. If the first `MISSING_PAGES_TO_FAIL` (3) pages of the run's LISTING it
+  tries FOR THE FIRST TIME are all missing (pages already missing in earlier runs do not count), it
+  fails (`layout_changed`: something systematic). A listing page whose content changed
+  (`LayoutChanged` proper) still fails the run at once. In the nightly SWEEP neither ever fails the
+  run: a missing page is counted as above, and an older page the app cannot read (`LayoutChanged`) is
+  skipped (`counts.lineItemsUnreadable`, an `invoice_pages_unreadable` warning, `detail_missing_count`
+  +1 — three strikes like a missing page); the run ends `partial` with its listing covered.
+- **Time budget**: no Kreloses request starts after the deadline, and no login (the first, or the one
+  fresh login after an expired session) starts with less than `MIN_LOGIN_BUDGET_MS` (15 s) left — the
+  run stops cleanly as `partial` (stopped at its time limit) instead of running past the function's
+  limit.
 - **Nightly** (#6): the Sale List of `nightlyWindow` (the last `SYNC_NIGHTLY_WINDOW_DAYS`, default
   45, up to today; cancelled sales included) → change detection above (an unchanged invoice costs no
   request; payment-only changes are stored without a re-read) → the **sweep**: active invoices of
   ANY date still not current (synced before line items, changed outside the window, pending after a
-  missing page, re-based by a migration), newest first, while the budget lasts (a
-  `line_items_left` warning says how many remain; the next night carries on). The checkpoint is
+  missing page, re-based by a migration) — ONLY of the branches whose Kreloses locations the login
+  listed in this run (another login's invoices are never opened with this session) — newest first,
+  while the budget lasts (a `line_items_left` warning says how many of this login's remain; the next
+  night carries on). The checkpoint is
   DATE-based (`processedAfter`: every sale newer than that instant is done; `listingDone`), since
   pages of a newest-first list shift as sales are added or deleted: carrying on re-lists only the
   days up to `processedAfter`. Fixed past ranges (Sync now, #8 backfill) keep `nextPage`. A resumed
   run records `resumed_from_run_id` / `chain_started_at`; "data as of" for it is the chain's start.
+  With the once-a-day cron a nightly never resumes the previous night's run (24 h > the 6 h chain
+  limit): it starts afresh, and change detection makes that cheap (only what the stopped run did not
+  get to is opened). Resume matters for a crash retried within hours (by hand, or a future cron).
 - **Warnings** (`sync_runs.warnings`, `SyncResult.warnings`, `SyncWarning` in `src/sync/runs.ts`):
   `invoice_pages_missing`, `staff_list_unreadable` (no readable Staff filter in report 14: the run
-  carries on, names stay unmatched, nobody is marked inactive). Sync status and the "Sync now"
-  message show them.
+  carries on, names stay unmatched, nobody is marked inactive), `line_items_left` and
+  `invoice_pages_unreadable` (nightly sweep, above). Sync status and the "Sync now" message show them.
 - **Counts** (`SyncCounts`): `pages, invoicesSeen, inserted, updated, unchanged, lineItemsRead,
-  lineItemsFailed, lineItemGaps`. Older rows lack the new keys; `listSyncRuns` fills them with 0. Each page is upserted
+  lineItemsFailed, lineItemGaps, lineItemsSwept, lineItemsUnreadable` (#6). Older rows lack the new keys; `listSyncRuns` fills them with 0. Each page is upserted
 **idempotently** (`on conflict … do update … where (…) is distinct from (…)`: a re-run writes
 nothing and counts `unchanged`; a change only in fields the app does not parse refreshes
 `raw_header` without counting as a change or moving `fetched_at`) together with the run's counts
@@ -701,10 +713,12 @@ another under its own lease, sharing a 250 s budget (each gets the time left ÷ 
 go, at least 20 s, at most `SYNC_TIME_BUDGET_SECONDS`). To run it by hand:
 `curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/nightly`.
 
-**Failure banner** (#6): `getSyncAlerts(sql)` — a connection whose login fails (`status = failed`)
-or whose latest finished run was a failed nightly — is rendered by the dashboard layout on every
-page for everyone signed in (`<SyncAlertBanner>`, `src/components/sync-alert-banner.tsx`): the
-error in plain words; owners get a link to Connections, managers the message only.
+**Failure banner** (#6): `getSyncAlerts(sql)` — a connection whose login fails (`status = failed`),
+or whose latest finished NIGHTLY run failed with no later run (any mode) that succeeded or read its
+whole listing (a later failed or time-limited Sync now does not hide it) — is rendered by the
+dashboard layout on every page for everyone signed in (`<SyncAlertBanner>`,
+`src/components/sync-alert-banner.tsx`): the error in plain words; owners get a link to Connections,
+managers the message only.
 
 **Extension points.** #5 (line items) and #6 (nightly, cron, resume, sweep, fencing) are in place
 (above; `SyncReader` has `listLocations`, `listStaff`, `listInvoices`, `getInvoice`). #8 (backfill):

@@ -293,7 +293,9 @@ failing ones included (a fixed login recovers by itself). It re-reads the sale l
 pages only of new sales and of sales that changed in a way that can change their line items or
 revenue (so edits, cancellations and refunds are picked up; a sale that was merely paid costs no
 extra request). Then it **sweeps**: reads, newest first and while its time lasts, the line items of
-any older active sales still "not synced yet".
+any older active sales still "not synced yet" — only of the branches that connection's own login
+can see. An older sale whose page cannot be opened or read is skipped with a warning (it never fails
+the night); only a new or changed sale in the window that cannot be read fails it (Kreloses changed).
 _Avoid_: Cron job, scheduled import
 
 **Carrying on (a stopped sync)**:
@@ -302,12 +304,15 @@ a checkpoint; the next sync of the same kind (nightly; or Sync now of the same m
 hours carries on from it instead of starting over, and nothing is counted twice. Nightly syncs
 remember "every sale newer than this moment is done" rather than a page number, because pages of a
 newest-first list shift as sales are added or removed. A chain of such runs is only as fresh as its
-first run's start.
+first run's start. With one nightly sync a day, a stopped nightly is never carried on by the next
+night's (more than a few hours later): that one starts afresh, and change detection means it only
+opens what the stopped one did not get to.
 
 **Sync alert**:
-The banner on every page of the dashboard, for everyone signed in, while a connection's login fails
-or its latest finished sync was a nightly one that failed, with the last error in plain words. The
-owner gets a link to Connections. It goes away by itself once a login or a later sync works.
+The banner on every page of the dashboard, for everyone signed in, while a connection's login fails,
+or its latest nightly sync failed and no sync since (nightly or Sync now) has worked, with the last
+error in plain words. A Sync now that fails too does not hide it. The owner gets a link to
+Connections. It goes away by itself once a login or a later sync works.
 _Avoid_: Notification, toast
 
 **Data as of**:
