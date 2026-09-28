@@ -6,12 +6,25 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  DAILY_GROUP_LABELS,
+  getDailySales,
   getDataFreshness,
+  getDiscountTypes,
+  getDoctorDiscounts,
   getDoctorRanking,
   getPendingLineItems,
+  getRetention,
+  getServiceLinesByDoctor,
+  getServiceMix,
+  getTopItemsByDoctor,
   METRIC_DEFINITIONS,
+  MIX_BUCKET_LABELS,
   searchSales,
+  type ClinicMixBucket,
+  type DailySales,
   type DoctorRanking,
+  type MixBucket,
+  type ServiceMix,
 } from "@/analytics";
 import type { Sql } from "@/db/sql";
 import { formatClinicDateTime, type GlobalFilter } from "@/filters";
@@ -24,6 +37,7 @@ import { handleMcpRequest, type McpHandlerDeps } from "./handler";
 import { clinicTimestamp } from "./tools/clinic-time";
 import { defineTool } from "./tools/define";
 import { registerMcpTool } from "./tools/registry";
+import { definitionExcerpt } from "./tools/text";
 
 /**
  * The MCP server end to end, in process: the SDK's own client talks Streamable HTTP to the route
@@ -37,6 +51,24 @@ const URL_ = new URL("http://clinic.test/api/mcp");
 const NOW = new Date("2026-10-01T03:00:00Z");
 const SEPTEMBER = { dateFrom: "2026-09-01", dateTo: "2026-09-30" };
 const { both } = SYNTHETIC_ACCOUNTS;
+/** Every tool the server offers (spec story 62), all read-only. */
+const TOOLS = ["daily_sales", "data_freshness", "discounts", "doctor_performance", "item_mix", "retention", "search_sales"];
+/**
+ * Each tool's arguments for September 2026 (daily_sales answers for one day: its last) and for a
+ * period nobody has synced: today, 1 Oct (month to date; daily_sales: today, so far).
+ */
+const PERIODS: Record<string, { september: Record<string, unknown>; scope: { dateFrom: string; dateTo: string }; unsynced: Record<string, unknown> }> =
+  Object.fromEntries(
+    TOOLS.map((name) => [
+      name,
+      name === "daily_sales"
+        ? { september: { day: "2026-09-30" }, scope: { dateFrom: "2026-09-30", dateTo: "2026-09-30" }, unsynced: { day: "2026-10-01" } }
+        : { september: SEPTEMBER, scope: SEPTEMBER, unsynced: {} },
+    ]),
+  );
+
+/** daily_sales's `daily`: getDailySales's result, each group with its name. */
+type DailyAnswer = Omit<DailySales, "groups"> & { groups: (DailySales["groups"][number] & { label: string })[] };
 
 type Structured = Record<string, unknown> & {
   dataFreshness: { summary: string; checkedAt: string; branches: { branchId: string; branchName: string; dataAsOf: string | null }[] };
@@ -93,6 +125,12 @@ describe("MCP server (Streamable HTTP, in process)", () => {
     return (result.content as { text: string }[]).map((part) => part.text).join("\n");
   };
   const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+  /** A result's one-line summary (also the first line of its first text block, before the data-as-of sentence). */
+  const summaryOf = (result: CallToolResult) => {
+    const summary = (result.structuredContent as Structured).summary as string;
+    expect((result.content as { text: string }[])[0]!.text.startsWith(`${summary}\n`)).toBe(true);
+    return summary;
+  };
 
   beforeAll(async () => {
     await clearSyncTables(db.sql);
@@ -123,6 +161,11 @@ describe("MCP server (Streamable HTTP, in process)", () => {
       expect(response.status).toBe(401);
       expect(response.headers.get("WWW-Authenticate")).toBe('Bearer realm="kreloses-mcp"');
       await expect(connect({ token: null, deps: noDatabase() })).rejects.toThrow();
+      // Every tool is behind the same check, whatever it is called with.
+      for (const name of TOOLS) {
+        const call = { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: PERIODS[name]!.september } };
+        expect((await post(call, {}, noDatabase())).status, name).toBe(401);
+      }
     });
 
     it("refuses a wrong token (401 invalid_token), for every method", async () => {
@@ -160,7 +203,7 @@ describe("MCP server (Streamable HTTP, in process)", () => {
     it("lists exactly the read-only tools: no raw SQL, nothing that writes or reaches Kreloses", async () => {
       const client = await connect();
       const { tools } = await client.listTools();
-      expect(tools.map((tool) => tool.name).sort()).toEqual(["data_freshness", "doctor_performance", "search_sales"]);
+      expect(tools.map((tool) => tool.name).sort()).toEqual(TOOLS);
       for (const tool of tools) {
         expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
         // Unknown arguments are refused, never silently ignored (a misspelt filter must not widen the answer).
@@ -176,6 +219,19 @@ describe("MCP server (Streamable HTTP, in process)", () => {
       expect(described.doctor_performance).toContain(METRIC_DEFINITIONS.aovPerCustomer);
       expect(described.search_sales).toContain(METRIC_DEFINITIONS.salesSearch);
       expect(described.data_freshness).toContain(METRIC_DEFINITIONS.dataAsOf);
+      // #18: credited-per-line revenue and AOV per customer, the service visit and cohort rules, the discount threshold.
+      expect(described.daily_sales).toContain(METRIC_DEFINITIONS.revenue);
+      expect(described.daily_sales).toContain(METRIC_DEFINITIONS.aovPerCustomer);
+      expect(described.item_mix).toContain(definitionExcerpt("revenue", 2));
+      expect(definitionExcerpt("revenue", 2)).toMatch(/credited line by line to the staff named on each line\. .*in proportion to what each line charged/);
+      expect(described.item_mix).toContain(METRIC_DEFINITIONS.serviceMix);
+      expect(described.item_mix).toContain(METRIC_DEFINITIONS.mixComparison);
+      expect(described.retention).toContain(METRIC_DEFINITIONS.serviceVisit);
+      expect(described.retention).toContain(definitionExcerpt("yearlyCohort", 3));
+      expect(described.discounts).toContain(METRIC_DEFINITIONS.discount);
+      expect(described.discounts).toContain(METRIC_DEFINITIONS.discountRate);
+      expect(described.discounts).toContain(METRIC_DEFINITIONS.discountedInvoices);
+      expect(described.discounts).toContain("over RM 0.05");
       expect(client.getInstructions()!.length).toBeLessThanOrEqual(2048);
       expect(client.getServerCapabilities()).not.toHaveProperty("resources");
       expect(client.getServerCapabilities()).not.toHaveProperty("prompts");
@@ -184,21 +240,28 @@ describe("MCP server (Streamable HTTP, in process)", () => {
     it("never writes: every table is byte-for-byte the same after calling every tool", async () => {
       const before = await tableDigests(db.sql);
       const client = await connect();
-      for (const name of ["doctor_performance", "search_sales", "data_freshness"]) {
+      for (const name of TOOLS) {
         await structured(client, name, {});
-        await structured(client, name, SEPTEMBER);
+        await structured(client, name, PERIODS[name]!.september);
       }
       await structured(client, "doctor_performance", { ...SEPTEMBER, splitByBranch: true, branches: ["North"], doctors: ["Dr Alpha"] });
       await structured(client, "search_sales", { ...SEPTEMBER, customer: "Customer", item: "consult", minAmount: 1, sort: "largest" });
+      await structured(client, "daily_sales", { day: "2026-09-20", branches: ["North"], doctors: ["Bravo"] });
+      await structured(client, "item_mix", { ...SEPTEMBER, branches: ["South"], doctors: ["Delta"], groups: ["diagnostics"], topItems: 1 });
+      await structured(client, "retention", { dateFrom: "2025-09-01", dateTo: "2026-09-30", branches: ["North"], doctors: ["Alpha"] });
+      await structured(client, "discounts", { ...SEPTEMBER, branches: ["North"], doctors: ["Bravo"] });
       expect(await tableDigests(db.sql)).toEqual(before);
     });
 
     it("every result states data as of per branch (in the data and in the text) and carries its definitions verbatim", async () => {
       const client = await connect();
-      const expectedSeptember = await getDataFreshness(db.sql, SEPTEMBER);
-      const asOf = expectedSeptember.map((row) => `${row.branchName} ${formatClinicDateTime(row.dataAsOf!)}`).join("; ");
-      for (const name of ["doctor_performance", "search_sales", "data_freshness"]) {
-        const september = await call(client, name, SEPTEMBER);
+      for (const name of TOOLS) {
+        const period = PERIODS[name]!;
+        const expectedSeptember = await getDataFreshness(db.sql, period.scope);
+        expect(expectedSeptember.every((row) => row.dataAsOf !== null), name).toBe(true);
+        const asOf = expectedSeptember.map((row) => `${row.branchName} ${formatClinicDateTime(row.dataAsOf!)}`).join("; ");
+        const september = await call(client, name, period.september);
+        expect(september.isError, JSON.stringify(september.content)).toBeFalsy();
         const data = september.structuredContent as Structured;
         expect(data.dataFreshness.branches, name).toEqual(
           expectedSeptember.map((row) => ({ branchId: row.branchId, branchName: row.branchName, dataAsOf: clinicTimestamp(row.dataAsOf!) })),
@@ -215,8 +278,8 @@ describe("MCP server (Streamable HTTP, in process)", () => {
           expect(definition, key).toBe(METRIC_DEFINITIONS[key as keyof typeof METRIC_DEFINITIONS]);
         }
 
-        // Month to date (1 Oct): no sync has read it, and the answer says so rather than looking current.
-        const today = (await structured(client, name)).dataFreshness;
+        // Month to date (1 Oct; daily_sales: today): no sync has read it, and the answer says so rather than looking current.
+        const today = (await structured(client, name, period.unsynced)).dataFreshness;
         expect(today.branches.map((row) => row.dataAsOf), name).toEqual([null, null]);
         expect(today.summary).toContain("Branch North — no complete sync for 1 Oct 2026 yet, so its figures may be incomplete");
       }
@@ -359,6 +422,210 @@ describe("MCP server (Streamable HTTP, in process)", () => {
     });
   });
 
+  describe("daily_sales", () => {
+    const withLabels = (daily: DailySales) => json({ ...daily, groups: daily.groups.map((group) => ({ ...group, label: DAILY_GROUP_LABELS[group.group] })) });
+
+    it("returns exactly the Daily page's figures (getDailySales) for the same day, branches and doctors, each group with its name", async () => {
+      const client = await connect();
+      const cases: { args: Record<string, unknown>; day: string; filter: { branchIds?: string[]; doctorIds?: string[] } }[] = [
+        // No day: yesterday at the clinic (it is 1 Oct, 11:00 in Kuala Lumpur).
+        { args: {}, day: "2026-09-30", filter: {} },
+        // Same weekday last week (1 Sep) had a sale; this day had none.
+        { args: { day: "2026-09-08" }, day: "2026-09-08", filter: {} },
+        // Same date last year (3 Sep 2025) had one.
+        { args: { day: "2026-09-03" }, day: "2026-09-03", filter: {} },
+        { args: { day: "2026-09-20", branches: ["North"] }, day: "2026-09-20", filter: { branchIds: [branch.north] } },
+        { args: { day: "2026-09-18", doctors: ["Bravo", "Alpha"] }, day: "2026-09-18", filter: { doctorIds: [staff["Dr Bravo Brown"]!, staff["Dr Alpha Anderson"]!] } },
+        // Today, so far.
+        { args: { day: "2026-10-01" }, day: "2026-10-01", filter: {} },
+      ];
+      for (const { args, day, filter } of cases) {
+        const data = await structured(client, "daily_sales", args);
+        const expected = await getDailySales(db.sql, day, filter);
+        expect(data.daily, JSON.stringify(args)).toEqual(withLabels(expected));
+        expect(data.covers).toMatchObject({ dateFrom: day, dateTo: day });
+        expect(data.pendingLineItems).toEqual(await getPendingLineItems(db.sql, { dateFrom: day, dateTo: day, branchIds: filter.branchIds }));
+      }
+      // The day and the two days it is compared with are echoed; groups carry a name as well as a stable key.
+      const lastDay = (await structured(client, "daily_sales", { day: "2026-09-30" })).daily as DailyAnswer;
+      expect([lastDay.day, lastDay.comparisonDays]).toEqual(["2026-09-30", { lastWeek: "2026-09-23", lastYear: "2025-09-30" }]);
+      expect(lastDay.groups.map((group) => [group.group, group.label])).toEqual([
+        ["other", "Other staff"],
+        ["noStaff", "No staff on line"],
+      ]);
+    });
+
+    it("summarises the day against the same weekday last week and the same date last year", async () => {
+      const client = await connect();
+      // 30 Sep 2026: 700105 (99.90: Charlie Chen 45.00, no staff 54.90); 23 Sep: nothing; 30 Sep 2025: 600003 (100.00, no staff).
+      const result = await call(client, "daily_sales", {});
+      expect(summaryOf(result)).toBe(
+        "Daily sales for Wednesday 30 Sep 2026, all branches: revenue RM 99.90, 1 invoice, 1 customer, AOV per customer RM 99.90. " +
+          "Revenue vs Wednesday 23 Sep 2026 (same weekday last week): +RM 99.90 (none then); vs Tuesday 30 Sep 2025 (same date last year): −RM 0.10 (−0.1%). " +
+          "No revenue was credited to a doctor on the day.",
+      );
+      // 20 Sep 2026 at North, Dr Bravo Brown only: 700104's lines credited to him.
+      const bravo = await call(client, "daily_sales", { day: "2026-09-20", branches: ["North"], doctors: ["Bravo"] });
+      const bravoDaily = (bravo.structuredContent as { daily: DailySales }).daily;
+      expect(bravoDaily.total.revenue.value).toBe("2075.85");
+      expect(summaryOf(bravo)).toBe(
+        "Daily sales for Sunday 20 Sep 2026, Branch North, doctor Dr Bravo Brown: revenue RM 2,075.85, 1 invoice, 1 customer, AOV per customer RM 2,075.85. " +
+          "Revenue vs Sunday 13 Sep 2026 (same weekday last week): +RM 2,075.85 (none then); vs Saturday 20 Sep 2025 (same date last year): +RM 2,075.85 (none then). " +
+          "Highest doctor: Dr Bravo Brown RM 2,075.85.",
+      );
+    });
+
+    it("refuses a day that is not a real date, too early or in the future, instead of answering for another day", async () => {
+      const client = await connect();
+      expect(await errorText(client, "daily_sales", { day: "2026-10-02" })).toBe(
+        "day 2026-10-02 is in the future: today at the clinic (Asia/Kuala_Lumpur) is 2026-10-01. Ask for today or an earlier day.",
+      );
+      expect(await errorText(client, "daily_sales", { day: "1999-12-31" })).toBe("day 1999-12-31 is before 2000-01-01, the earliest day daily_sales answers for.");
+      expect(await errorText(client, "daily_sales", { day: "2026-02-30" })).toContain("real calendar date");
+      expect(await errorText(client, "daily_sales", { day: "30/09/2026" })).toContain("YYYY-MM-DD");
+      // One day, not a period: a date range is refused rather than ignored.
+      expect(await errorText(client, "daily_sales", SEPTEMBER)).toMatch(/unrecognized key/i);
+      // Every problem at once.
+      const both = await errorText(client, "daily_sales", { day: "2026-10-02", doctors: ["Zed"] });
+      expect(both).toContain("day 2026-10-02 is in the future");
+      expect(both).toContain('No doctor matches "Zed"');
+    });
+  });
+
+  describe("item_mix", () => {
+    it("returns exactly the Mix page's data (getServiceMix, getTopItemsByDoctor, getServiceLinesByDoctor) for the same filter", async () => {
+      const client = await connect();
+      const cases: { args: Record<string, unknown>; filter: GlobalFilter; limit: number }[] = [
+        { args: SEPTEMBER, filter: SEPTEMBER, limit: 5 },
+        { args: { ...SEPTEMBER, topItems: 3 }, filter: SEPTEMBER, limit: 3 },
+        { args: { ...SEPTEMBER, branches: ["North"] }, filter: { ...SEPTEMBER, branchIds: [branch.north] }, limit: 5 },
+        { args: { ...SEPTEMBER, doctors: ["Alpha", "Delta"], topItems: 20 }, filter: { ...SEPTEMBER, doctorIds: [staff["Dr Alpha Anderson"]!, staff["Dr Delta"]!] }, limit: 20 },
+        { args: { dateFrom: "2025-09-01", dateTo: "2026-09-30" }, filter: { dateFrom: "2025-09-01", dateTo: "2026-09-30" }, limit: 5 },
+        { args: { preset: "last-month" }, filter: SEPTEMBER, limit: 5 },
+      ];
+      for (const { args, filter, limit } of cases) {
+        const data = await structured(client, "item_mix", args);
+        expect(data.mix, JSON.stringify(args)).toEqual(json(await getServiceMix(db.sql, filter)));
+        expect(data.topItems).toEqual(json(await getTopItemsByDoctor(db.sql, filter, { limit })));
+        expect(data.serviceLines).toEqual(json(await getServiceLinesByDoctor(db.sql, filter)));
+        expect(data.pendingLineItems).toEqual(await getPendingLineItems(db.sql, filter));
+        expect(data.groupLabels).toEqual(MIX_BUCKET_LABELS);
+      }
+    });
+
+    it("narrows to some service groups: the mix shows only them, and top items are ranked within them", async () => {
+      const client = await connect();
+      const groups: MixBucket[] = ["diagnostics", "unmapped"];
+      const data = await structured(client, "item_mix", { ...SEPTEMBER, groups });
+      const full = await getServiceMix(db.sql, SEPTEMBER);
+      const only = <Bucket extends ClinicMixBucket, Cell>(record: Record<Bucket, Cell>) =>
+        Object.fromEntries(Object.entries(record).filter(([bucket]) => (groups as string[]).includes(bucket)));
+      expect(data.mix).toEqual(
+        json({
+          ...full,
+          doctors: full.doctors.map((doctor) => ({ ...doctor, groups: only(doctor.groups) })),
+          allDoctors: { ...full.allDoctors, groups: only(full.allDoctors.groups) },
+          clinic: { ...full.clinic, groups: only(full.clinic.groups) },
+        } satisfies Record<keyof ServiceMix, unknown>),
+      );
+      expect(data.topItems).toEqual(json(await getTopItemsByDoctor(db.sql, SEPTEMBER, { groups })));
+      expect(data.groupLabels).toEqual({ diagnostics: "Diagnostics", unmapped: "Unmapped" });
+      // Hand-computed (src/analytics/mix.test.ts): Dr Delta's X-ray; the clinic's unmapped items.
+      const mix = data.mix as ServiceMix;
+      expect(mix.doctors.find((doctor) => doctor.name === "Dr Delta")!.groups.diagnostics).toMatchObject({ revenue: "515.63", sharePercent: 107.4 });
+      expect(mix.clinic.groups.unmapped).toEqual({ revenue: "253.75", sharePercent: 4.4 });
+    });
+
+    it("summarises the clinic's largest groups and the unmapped items in words", async () => {
+      const client = await connect();
+      const result = await call(client, "item_mix", SEPTEMBER);
+      expect(summaryOf(result)).toBe(
+        "Service mix for 1 Sep 2026 – 30 Sep 2026, all branches: 3 doctors with revenue. " +
+          "Whole clinic RM 5,755.40; largest groups Surgery RM 1,500.36 (26.1%), Hospital & treatment RM 1,435.68 (24.9%), Preventive RM 1,353.04 (23.5%). " +
+          "RM 253.75 is on items no rule recognises (Unmapped); the owner can assign them to groups in Settings → Items.",
+      );
+      const narrowed = await call(client, "item_mix", { ...SEPTEMBER, groups: ["diagnostics", "unmapped"], doctors: ["Delta"] });
+      expect(summaryOf(narrowed)).toBe(
+        "Service mix for 1 Sep 2026 – 30 Sep 2026, all branches, doctor Dr Delta, groups Diagnostics and Unmapped: 1 doctor with revenue. " +
+          "Whole clinic RM 5,755.40; Diagnostics RM 515.63 (9.0%), Unmapped RM 253.75 (4.4%). " +
+          "RM 253.75 is on items no rule recognises (Unmapped); the owner can assign them to groups in Settings → Items.",
+      );
+    });
+
+    it("refuses an unknown group or too many top items", async () => {
+      const client = await connect();
+      expect(await errorText(client, "item_mix", { groups: ["dental"] })).toMatch(/expected one of .*"diagnostics".* at groups\[0\]/);
+      expect(await errorText(client, "item_mix", { topItems: 21 })).toMatch(/topItems/);
+      expect(await errorText(client, "item_mix", { topItems: 0 })).toMatch(/topItems/);
+    });
+  });
+
+  describe("retention", () => {
+    it("returns exactly the Retention page's figures (getRetention) for the same filter", async () => {
+      const client = await connect();
+      const cases: { args: Record<string, unknown>; filter: GlobalFilter }[] = [
+        { args: SEPTEMBER, filter: SEPTEMBER },
+        { args: {}, filter: { dateFrom: "2026-10-01", dateTo: "2026-10-01" } },
+        { args: { dateFrom: "2025-09-01", dateTo: "2025-10-31" }, filter: { dateFrom: "2025-09-01", dateTo: "2025-10-31" } },
+        { args: { ...SEPTEMBER, branches: ["South"] }, filter: { ...SEPTEMBER, branchIds: [branch.south] } },
+        { args: { ...SEPTEMBER, doctors: ["Alpha"] }, filter: { ...SEPTEMBER, doctorIds: [staff["Dr Alpha Anderson"]!] } },
+        { args: { preset: "last-month" }, filter: SEPTEMBER },
+      ];
+      for (const { args, filter } of cases) {
+        const data = await structured(client, "retention", args);
+        expect(data.retention, JSON.stringify(args)).toEqual(json(await getRetention(db.sql, filter)));
+      }
+    });
+
+    it("summarises new vs returning customers, the 90-day return rate (and what is not mature yet) and the latest cohort", async () => {
+      const client = await connect();
+      // September 2026's service visits: Customer 0001 (1 and 18 Sep), 0004, 0002 (5 and 30 Sep), 0005, 0003 — only
+      // Customer 0002 had no earlier service visit (their August sale was cancelled). All 7 visits are less than 90 days
+      // before 30 Sep 2026. The 2025 cohort (synced from 3 Sep 2025): Customers 0001, 0005 and 0003, all back in 2026.
+      const result = await call(client, "retention", SEPTEMBER);
+      expect(summaryOf(result)).toBe(
+        "Retention for 1 Sep 2026 – 30 Sep 2026, all branches: 5 customers had a service visit (whole clinic): 1 new (20.0%), 4 returning (80.0%). " +
+          "90-day return rate: not known yet — all 7 visits in the period are less than 90 days before the latest synced day (30 Sep 2026). " +
+          "Latest yearly cohort 2025 (partial year, still accruing): 3 customers, 100.0% came back in 2026 (any doctor). " +
+          "3 doctors listed.",
+      );
+      const retention = (result.structuredContent as { retention: Awaited<ReturnType<typeof getRetention>> }).retention;
+      expect(retention.clinic.newVsReturning).toEqual({ customers: 5, newCustomers: 1, returningCustomers: 4, newPercent: 20, returningPercent: 80 });
+      expect(retention.clinic.returns90).toEqual({ visits: 7, notYetMature: 7, mature: 0, returned: 0, returnPercent: null });
+    });
+  });
+
+  describe("discounts", () => {
+    it("returns exactly the Discounts page's figures (getDoctorDiscounts, getDiscountTypes) for the same filter", async () => {
+      const client = await connect();
+      const cases: { args: Record<string, unknown>; filter: GlobalFilter }[] = [
+        { args: SEPTEMBER, filter: SEPTEMBER },
+        { args: { ...SEPTEMBER, branches: ["North"] }, filter: { ...SEPTEMBER, branchIds: [branch.north] } },
+        { args: { ...SEPTEMBER, doctors: ["Bravo"] }, filter: { ...SEPTEMBER, doctorIds: [staff["Dr Bravo Brown"]!] } },
+        { args: { dateFrom: "2025-09-01", dateTo: "2026-09-30" }, filter: { dateFrom: "2025-09-01", dateTo: "2026-09-30" } },
+        { args: { preset: "last-month" }, filter: SEPTEMBER },
+      ];
+      for (const { args, filter } of cases) {
+        const data = await structured(client, "discounts", args);
+        expect(data.discounts, JSON.stringify(args)).toEqual(json(await getDoctorDiscounts(db.sql, filter)));
+        expect(data.types).toEqual(json(await getDiscountTypes(db.sql, filter)));
+      }
+    });
+
+    it("answers with the hand-computed figures and summarises them", async () => {
+      const client = await connect();
+      // Hand-computed in src/analytics/discounts.test.ts.
+      const result = await call(client, "discounts", SEPTEMBER);
+      const data = result.structuredContent as { discounts: Awaited<ReturnType<typeof getDoctorDiscounts>> };
+      expect(data.discounts.total).toMatchObject({ gross: "6255.40", discount: "280.00", discountRatePercent: 4.5, invoices: 8, discountedInvoices: 4 });
+      expect(summaryOf(result)).toBe(
+        "Discounts for 1 Sep 2026 – 30 Sep 2026, all branches: RM 280.00 off RM 6,255.40 gross (discount rate 4.5%); 4 of 8 invoices discounted (50.0%). " +
+          "Largest doctor discount: Dr Bravo Brown RM 178.00 (5.0% of gross; 2 of 4 invoices discounted). " +
+          "Largest discount type: 10% DISCOUNT RM 120.00 (42.9% of discounts, 1 invoice).",
+      );
+    });
+  });
+
   describe("sales whose line items are not synced yet", () => {
     it("are counted, and the answer says doctor and item figures cannot include them yet", async () => {
       // 700104 (2,300.00, Dr Bravo Brown's biggest sale) is edited in Kreloses (gross and discount
@@ -383,6 +650,31 @@ describe("MCP server (Streamable HTTP, in process)", () => {
         "1 sale in the period has line items not synced yet, so a doctor or item search cannot find it yet.",
       );
       expect((byDoctor.structuredContent as { search: { totalMatches: number } }).search.totalMatches).toBe(3);
+
+      // #18's tools: each still equals its page's data, and says what the unsynced sale means for its figures.
+      const text = (result: CallToolResult) => (result.content as { text: string }[])[0]!.text;
+      const day = await call(client, "daily_sales", { day: "2026-09-20" });
+      const daily = (day.structuredContent as { daily: DailyAnswer }).daily;
+      expect(daily.groups.map((group) => [group.group, group.label, group.revenue.value])).toEqual([["pending", "Line items not synced yet", "2300.00"]]);
+      expect(text(day)).toContain(
+        '1 sale (RM 2,300.00) has line items not synced yet: counted in the total as "Line items not synced yet", not credited to any doctor yet.',
+      );
+      const dayForBravo = await call(client, "daily_sales", { day: "2026-09-20", doctors: ["Bravo"] });
+      expect((dayForBravo.structuredContent as { daily: unknown }).daily).toEqual(
+        json(await getDailySales(db.sql, "2026-09-20", { doctorIds: [staff["Dr Bravo Brown"]!] })),
+      );
+      expect(text(dayForBravo)).toContain("1 sale on the day (RM 2,300.00) has line items not synced yet: not credited to any doctor yet, so not in these figures.");
+      const mix = await call(client, "item_mix", SEPTEMBER);
+      expect((mix.structuredContent as { mix: unknown }).mix).toEqual(json(await getServiceMix(db.sql, SEPTEMBER)));
+      expect(text(mix)).toContain(
+        '1 sale (RM 2,300.00) has line items not synced yet: its revenue is in the whole clinic\'s "Line items not synced yet" bucket and in no doctor\'s mix yet.',
+      );
+      const discounts = await call(client, "discounts", SEPTEMBER);
+      expect((discounts.structuredContent as { discounts: unknown }).discounts).toEqual(json(await getDoctorDiscounts(db.sql, SEPTEMBER)));
+      expect(text(discounts)).toContain("1 sale (RM 2,300.00) has line items not synced yet: its discounts are not in these figures until they are read.");
+      const retention = await call(client, "retention", SEPTEMBER);
+      expect((retention.structuredContent as { retention: unknown }).retention).toEqual(json(await getRetention(db.sql, SEPTEMBER)));
+      expect(text(retention)).toContain("1 sale has line items not synced yet: it cannot count as a service visit until the next sync reads it.");
     });
   });
 

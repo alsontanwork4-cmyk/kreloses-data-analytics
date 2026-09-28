@@ -250,6 +250,41 @@ describe("Analytics Service: service mix, top items, surgery / consult and worki
     ]);
   });
 
+  it("top items within some service groups (MCP item_mix): ranked among those groups only, shares still of the doctor's whole revenue", async () => {
+    const top = await getTopItemsByDoctor(db.sql, SEPTEMBER, { limit: 2, groups: ["consult", "preventive"] });
+    expect(top.limit).toBe(2);
+    expect(
+      top.doctors.map((doctor) => [doctor.name, doctor.revenue, doctor.items.map((item) => [item.name, item.group, item.revenue, item.sharePercent, item.lines])]),
+    ).toEqual([
+      [
+        "Dr Bravo Brown",
+        "3252.00",
+        [
+          ["Dental scaling", "preventive", "1052.54", 32.4, 1],
+          ["Consultation", "consult", "176.15", 5.4, 2],
+        ],
+      ],
+      [
+        "Dr Alpha Anderson",
+        "1654.35",
+        [
+          ["Deworming tablets", "preventive", "180.50", 10.9, 1],
+          ["Consultation", "consult", "144.00", 8.7, 1],
+        ],
+      ],
+      ["Dr Delta", "480.00", [["Consultation", "consult", "84.37", 17.6, 1]]],
+    ]);
+    // A doctor with nothing in the groups is still listed (with no items); unmapped is a group like the others.
+    const unmapped = await getTopItemsByDoctor(db.sql, SEPTEMBER, { groups: ["unmapped", "diagnostics"] });
+    expect(unmapped.doctors.map((doctor) => [doctor.name, doctor.items.map((item) => [item.name, item.group, item.revenue])])).toEqual([
+      ["Dr Bravo Brown", []],
+      ["Dr Alpha Anderson", [["Skin scraping test", "unmapped", "153.85"]]],
+      ["Dr Delta", [["X-ray", "diagnostics", "515.63"]]],
+    ]);
+    // No groups (or all of them) = every item, as before.
+    expect(await getTopItemsByDoctor(db.sql, SEPTEMBER, { limit: 3, groups: [...MIX_BUCKETS] })).toEqual(await getTopItemsByDoctor(db.sql, SEPTEMBER, { limit: 3 }));
+  });
+
   it("surgery and consult revenue per doctor (and in total for the filter)", async () => {
     const lines = await getServiceLinesByDoctor(db.sql, SEPTEMBER);
     expect(lines.total).toEqual({ revenue: "5755.40", surgeryRevenue: "1500.36", consultRevenue: "404.52", surgerySharePercent: 26.1, consultSharePercent: 7 });
@@ -260,6 +295,12 @@ describe("Analytics Service: service mix, top items, surgery / consult and worki
     ]);
     const bravo = await getServiceLinesByDoctor(db.sql, { ...SEPTEMBER, doctorIds: [staff["Dr Bravo Brown"]!] });
     expect(bravo.total).toMatchObject({ revenue: "3252.00", surgeryRevenue: "636.36", consultRevenue: "176.15" });
+    // A period with no sales: zeros, not a missing revenue (found by the MCP item_mix tool's output check).
+    expect(await getServiceLinesByDoctor(db.sql, { dateFrom: "2026-10-01", dateTo: "2026-10-31" })).toEqual({
+      period: { dateFrom: "2026-10-01", dateTo: "2026-10-31" },
+      total: { revenue: "0.00", surgeryRevenue: "0.00", consultRevenue: "0.00", surgerySharePercent: null, consultSharePercent: null },
+      doctors: [],
+    });
   });
 
   it("surgery / consult revenue per doctor per month (for the Trends measure switch)", async () => {

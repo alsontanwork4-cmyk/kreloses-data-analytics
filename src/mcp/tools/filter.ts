@@ -12,7 +12,8 @@ import { matchName, type NamedEntry } from "./names";
  * doctors by id OR name. Spread the input shapes into a tool's input, then `resolveFilter`.
  */
 
-const isoDate = z
+/** A clinic day typed as YYYY-MM-DD (a real calendar date). */
+export const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "must be written YYYY-MM-DD")
   .refine(isIsoDate, "must be a real calendar date");

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { addDays, addYears, daysBetween, endOfMonth, formatClinicDateTime, isIsoDate } from "./dates";
+import { addDays, addYears, daysBetween, endOfMonth, formatClinicDateTime, formatDayWithWeekday, isIsoDate } from "./dates";
+
+describe("formatDayWithWeekday", () => {
+  it("names the day with its weekday (the Daily page and the MCP daily_sales tool)", () => {
+    expect(formatDayWithWeekday("2026-09-27")).toBe("Sunday 27 Sep 2026");
+    expect(formatDayWithWeekday("2025-09-27", "short")).toBe("Sat 27 Sep 2025");
+    expect(formatDayWithWeekday("2028-02-29")).toBe("Tuesday 29 Feb 2028");
+    expect(formatDayWithWeekday("0099-12-31")).toBe("Thursday 31 Dec 99");
+    expect(formatDayWithWeekday("not a day")).toBe("not a day");
+  });
+});
 
 describe("formatClinicDateTime", () => {
   it("shows an instant as the clinic's local date and 24-hour time", () => {

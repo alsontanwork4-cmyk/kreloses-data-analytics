@@ -57,7 +57,8 @@ export async function getServiceLinesByDoctor(sql: Sql, filter: GlobalFilter): P
     with facts as (${revenueFacts(sql, factsScope(filter))}),
     sums as (
       select case when grouping(f.staff_id) = 0 then f.staff_id end as staff_id,
-        sum(f.revenue) as revenue,
+        -- The grand total's row exists even without any fact: zero, not null.
+        coalesce(sum(f.revenue), 0) as revenue,
         coalesce(sum(f.revenue) filter (where ${serviceLineCondition(sql, "surgery")}), 0) as surgery,
         coalesce(sum(f.revenue) filter (where ${serviceLineCondition(sql, "consult")}), 0) as consult
       from facts f
