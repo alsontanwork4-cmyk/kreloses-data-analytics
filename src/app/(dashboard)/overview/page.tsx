@@ -1,7 +1,7 @@
 import { LayoutDashboard } from "lucide-react";
 import type { Metadata } from "next";
 
-import { getDataFreshness, getOverviewKpis, METRIC_DEFINITIONS, type KpiSet } from "@/analytics";
+import { getDataFreshness, getOverviewKpis, METRIC_DEFINITIONS, type KpiSet, type MetricName } from "@/analytics";
 import { requireUser } from "@/auth/session";
 import { EmptyState, NoSalesYet } from "@/components/empty-state";
 import { KpiTile } from "@/components/kpi-tile";
@@ -11,6 +11,18 @@ import { formatClinicDateTime, formatDateRange, parseFilter } from "@/filters";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Overview" };
+
+const DEFINITIONS: MetricName[] = [
+  "revenue",
+  "invoices",
+  "customers",
+  "aovPerCustomer",
+  "creditedLine",
+  "previousPeriod",
+  "lastYear",
+  "change",
+  "dataAsOf",
+];
 
 /** Headline KPIs for the global filter, from the Analytics Service (no maths here). */
 export default async function OverviewPage({ searchParams }: PageProps<"/overview">) {
@@ -41,6 +53,12 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
       ) : (
         <>
           <section aria-label="Totals" className="flex flex-col gap-2">
+            {filter.doctorIds ? (
+              <p data-testid="doctor-filter-note" className="text-sm text-muted-foreground">
+                Showing only revenue credited to the selected {filter.doctorIds.length === 1 ? "doctor" : "doctors"}: invoices and
+                customers with at least one line credited to them.
+              </p>
+            ) : null}
             <KpiGrid kpis={kpis.total} idPrefix="kpi" />
             <p className="text-xs text-muted-foreground">
               Compared with the previous period ({formatDateRange(kpis.previousPeriod.dateFrom, kpis.previousPeriod.dateTo)}) and
@@ -81,8 +99,8 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
           <details className="rounded-lg border px-3 py-2 text-sm">
             <summary className="cursor-pointer font-medium">How these numbers are worked out</summary>
             <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-muted-foreground">
-              {Object.entries(METRIC_DEFINITIONS).map(([name, text]) => (
-                <li key={name}>{text}</li>
+              {DEFINITIONS.map((name) => (
+                <li key={name}>{METRIC_DEFINITIONS[name]}</li>
               ))}
             </ul>
           </details>

@@ -21,10 +21,10 @@ describe("Sync now: months and messages", () => {
   });
 
   it("says what a sync did", () => {
-    const counts = { pages: 1, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0 };
+    const counts = { pages: 1, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9 };
     expect(describeSyncResult({ status: "succeeded", runId: "1", counts }, "September 2026")).toEqual({
       tone: "ok",
-      message: "Synced September 2026: 11 invoices read (11 new, 0 changed, 0 unchanged).",
+      message: "Synced September 2026: 11 invoices read (11 new, 0 changed, 0 unchanged); line items read for 9 invoices.",
     });
     expect(
       describeSyncResult({ status: "failed", runId: "1", counts, error: { code: "transient", message: "Kreloses could not be reached." } }, "September 2026"),

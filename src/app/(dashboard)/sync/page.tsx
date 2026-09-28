@@ -107,10 +107,14 @@ function RunCard({ run }: { run: SyncRun }) {
         <Item label="Unchanged" testId="sync-run-unchanged">
           {formatCount(counts.unchanged)}
         </Item>
+        <Item label="Line items read" testId="sync-run-line-items">
+          {formatCount(counts.lineItemsRead)} {counts.lineItemsRead === 1 ? "invoice" : "invoices"}
+        </Item>
       </dl>
       {run.status === "partial" && run.checkpoint ? (
         <p className="text-muted-foreground">
-          Stopped at its time limit before page {run.checkpoint.nextPage}; the next sync of these dates carries on from there.
+          Stopped at its time limit at page {run.checkpoint.nextPage}; the next sync of these dates carries on from there (line items
+          still missing are read then).
         </p>
       ) : null}
       {run.error ? (

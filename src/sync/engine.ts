@@ -5,16 +5,21 @@ import type { Sql } from "@/db/sql";
 import { clinicToday, endOfMonth, isIsoDate, startOfMonth, type IsoDate } from "@/filters";
 import {
   AuthFailed,
+  getInvoice,
   listInvoices,
   listLocations,
+  listStaff,
   RateLimited,
   SALE_LIST_PAGE_SIZE,
   Transient,
   type InvoiceListQuery,
   type InvoicePage,
+  type KrelosesInvoiceDetail,
   type KrelosesLocation,
   type KrelosesSession,
+  type KrelosesStaffMember,
 } from "@/kreloses";
+import { upsertStaffDirectory } from "@/staff/store";
 
 import { describeSyncFailure, isLoginFailure, type SyncFailure } from "./messages";
 import {
@@ -28,12 +33,14 @@ import {
   type SyncCounts,
   type SyncMode,
 } from "./runs";
+import { invoicesNeedingLines, saveInvoiceLines } from "./lines";
 import { saveInvoicePage, upsertBranches } from "./store";
 
 /**
- * The Sync Engine: reads a connection's Kreloses Sale List for a date range, page by page, and
- * stores invoices, branches and customers idempotently, recording a `sync_runs` row for every run
- * (including failures).
+ * The Sync Engine: reads a connection's Kreloses Sale List for a date range, page by page, stores
+ * invoices, branches and customers idempotently, then reads the line items of the page's new and
+ * changed invoices (#5) and derives their credited lines, recording a `sync_runs` row for every
+ * run (including failures).
  *
  *   const result = await runSync(syncDeps(), connectionId, "manual", { dateRange: { from, to } });
  *
@@ -41,12 +48,17 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * 1. Takes the connection's lease (`@/connections/lock`), so no other sync or login test uses the
  *    same Kreloses login meanwhile; if it is held, returns `{status: "busy"}` without a run row.
  *    Runs of this connection still marked `running` (their server died) become `interrupted`.
- * 2. Logs in, reads the branches the login can see (the Connections page status is updated from
- *    this login: Connected, or Login failed with the reason).
+ * 2. Logs in, reads the branches and the staff list the login can see (the Connections page status
+ *    is updated from this login: Connected, or Login failed with the reason); unmatched staff
+ *    names on lines are matched again against the staff list.
  * 3. Reads Sale List pages serially (the Reader waits its polite delay between requests); each page
  *    is stored with the run's counts and checkpoint in one transaction, so a crash loses nothing
  *    already read.
- * 4. Finishes `succeeded`, `partial` (time budget reached; `checkpoint` says where to carry on) or
+ * 4. After each page, reads the Sale Overview page of each of its invoices whose line items are
+ *    missing or stale (`invoicesNeedingLines`, in ./lines.ts: the ONE place deciding that) and
+ *    stores lines + credited lines per invoice in one transaction (`saveInvoiceLines`). The page
+ *    stays the checkpoint until its line items are done.
+ * 5. Finishes `succeeded`, `partial` (time budget reached; `checkpoint` says where to carry on) or
  *    `failed`.
  *
  * Errors: `AuthFailed` and `LayoutChanged` are never retried (the owner or a code fix must act); an
@@ -55,8 +67,9 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * tries again.
  *
  * Extension points: #6 (nightly cron, change detection, resume) passes `mode: "nightly"` and
- * `startPage` from a checkpoint; #8 (backfill) runs bounded chunks with `mode: "backfill"` and a
- * date range per chunk; #5 fetches line items for the invoices each page reports as new/changed.
+ * `startPage` from a checkpoint, and refines which invoices need their lines re-read in
+ * `invoicesNeedingLines`; #8 (backfill) runs bounded chunks with `mode: "backfill"` and a date
+ * range per chunk.
  */
 export interface SyncDeps {
   sql: Sql;
@@ -73,7 +86,9 @@ export interface SyncDeps {
 /** The Reader functions the engine uses. */
 export interface SyncReader {
   listLocations(session: KrelosesSession): Promise<KrelosesLocation[]>;
+  listStaff(session: KrelosesSession): Promise<KrelosesStaffMember[]>;
   listInvoices(session: KrelosesSession, query: InvoiceListQuery): Promise<InvoicePage>;
+  getInvoice(session: KrelosesSession, saleId: string): Promise<KrelosesInvoiceDetail>;
 }
 
 export interface SyncOptions {
@@ -114,7 +129,7 @@ const LEASE_MARGIN_MS = 120_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
 const DEFAULT_MAX_RETRIES = 3;
 
-const DEFAULT_READER: SyncReader = { listLocations, listInvoices };
+const DEFAULT_READER: SyncReader = { listLocations, listStaff, listInvoices, getInvoice };
 
 /** The clinic month containing `now`, first to last day. */
 export function currentClinicMonth(now: Date): { from: IsoDate; to: IsoDate } {
@@ -182,26 +197,42 @@ async function execute(run: RunContext): Promise<SyncResult> {
     const locations = await client.call((session) => reader.listLocations(session));
     await recordLoginOutcome(deps.sql, connectionId, { ok: true, visibleLocations: locations });
     await upsertBranches(deps.sql, connectionId, locations);
+    const staff = await client.call((session) => reader.listStaff(session));
+    await upsertStaffDirectory(deps.sql, connectionId, staff);
 
+    const outOfTime = () => now().getTime() >= run.deadline;
+    const stopPartial = async (): Promise<SyncResult> => {
+      await finishRun(deps.sql, runId, { status: "partial", finishedAt: now(), counts, checkpoint: checkpoint() });
+      return { status: "partial", runId, counts };
+    };
     for (;;) {
-      if (now().getTime() >= run.deadline) {
-        await finishRun(deps.sql, runId, { status: "partial", finishedAt: now(), counts, checkpoint: checkpoint() });
-        return { status: "partial", runId, counts };
-      }
+      if (outOfTime()) return await stopPartial();
       const result = await client.call((session) =>
         reader.listInvoices(session, { page, dateRange: range, includeCancelled: true, pageSize, previous }),
       );
       await deps.sql.begin(async (tx) => {
         const written = await saveInvoicePage(tx, { runId, connectionId, invoices: result.invoices, fetchedAt: now() });
         counts = {
+          ...counts,
           pages: counts.pages + 1,
           invoicesSeen: counts.invoicesSeen + result.invoices.length,
           inserted: counts.inserted + written.inserted,
           updated: counts.updated + written.updated,
           unchanged: counts.unchanged + written.unchanged,
         };
-        await recordProgress(tx, runId, counts, result.hasMore ? { nextPage: page + 1, pageSize } : null);
+        // This page is where to carry on until its line items have been read too.
+        await recordProgress(tx, runId, counts, checkpoint());
       });
+
+      // Line items of the page's new and changed invoices, one Sale Overview page at a time.
+      for (const invoice of await invoicesNeedingLines(deps.sql, result.invoices.map((invoice) => invoice.saleId))) {
+        if (outOfTime()) return await stopPartial();
+        const detail = await client.call((session) => reader.getInvoice(session, invoice.saleId));
+        await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, detail, fetchedAt: now() });
+        counts = { ...counts, lineItemsRead: counts.lineItemsRead + 1 };
+        await recordProgress(deps.sql, runId, counts, checkpoint());
+      }
+      await recordProgress(deps.sql, runId, counts, result.hasMore ? { nextPage: page + 1, pageSize } : null);
       if (!result.hasMore) break;
       previous = result;
       page += 1;

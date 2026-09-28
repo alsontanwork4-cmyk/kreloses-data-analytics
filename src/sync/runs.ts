@@ -36,11 +36,17 @@ export interface SyncCounts {
   updated: number;
   /** Stored invoices read again with nothing changed. */
   unchanged: number;
+  /** Invoices whose line items (Sale Overview page) were read: new ones, and ones whose header changed. */
+  lineItemsRead: number;
 }
 
-export const NO_COUNTS: SyncCounts = { pages: 0, invoicesSeen: 0, inserted: 0, updated: 0, unchanged: 0 };
+export const NO_COUNTS: SyncCounts = { pages: 0, invoicesSeen: 0, inserted: 0, updated: 0, unchanged: 0, lineItemsRead: 0 };
 
-/** Where a stopped run carries on (#6 resumes from it). */
+/**
+ * Where a stopped run carries on (#6 resumes from it). A page stays the checkpoint until the line
+ * items of its invoices have been read too, so carrying on re-reads that page (a no-op for its
+ * headers) and then reads the line items still missing.
+ */
 export interface SyncCheckpoint {
   /** The next Sale List page to read. */
   nextPage: number;

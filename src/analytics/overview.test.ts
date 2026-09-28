@@ -51,7 +51,10 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
     h = createSyncHarness(db.sql, { now: syncedAt });
     connectionId = await h.connect(both, "Both branches");
     const result = await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2025-09-01", to: "2026-09-30" }, pageSize: 7 });
-    expect(result).toMatchObject({ status: "succeeded", counts: { invoicesSeen: 20, inserted: 20 } });
+    expect(result).toMatchObject({ status: "succeeded", counts: { invoicesSeen: 20, inserted: 20, lineItemsRead: 17 } });
+    // Since #5 revenue is the sum of credited lines: every active invoice's lines are synced, so the
+    // figures below (the invoices' net amounts) come from credited lines, not the pending fallback.
+    expect(await db.sql`select 1 from invoices where status = 'active' and not lines_current`).toEqual([]);
     const rows = await db.sql<{ id: string; krelosesLocationId: string }[]>`select id::text, kreloses_location_id from branches`;
     branchId = {
       north: rows.find((row) => row.krelosesLocationId === "1101")!.id,

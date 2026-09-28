@@ -49,9 +49,26 @@ failed / Not tested).
 The Kreloses locations a connection's login could see at its latest login test (none known after a
 failed test). "Location" is Kreloses's word; in the product they are branches.
 
+**Staff member**:
+Someone (or a shared login) Kreloses can name on an invoice line. Each has a **kind**: *doctor*,
+*other staff* (nurses, groomers…) or *generic account* (a shared login such as a branch "general"
+account). The app guesses the kind from the names (a "Dr" title → doctor; "general", "branch",
+"admin", "reception" → generic); the owner can change it, and a kind the owner set is never
+changed by a sync. Staff members are never deleted: one Kreloses no longer lists is *inactive* but
+keeps their history.
+_Avoid_: Employee, user
+
 **Doctor**:
-A vet whose name appears on invoice lines and who is credited with revenue.
+A staff member of kind doctor: ranked on the Doctors page and selectable in the global filter.
 _Avoid_: Vet, staff (staff also includes non-doctors)
+
+**Staff name (on a line)**:
+The short name Kreloses prints on an invoice line ("Dr Ong"). Each distinct name is matched once
+to a full staff name: automatically when exactly one staff member fits, or by the owner (Settings
+→ Doctors). A name that matches nobody (e.g. a doctor who has left) becomes its own **alias-only**
+staff member, so its revenue still counts; the owner can point it at the right person later.
+Changing a match changes every figure at once, past periods included.
+_Avoid_: Alias (in the UI), doctor name
 
 ## Time and filtering
 
@@ -100,24 +117,57 @@ to notice cancellations.
 The Kreloses customer (the pet owner) on an invoice. A walk-in invoice has no customer.
 _Avoid_: Client, patient (the patient is the pet)
 
+**Line item**:
+One line of an invoice as Kreloses shows it: item, quantity (may be fractional), unit price, amount
+charged (after any item-level discount), the staff name on it, and a discount name/amount. A
+**discount line** (Kreloses ItemType 55) is a line that only takes money off the whole invoice.
+_Avoid_: Row, item (an item is what is sold; a line is one occurrence of it on an invoice)
+
+**Credited line**:
+A line item (not a discount line) with the amount it earns: its own amount plus its share of the
+invoice's discount lines and of any difference between the lines and the invoice's net amount,
+shared in proportion to gross (quantity × unit price) in whole sen. An invoice's credited lines add
+up exactly to its net amount. Credited to the staff member its staff name is matched to, or to
+**No staff on line** when it names nobody.
+_Avoid_: Attributed line, allocation
+
+**Line items not synced yet**:
+An active invoice whose line items have not been read since it was last changed. Until the next
+sync reads them, its whole net amount is counted in this group, so revenue never drops.
+_Avoid_: Pending (in the UI), unallocated
+
 **Revenue**:
-The net amount (after discounts) of active invoices on clinic days in the period. Refunds are not
-deducted; a negative (return) invoice reduces it. Until line items are synced (#5) it is the
-invoice's net amount; afterwards it is the sum of credited lines, which add up to the same total.
+The net amount (after discounts) of active invoices on clinic days in the period, credited line by
+line (sum of credited lines, plus invoices whose line items are not synced yet). Refunds are not
+deducted; a negative (return) invoice reduces it. For a doctor: the credited lines credited to them.
 _Avoid_: Sales (ambiguous with invoices), turnover, takings
 
 **Invoices (count)**:
-The number of active invoices in the period.
+The number of active invoices in the period. For a doctor: invoices with at least one line credited
+to them (an invoice shared by two doctors counts for each).
 
 **Customers (count)**:
 Distinct customers with at least one active invoice in the period: once overall, and once per branch
 in a branch breakdown (a customer who visited both branches counts in each). Walk-ins are not
-customers.
+customers. For a doctor: distinct customers with at least one line credited to them.
 
 **AOV per customer**:
 Revenue divided by customers, rounded to the sen. Per branch, the branch's revenue ÷ the branch's
-customers; per doctor (later), the doctor's revenue ÷ the customers they billed.
+customers; per doctor, the doctor's revenue ÷ the distinct customers with at least one line
+credited to them (per branch when split by branch).
 _Avoid_: Average order value per invoice (that is revenue ÷ invoices, a different number)
+
+**Items per invoice**:
+A doctor's credited lines (sold lines; discount lines excluded, returns included) ÷ their invoices.
+
+**Share of revenue**:
+Revenue ÷ ALL revenue in the period and branches (doctors, other staff, generic accounts, no staff
+and line items not synced yet together). The doctor filter never changes what it is a share of.
+
+**Doctor ranking**:
+Doctors by revenue for the global filter, with AOV per customer, invoices, items per invoice and
+share of revenue, optionally split by branch. Other staff, generic accounts, No staff on line and
+line items not synced yet are shown as separate groups, never ranked with doctors.
 
 **Change**:
 A KPI minus its value in a comparison period; as a percentage, the change ÷ the comparison value,
@@ -127,7 +177,8 @@ to one decimal place, and none when the comparison value is zero.
 
 **Sync run**:
 One pass of the sync for one connection over a range of clinic days: reads the Kreloses sale list
-and stores its invoices, branches and customers. Every run is logged, with its counts (invoices
+and stores its invoices, branches and customers, then reads the line items of every new or changed
+active invoice (and the staff list). Every run is logged, with its counts (invoices
 read / new / changed / unchanged) and, if it failed, why. Kinds: *Sync now* (manual, one month
 chosen by the owner), *nightly* and *history backfill* (later). Outcomes: succeeded, stopped early
 (hit its time limit; it records where it got to) or failed.

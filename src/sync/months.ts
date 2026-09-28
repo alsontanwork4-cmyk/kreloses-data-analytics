@@ -44,10 +44,10 @@ export function syncMonthOptions(now: Date = new Date()): { value: string; label
 export function describeSyncResult(result: SyncResult, what: string): { tone: "ok" | "warning" | "error"; message: string } {
   switch (result.status) {
     case "succeeded": {
-      const { invoicesSeen, inserted, updated, unchanged } = result.counts;
+      const { invoicesSeen, inserted, updated, unchanged, lineItemsRead } = result.counts;
       return {
         tone: "ok",
-        message: `Synced ${what}: ${plural(invoicesSeen, "invoice")} read (${inserted} new, ${updated} changed, ${unchanged} unchanged).`,
+        message: `Synced ${what}: ${plural(invoicesSeen, "invoice")} read (${inserted} new, ${updated} changed, ${unchanged} unchanged); line items read for ${plural(lineItemsRead, "invoice")}.`,
       };
     }
     case "partial":

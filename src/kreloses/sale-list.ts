@@ -313,6 +313,10 @@ export function parseSaleListPage(payload: unknown, query: InvoiceListQuery, pag
   // Paging that does not add up would silently lose sales: fail instead (spec story 17).
   const { page } = query;
   if (results.length > pageSize) fail(`page ${page} has ${results.length} rows where ${pageSize} were asked for`);
+  const rowsSoFar = (page - 1) * pageSize + results.length;
+  if (rowsSoFar > totalCount) {
+    fail(`the rows read up to page ${page} (${rowsSoFar}) exceed TotalCount (${totalCount}): the listing does not add up, and sales could be missed or double-counted`);
+  }
   if (results.length < pageSize && (page - 1) * pageSize + results.length < totalCount) {
     fail(
       `page ${page} has ${results.length} rows where ${pageSize} were asked for, yet TotalCount is ${totalCount}: Kreloses may be capping the page size, and sales would be missed`,

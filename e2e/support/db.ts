@@ -11,3 +11,19 @@ export async function withRunDatabase<T>(fn: (sql: Sql) => Promise<T>): Promise<
     await sql.end({ timeout: 5 });
   }
 }
+
+/**
+ * Leaves the run's database as the other specs expect it: no synced sales (invoices, their lines
+ * and credited lines), staff, customers, sync runs, branches or connections. Children first.
+ */
+export async function clearSyncedData(): Promise<void> {
+  await withRunDatabase(async (sql) => {
+    await sql`delete from invoices`; // cascades to invoice_lines and credited_lines
+    await sql`delete from staff_aliases`;
+    await sql`delete from staff`;
+    await sql`delete from customers`;
+    await sql`delete from sync_runs`;
+    await sql`delete from branches`;
+    await sql`delete from connections`;
+  });
+}

@@ -4,6 +4,8 @@ import { AuthFailed, LayoutChanged } from "./errors";
 import { describeJsonShape, fetchFilterTemplate, parseLocations, SALE_LIST_REPORT } from "./locations";
 import { login, type KrelosesCredentials } from "./login";
 import type { InvoiceDateRange } from "./sale-list";
+import { formatSaleOverviewDiagnostic, probeSaleOverview, type SaleOverviewDiagnostic } from "./sale-overview-diagnostic";
+import { parseStaff } from "./staff";
 import {
   defaultDiagnosticRange,
   describeDiagnosticError,
@@ -19,8 +21,9 @@ import type { HopEvent, KrelosesSession } from "./session";
  * which host does the session cookie work on, what are the cookies' scopes and lifetimes, how
  * long does a session last — and reads one Sale List page to check the Reader's assumptions about
  * its structure (`./sale-list-diagnostic.ts`), without recording anything secret or personal: no
- * email, password, cookie values, tokens, query strings, names, amounts or ids. The owner pastes it
- * into a public ticket.
+ * email, password, cookie values, tokens, query strings, names, amounts or ids. It also opens ONE
+ * invoice's Sale Overview page (`./sale-overview-diagnostic.ts`, #5) and counts the staff the Sale
+ * List filter lists. The owner pastes it into a public ticket.
  */
 export interface LoginDiagnostic {
   hops: HopEvent[];
@@ -33,6 +36,10 @@ export interface LoginDiagnostic {
   filterShape: string | null;
   /** One page of the Sale List, structure only. Null when the login or GetFilter failed. */
   saleList: SaleListDiagnostic | null;
+  /** How many staff the Sale List filter lists (never their names). Null when not checked. */
+  staff: { ok: true; count: number } | { ok: false; error: string } | null;
+  /** ONE invoice's Sale Overview page, structure only. Null when the Sale List was not read. */
+  saleOverview: SaleOverviewDiagnostic | null;
   cookies: CookieSummary[];
   probes: { afterMinutes: number; ok: boolean; error?: string }[];
 }
@@ -67,6 +74,8 @@ export async function runLoginDiagnostic(
     locations: null,
     filterShape: null,
     saleList: null,
+    staff: null,
+    saleOverview: null,
     cookies: [],
     probes: [],
   };
@@ -93,7 +102,13 @@ export async function runLoginDiagnostic(
     if (error instanceof LayoutChanged) diagnostic.filterShape = error.shape ?? null;
   }
   if (diagnostic.sessionWorksOn) {
+    try {
+      diagnostic.staff = { ok: true, count: parseStaff(template).length };
+    } catch (error) {
+      diagnostic.staff = { ok: false, error: describeError(error) };
+    }
     diagnostic.saleList = await probeSaleList(session, template, options.saleListRange ?? defaultDiagnosticRange());
+    diagnostic.saleOverview = await probeSaleOverview(session, diagnostic.saleList.sample ?? null);
   }
 
   const probeMinutes = options.probeMinutes ?? 0;
@@ -144,7 +159,15 @@ export function formatLoginDiagnostic(diagnostic: LoginDiagnostic): string {
   else if (diagnostic.locations.ok) lines.push(`Visible locations: ${diagnostic.locations.count}`);
   else lines.push(`Visible locations: FAILED — ${diagnostic.locations.error}`);
   if (diagnostic.filterShape) lines.push(`GetFilter (report 14) JSON shape: ${diagnostic.filterShape}`);
+  if (diagnostic.staff) {
+    lines.push(
+      diagnostic.staff.ok
+        ? `Staff filter (report 14): ${diagnostic.staff.count} staff members (names not shown)`
+        : `Staff filter (report 14): FAILED — ${diagnostic.staff.error}`,
+    );
+  }
   if (diagnostic.saleList) lines.push(...formatSaleListDiagnostic(diagnostic.saleList));
+  if (diagnostic.saleOverview) lines.push(...formatSaleOverviewDiagnostic(diagnostic.saleOverview));
   for (const probe of diagnostic.probes) {
     lines.push(
       probe.ok

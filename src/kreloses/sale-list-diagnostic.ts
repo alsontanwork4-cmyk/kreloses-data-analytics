@@ -33,6 +33,8 @@ export interface SaleListDiagnostic {
   /** Null when the request failed (see `error`). */
   page: SaleListPageStructure | null;
   error?: string;
+  /** The first active sale on the page, for the Sale Overview check. NEVER printed. */
+  sample?: { saleId: string; netSen: number } | null;
 }
 
 export interface SaleListPageStructure {
@@ -72,6 +74,13 @@ export async function probeSaleList(session: KrelosesSession, template: unknown,
     return { ...diagnostic, error: describeDiagnosticError(error) };
   }
   diagnostic.page = describePage(payload, range);
+  try {
+    const parsed = parseSaleListPage(payload, { page: 1, dateRange: range, includeCancelled: true }, SALE_LIST_PAGE_SIZE);
+    const active = parsed.invoices.find((invoice) => invoice.status === "active");
+    diagnostic.sample = active ? { saleId: active.saleId, netSen: active.netSen } : null;
+  } catch {
+    diagnostic.sample = null;
+  }
   return diagnostic;
 }
 
@@ -88,7 +97,7 @@ export function formatSaleListDiagnostic(diagnostic: SaleListDiagnostic): string
     `  Expected fields missing: ${list(page.missingFields)}`,
     `  Other fields: ${list(page.otherFields)}`,
     `  SaleDate formats: ${list(page.saleDateFormats)}`,
-    `  Sale times by KL hour (as the Reader reads SaleDate): ${page.saleTimesByHour} (most sales at 00-06 would mean SaleDate holds KL time sent as UTC)`,
+    `  Sale times by KL hour (as the Reader reads SaleDate): ${page.saleTimesByHour} (clinic hours are about 09-21; most sales at 17-05 instead would mean SaleDate holds KL wall-clock time labelled as UTC, read 8 hours late)`,
     `  Rows newest first: ${page.newestFirst}`,
     `  Rows outside ${range.from}..${range.to}: ${page.outsideRange}`,
     `  Amounts: ${page.amounts}`,

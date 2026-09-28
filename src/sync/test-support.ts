@@ -58,7 +58,9 @@ export function createSyncHarness(sql: Sql, options: { fake?: FakeKrelosesOption
 
 /** Empties every table the sync writes (and connections), children first. */
 export async function clearSyncTables(sql: Sql): Promise<void> {
-  await sql`delete from invoices`;
+  await sql`delete from invoices`; // cascades to invoice_lines and credited_lines
+  await sql`delete from staff_aliases`;
+  await sql`delete from staff`;
   await sql`delete from customers`;
   await sql`delete from sync_runs`;
   await sql`delete from branches`;

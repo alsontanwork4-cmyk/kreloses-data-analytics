@@ -281,6 +281,21 @@ describe("Kreloses Reader: listInvoices", () => {
       expect((error as Error).message).toMatch(/page 1 has 5 rows where 4 were asked for/);
     });
 
+    it("fails when the rows read so far exceed TotalCount (the count cannot be trusted, so neither can the paging)", async () => {
+      const rows = (JSON.parse(readFixture("sale-list-rows.json")) as { rows: unknown[] }).rows;
+      const first = await signedIn();
+      answerSaleGet(first.fake, () => Response.json({ Columns: [], Results: rows.slice(0, 3), TotalCount: 2 }));
+      const error = await failure(listInvoices(first.session, { page: 1, includeCancelled: true, pageSize: 4 }));
+      expect(error).toBeInstanceOf(LayoutChanged);
+      expect((error as Error).message).toMatch(/rows read up to page 1 \(3\) exceed TotalCount \(2\)/);
+
+      const later = await signedIn();
+      answerSaleGet(later.fake, () => Response.json({ Columns: [], Results: rows.slice(4, 6), TotalCount: 3 }));
+      const second = await failure(listInvoices(later.session, { page: 2, includeCancelled: true, pageSize: 2 }));
+      expect(second).toBeInstanceOf(LayoutChanged);
+      expect((second as Error).message).toMatch(/rows read up to page 2 \(4\) exceed TotalCount \(3\)/);
+    });
+
     it("fails when a page repeats the previous one (Kreloses ignoring RequestingPage)", async () => {
       const { session } = await signedIn(both, createFakeKreloses({ saleList: { ignoreRequestingPage: true } }));
       const query = { dateRange: SEPTEMBER, includeCancelled: true, pageSize: 4 };

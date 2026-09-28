@@ -24,6 +24,7 @@ Read `README.md` ("Conventions for later tickets") before coding. In short:
 - Every page/Server Action calls `requireUser()` or `requireRole()` (`@/auth/session`); every route handler is wrapped in `withUser()` / `withRole()` (`@/auth/api`) — except routes under `PUBLIC_PATHS` (`src/auth/paths.ts`, e.g. a future MCP bearer-token or cron-secret endpoint), which must authenticate themselves. Redirect to user-supplied paths only via `safeNextPath()`.
 - App data via `getDb()` (postgres.js); Supabase JS for Auth only. New migration = new timestamped file (`supabase migration new <name>`); plain Postgres; RLS on, no policies. Money is `numeric(12,2)`, summed in SQL, never float maths in JS (see README "Database").
 - DB tests use `useTestDatabase()` (`@/db/testing`), never the shared `postgres` database. Done = `npm run typecheck`, `npm run lint`, `npm test`, `npm run build` and `npm run test:e2e` all green.
+- Every revenue metric is built on `revenueFacts` (`src/analytics/facts.ts`: credited lines, staff resolved at query time; README "Credited lines"). Analytics tables are `<DataTable>` (CSV export built in); charts follow README "Charts".
 - The global filter (`@/filters`) is the only code that reads/writes filter URL params; nav entries live in `src/components/shell/nav-config.ts` (`NAV_ITEMS`; settings pages are tabs in `SETTINGS_NAV_ITEMS` and render `<SettingsSection>`, see README "Pages and navigation").
 
 <!-- BEGIN:nextjs-agent-rules -->
