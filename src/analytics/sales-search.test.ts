@@ -137,9 +137,10 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
 
   it("caps the page size and starts at page 1", async () => {
     const huge = await searchSales(db.sql, { dateFrom: "2025-01-01", dateTo: "2026-12-31" }, { pageSize: 5000, page: 0 });
-    expect(SALES_SEARCH_MAX_PAGE_SIZE).toBe(100);
-    expect(huge).toMatchObject({ page: 1, pageSize: 100, totalMatches: 17, totalPages: 1 });
+    expect(SALES_SEARCH_MAX_PAGE_SIZE).toBe(50);
+    expect(huge).toMatchObject({ page: 1, pageSize: 50, totalMatches: 17, totalPages: 1 });
     expect(huge.sales).toHaveLength(17);
+    expect(await searchSales(db.sql, { dateFrom: "2025-01-01", dateTo: "2026-12-31" }, { pageSize: 51 })).toMatchObject({ pageSize: 50 });
     expect((await searchSales(db.sql, SEPTEMBER)).pageSize).toBe(20);
   });
 

@@ -14,7 +14,9 @@ dynamic client registration would add an authorization server, token storage and
 for one person. The token is compared in constant time; a missing, blank or short (< 32
 characters) token refuses every request (fail closed), so forgetting the env var never opens the
 endpoint. Consequence: whoever holds the token reads all clinic data, rotation means a new env
-value plus updating each client, and connectors that only support OAuth cannot connect. Adding
+value plus updating each client (older Vercel deployments keep the old value, so Deployment
+Protection must stay on or they must be deleted), and connectors that only support OAuth cannot
+connect. `/api/mcp` is public as that exact path only (`PUBLIC_EXACT_PATHS`), never its sub-paths. Adding
 OAuth later means a new auth check in `src/mcp/auth.ts`; the tools do not change.
 
 **Read-only by construction, three times over.** Tools only call Analytics Service reads (no SQL,

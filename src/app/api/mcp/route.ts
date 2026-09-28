@@ -3,7 +3,7 @@ import { handleMcpRequest } from "@/mcp/handler";
 
 /**
  * The read-only MCP server for Claude (spec stories 60–65; README "Connect Claude to the MCP
- * server"). Listed in `PUBLIC_PATHS`: it does NOT use the dashboard's sign-in — it authenticates
+ * server"). Listed in `PUBLIC_EXACT_PATHS`: it does NOT use the dashboard's sign-in — it authenticates
  * every request itself with `Authorization: Bearer <MCP_BEARER_TOKEN>` (`src/mcp/auth.ts`).
  */
 function handle(request: Request): Promise<Response> {

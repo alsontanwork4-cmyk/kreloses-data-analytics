@@ -1,3 +1,7 @@
+import { readdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DELETE, GET, POST } from "./route";
@@ -21,6 +25,11 @@ describe("/api/mcp route", () => {
     for (const handler of [POST, GET, DELETE]) {
       expect((await handler(request("POST", { Authorization: `Bearer ${TOKEN}` }))).status).toBe(503);
     }
+  });
+
+  it("has no sub-routes: only /api/mcp itself skips the sign-in gate (PUBLIC_EXACT_PATHS)", () => {
+    const entries = readdirSync(dirname(fileURLToPath(import.meta.url)), { withFileTypes: true });
+    expect(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)).toEqual([]);
   });
 
   it("uses MCP_BEARER_TOKEN once set: no or a wrong token is 401; the right one gets past the gate", async () => {

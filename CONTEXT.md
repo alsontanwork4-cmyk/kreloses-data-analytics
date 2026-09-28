@@ -247,5 +247,7 @@ _Avoid_: API, bot, integration
 
 **MCP token**:
 The one secret (`MCP_BEARER_TOKEN`) that opens the MCP server. Whoever holds it can read all clinic
-data the dashboard shows, so it is handled like a password; replacing it locks out the old one.
+data the dashboard shows, so it is handled like a password. Replacing it (and redeploying) locks the
+old one out of the new deployment; older deployments still hold the old token, so they must stay
+unreachable (Vercel Deployment Protection on, or deleted).
 _Avoid_: API key, password (the Kreloses password is a different thing)

@@ -36,6 +36,7 @@ export function registerMcpTool(server: McpServer, tool: AnyMcpTool, context: Mc
       description: tool.description,
       inputSchema: z.strictObject(tool.input),
       outputSchema: z.object({
+        summary: z.string().describe("What this answer says, in a sentence or two (also the first text block)."),
         ...tool.output,
         dataFreshness: dataFreshnessOutput.describe(
           "How fresh the data is, per branch: always tell the user the data-as-of time with these numbers, and never present them as more current.",
@@ -53,7 +54,9 @@ export function registerMcpTool(server: McpServer, tool: AnyMcpTool, context: Mc
           const answer = await tool.run(scoped, input);
           return { answer, freshness: await describeFreshness(sql, answer.freshness, context.now()) };
         });
-        const structured = { ...answer.data, dataFreshness: freshness, definitions };
+        // Clients differ in what they show the model: Claude Code only `structuredContent` when both
+        // are present, others only the text. So the summary is in both, and so is the data.
+        const structured = { summary: answer.summary, ...answer.data, dataFreshness: freshness, definitions };
         return {
           content: [
             { type: "text", text: `${answer.summary}\n${freshness.summary}` },

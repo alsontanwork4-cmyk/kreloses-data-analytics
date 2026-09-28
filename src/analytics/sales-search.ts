@@ -11,8 +11,12 @@ import type { DateRange } from "./periods";
  * what every other metric counts (`METRIC_DEFINITIONS.salesSearch`).
  */
 
-/** The most rows one page can hold, whatever the caller asks for. */
-export const SALES_SEARCH_MAX_PAGE_SIZE = 100;
+/**
+ * The most rows one page can hold, whatever the caller asks for. Kept small enough that a full page
+ * (sent twice by the MCP server: structured and as text) stays well under Claude Code's MCP output
+ * limit.
+ */
+export const SALES_SEARCH_MAX_PAGE_SIZE = 50;
 export const SALES_SEARCH_DEFAULT_PAGE_SIZE = 20;
 
 export type SalesSearchSort = "newest" | "oldest" | "largest" | "smallest";

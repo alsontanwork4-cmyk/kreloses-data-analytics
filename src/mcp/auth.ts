@@ -9,7 +9,7 @@ export const MIN_MCP_TOKEN_LENGTH = 32;
 const REALM = 'Bearer realm="kreloses-mcp"';
 
 /**
- * The MCP endpoint's ONLY gate: `/api/mcp` is in `PUBLIC_PATHS`, so the session proxy does not check
+ * The MCP endpoint's ONLY gate: `/api/mcp` is in `PUBLIC_EXACT_PATHS`, so the session proxy does not check
  * it. Returns null when the request carries `Authorization: Bearer <MCP_BEARER_TOKEN>`; otherwise
  * the response to send:
  *

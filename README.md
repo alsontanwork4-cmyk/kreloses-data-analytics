@@ -168,10 +168,11 @@ by `/auth/confirm` each time a magic link is opened.
 `signInLinkSenderForInvites()`, which sends through a cookie-less client so the owner's own session
 is untouched. If the invitation email fails the invite still stands and the page says so.
 
-Public routes are listed in `PUBLIC_PATHS` (`src/auth/paths.ts`): today `/login`, `/auth/*` and
-`/api/mcp` (the MCP server: bearer token, `src/mcp/auth.ts`). Anything added there (e.g. a future
-`/api/cron` with a secret) is the one exception to "wrap every route handler in
-`withUser`/`withRole`": it must authenticate itself.
+Public routes are listed in `src/auth/paths.ts`: `PUBLIC_PATHS` (with their sub-paths: `/login`,
+`/auth/*`) and `PUBLIC_EXACT_PATHS` (that path only: `/api/mcp`, the MCP server — bearer token,
+`src/mcp/auth.ts`; a route added under it later stays behind the sign-in gate). Anything added there
+(e.g. a future `/api/cron` with a secret; prefer the exact list) is the one exception to "wrap every
+route handler in `withUser`/`withRole`": it must authenticate itself.
 
 Never redirect to a user-supplied path without `safeNextPath()` (`src/auth/paths.ts`): it refuses
 control characters and backslashes (browsers strip tabs/newlines, so `/\t/evil.example` becomes
@@ -679,7 +680,7 @@ getDiscountTypes(sql, filter): Promise<DiscountTypes>
 searchSales(sql, filter, { customer?, item?, minRevenue?, maxRevenue?, sort?, page?, pageSize? }?): Promise<SalesSearchResult>
   // (#17, MCP search_sales) active sales matching every criterion (customer / item: part of the name, any case;
   // revenue limits inclusive; doctorIds: ≥ 1 line credited to them; a pending sale matches neither doctor nor item),
-  // newest first by default: { period, page, pageSize (≤ SALES_SEARCH_MAX_PAGE_SIZE = 100, default 20), totalMatches,
+  // newest first by default: { period, page, pageSize (≤ SALES_SEARCH_MAX_PAGE_SIZE = 50, default 20), totalMatches,
   //   totalPages, totalRevenue, sales: { invoiceId, saleNumber, saleDate, branchId, branchName, customerName | null,
   //   revenue, lineItemsSynced, credits: { staffId | null, name, creditGroup, revenue, lines }[] }[] }
 getConnectionSyncStatus(sql): Promise<ConnectionSyncStatus[]>
@@ -823,7 +824,8 @@ const columns: DataTableColumn<Row>[] = [
 Streamable HTTP MCP server built on the official SDK (`@modelcontextprotocol/sdk`, pinned): every
 POST gets a fresh `McpServer` + `WebStandardStreamableHTTPServerTransport` (no session id, plain
 JSON answers, no SSE), so it runs as an ordinary Vercel function. GET/DELETE → 405. It is in
-`PUBLIC_PATHS` and authenticates itself first (`checkMcpBearerToken`, `src/mcp/auth.ts`):
+`PUBLIC_EXACT_PATHS` (no sub-paths; a test fails if a route appears under it) and authenticates
+itself first (`checkMcpBearerToken`, `src/mcp/auth.ts`):
 `Authorization: Bearer <MCP_BEARER_TOKEN>`, compared in constant time; no/short env token → 503 for
 everything (fail closed); missing/wrong token → 401 + `WWW-Authenticate: Bearer`. Never log the
 token or the `Authorization` header.
@@ -851,10 +853,12 @@ export const dailySalesTool = defineTool({          // src/mcp/tools/daily-sales
 The registry (`tools/registry.ts`) does the rest for every tool alike: read-only annotations;
 strict input (unknown arguments are refused, so a misspelt filter never widens an answer); a
 READ ONLY, REPEATABLE READ transaction around the whole call (one snapshot, any write fails); adds
-`dataFreshness` (per-branch data as of for `freshness`, `src/mcp/tools/freshness.ts`) and
-`definitions` to the structured result; validates it against `output`; puts a text summary + the
-same JSON in `content`; turns `ToolInputError` into its message and anything else into a generic
-error (logged server-side). Shared pieces: `filterInput` / `periodInput` / `branchesInput` /
+`summary`, `dataFreshness` (per-branch data as of for `freshness`, `src/mcp/tools/freshness.ts`) and
+`definitions` to the structured result; validates it against `output`; puts the summary + freshness
+sentence and the same JSON in `content` (Claude Code shows the model only `structuredContent` when
+both are present, other clients only the text, so both carry everything — keep results small, e.g.
+`search_sales` pages hold at most 50 sales); turns `ToolInputError` into its message and anything
+else into a generic error (logged server-side). Shared pieces: `filterInput` / `periodInput` / `branchesInput` /
 `doctorsInput`, `resolveFilter`, `filterOutput` (`tools/filter.ts`); name matching (`tools/names.ts`:
 id, exact name, or every typed word starting a word of the name — ambiguous → an error listing the
 candidates); `money`, `pendingLineItemsOutput` (`tools/schemas.ts`); `clinicTimestamp` (ISO with
@@ -884,17 +888,19 @@ Every answer states how fresh the data is per branch, and dates are clinic days 
    Without it (or with one shorter than 32 characters) the endpoint refuses every request.
 2. **The URL** is `https://<your-deployment>/api/mcp` (locally `http://localhost:3000/api/mcp` with
    `MCP_BEARER_TOKEN` in `.env.local`).
-3. **Claude Code**: add it once (`--scope user` makes it available in every project):
+3. **Claude Code**: add it once, for your user (every project on this machine):
 
    ```bash
    read -rs "KRELOSES_MCP_TOKEN?MCP token: "; echo      # zsh; bash: read -rsp "MCP token: " KRELOSES_MCP_TOKEN
-   claude mcp add --transport http kreloses https://<your-deployment>/api/mcp \
+   claude mcp add --scope user --transport http kreloses https://<your-deployment>/api/mcp \
      --header "Authorization: Bearer $KRELOSES_MCP_TOKEN"
    unset KRELOSES_MCP_TOKEN
    ```
 
    Then ask, for example, "Using kreloses, rank the doctors for last month". `claude mcp list`
-   shows whether it connected.
+   shows whether it connected. **Never use `--scope project` with a literal token**: it writes the
+   header into `.mcp.json` in the repository, which is public (`.mcp.json` is git-ignored here as a
+   safety net, but other checkouts may not be).
 4. **Claude apps (custom connector)**: add `https://<your-deployment>/api/mcp` as a custom
    connector where the connector settings let you send an `Authorization: Bearer <token>` header.
    This server does not implement OAuth, so a connector that only offers OAuth sign-in cannot use
@@ -903,15 +909,21 @@ Every answer states how fresh the data is per branch, and dates are clinic days 
 **The token grants read access to ALL clinic data** (every sale, customer name and doctor figure):
 treat it like a password. Don't paste it into chats, commit it or share screenshots of it; clients
 store it in their config (Claude Code: `~/.claude.json`). To revoke it, set a new `MCP_BEARER_TOKEN`
-and redeploy: the old one stops working at once; update each client with the new one.
+and redeploy, then update each client: the new deployment accepts only the new token. Older Vercel
+deployments keep the environment they were built with, so their own URLs
+(`<project>-<hash>.vercel.app`) still accept the old token — keep Vercel **Deployment Protection**
+on (it guards every deployment URL except the production domain) or delete the old deployments.
 
-Check it by hand (`tools/list` with the token → the three tools; without it → `401`):
+Check it by hand (`tools/list` with the token → the three tools; without it → `401`). Step 3
+cleared the variable, so read the token again first:
 
 ```bash
+read -rs "KRELOSES_MCP_TOKEN?MCP token: "; echo
 curl -s https://<your-deployment>/api/mcp \
   -H "Authorization: Bearer $KRELOSES_MCP_TOKEN" -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+unset KRELOSES_MCP_TOKEN
 ```
 
 Answers: `401` = missing or wrong token; `503` = the server has no `MCP_BEARER_TOKEN`; `405` = not a

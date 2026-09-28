@@ -206,7 +206,9 @@ describe("MCP server (Streamable HTTP, in process)", () => {
         expect(data.dataFreshness.checkedAt).toBe("2026-10-01T11:00:00+08:00");
         const text = (september.content as { text: string }[])[0]!.text;
         expect(text, name).toContain(`\nData as of (clinic time, Asia/Kuala_Lumpur): ${asOf}. Sales changed in Kreloses after that are not included.`);
-        // The same JSON is in the text too, for clients that only read text.
+        // The summary is in the structured result too (Claude Code shows the model only that when
+        // both are present), and the same JSON is in the text (clients that read only text).
+        expect(text, name).toBe(`${data.summary as string}\n${data.dataFreshness.summary}`);
         expect(JSON.parse((september.content as { text: string }[])[1]!.text)).toEqual(data);
         expect(data.definitions.dataAsOf).toBe(METRIC_DEFINITIONS.dataAsOf);
         for (const [key, definition] of Object.entries(data.definitions)) {
@@ -307,10 +309,19 @@ describe("MCP server (Streamable HTTP, in process)", () => {
 
     it("caps the page size and checks amounts", async () => {
       const client = await connect();
-      expect(await errorText(client, "search_sales", { pageSize: 101 })).toMatch(/pageSize/);
+      expect(await errorText(client, "search_sales", { pageSize: 51 })).toMatch(/pageSize/);
       expect(await errorText(client, "search_sales", { page: 0 })).toMatch(/page/);
       expect(await errorText(client, "search_sales", { minAmount: 1.234 })).toBe("minAmount must be an amount in RM with at most two decimals (e.g. 250 or 99.9).");
       expect(await errorText(client, "search_sales", { minAmount: 500, maxAmount: 100 })).toBe("minAmount (500.00) is more than maxAmount (100.00).");
+    });
+
+    it("refuses a blank customer or item instead of silently searching everything; trims spaces around names", async () => {
+      const client = await connect();
+      expect(await errorText(client, "search_sales", { ...SEPTEMBER, customer: "   " })).toMatch(/customer/);
+      expect(await errorText(client, "search_sales", { ...SEPTEMBER, item: " \t " })).toMatch(/item/);
+      const padded = await structured(client, "search_sales", { ...SEPTEMBER, customer: "  customer 0001 ", item: " consult " });
+      expect(padded.criteria).toMatchObject({ customer: "customer 0001", item: "consult" });
+      expect((padded.search as { totalMatches: number }).totalMatches).toBe(2);
     });
   });
 

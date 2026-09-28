@@ -7,7 +7,7 @@ import { hasRole, type AppUser, type Role } from "./roles";
 
 /**
  * Route Handler guards. Wrap EVERY route handler (except the explicitly public ones listed in
- * `PUBLIC_PATHS`):
+ * `PUBLIC_PATHS` / `PUBLIC_EXACT_PATHS`, which authenticate themselves):
  *
  *   export const GET = withUser(async (request, context, user) => Response.json({ email: user.email }));
  *   export const POST = withRole("owner", async (request, { params }, user) => { … });

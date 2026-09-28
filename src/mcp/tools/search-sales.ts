@@ -67,8 +67,8 @@ export const searchSalesTool = defineTool({
   ].join("\n"),
   input: {
     ...filterInput,
-    customer: z.string().min(1).max(200).optional().describe("Part of the customer's name (any case)."),
-    item: z.string().min(1).max(200).optional().describe('Part of the name of an item sold on the sale (any case), e.g. "x-ray".'),
+    customer: z.string().trim().min(1).max(200).optional().describe("Part of the customer's name (any case)."),
+    item: z.string().trim().min(1).max(200).optional().describe('Part of the name of an item sold on the sale (any case), e.g. "x-ray".'),
     minAmount: z.number().optional().describe("Only sales whose revenue is at least this many RM (inclusive), e.g. 250 or 99.9."),
     maxAmount: z.number().optional().describe("Only sales whose revenue is at most this many RM (inclusive)."),
     sort: z.enum(SORTS).optional().describe("newest (default), oldest, largest or smallest revenue first."),
@@ -104,8 +104,8 @@ export const searchSalesTool = defineTool({
     }
     const { filter, covers } = await resolveFilter(context, input);
     const criteria = {
-      customer: input.customer?.trim() || null,
-      item: input.item?.trim() || null,
+      customer: input.customer ?? null,
+      item: input.item ?? null,
       minAmount,
       maxAmount,
       sort: input.sort ?? "newest",

@@ -45,6 +45,8 @@ yarn-error.log*
 # Claude Code: agent worktrees live here (would be committed as gitlinks) and per-user settings
 /.claude/worktrees/
 /.claude/settings.local.json
+# Project-scoped MCP servers (`claude mcp add --scope project …`) would store the MCP token here: public repo
+.mcp.json
 
 # typescript
 *.tsbuildinfo

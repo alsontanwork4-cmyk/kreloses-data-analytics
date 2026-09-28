@@ -6,13 +6,21 @@ export const FORBIDDEN_PATH = "/forbidden";
 
 /**
  * Paths reachable without an allow-listed session. Each entry also covers its sub-paths.
- * Anything added here MUST authenticate on its own (e.g. `/api/mcp`: bearer token,
- * `src/mcp/auth.ts`; a future `/api/cron` secret) — the proxy will not check it.
+ * Anything added here MUST authenticate on its own — the proxy will not check it.
  */
-export const PUBLIC_PATHS: readonly string[] = ["/login", "/auth", "/api/mcp"];
+export const PUBLIC_PATHS: readonly string[] = ["/login", "/auth"];
+
+/**
+ * Like `PUBLIC_PATHS`, but exactly these paths and NOT their sub-paths, so a route added under one
+ * later stays behind the sign-in gate. Each authenticates itself: `/api/mcp` with its bearer token
+ * (`src/mcp/auth.ts`); a future `/api/cron` would use a secret.
+ */
+export const PUBLIC_EXACT_PATHS: readonly string[] = ["/api/mcp"];
 
 export function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  return (
+    PUBLIC_EXACT_PATHS.includes(pathname) || PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))
+  );
 }
 
 export function isApiPath(pathname: string): boolean {
