@@ -1,0 +1,16 @@
+/**
+ * Plain-language definitions of the retention metrics (`getRetention`, ./retention.ts), part of
+ * `METRIC_DEFINITIONS` (./definitions.ts). Keep them in step with the SQL and with CONTEXT.md.
+ */
+export const RETENTION_DEFINITIONS = {
+  serviceVisit:
+    "Service visit: a customer on a clinic day (Asia/Kuala_Lumpur) with at least one sold service line (Kreloses item type \"service\", quantity above zero) on an active sale whose line items are synced. Several service lines or sales on the same day are one visit. Products, discount lines, returned (negative-quantity) lines, cancelled sales, walk-ins without a customer and sales whose line items are not synced yet never make a visit. A visit counts for every doctor credited with one of its service lines (a visit shared by two doctors counts for each); a visit whose service lines are credited only to other staff, a generic account or no staff still counts for the whole clinic and as a customer's return. With a branch filter only visits at the selected branches exist, for every retention figure (first visits and returns included).",
+  newVsReturning:
+    "New vs returning customers: the customers a doctor saw for a service visit in the period. New = the customer's first service visit in the synced history (with any doctor) falls in the period; returning = they had a service visit before the period. Percentages are of the customers seen, to one decimal. The whole-clinic row counts every customer with a service visit in the period. The synced history starts at the earliest synced sale (1 Jan 2024 once the history backfill is complete), so for a period starting less than 90 days after it, some \"new\" customers may have visited before — the page says so.",
+  yearlyCohort:
+    "Yearly cohort retention: a doctor's cohort for year Y = the customers with a service visit attributed to that doctor in calendar year Y. Retained with any doctor = those with any service visit in Y+1 (whoever it was credited to); retained with the same doctor = those with a service visit attributed to that doctor in Y+1. Rates are retained ÷ cohort size, to one decimal. The whole-clinic cohort is every customer with a service visit in Y. Cohorts ignore the date range (they are by calendar year) but follow the branch and doctor filters. A cohort is listed once Y+1 has started in the synced data, and is \"still accruing\" until the synced data reaches 31 December of Y+1.",
+  returnRate90:
+    "90-day return rate: of a doctor's service visits in the period, the share followed by another service visit of the same customer (with any doctor) 1 to 90 days later; a second sale on the same day is the same visit, not a return. A visit only counts once its 90 days have passed in the synced data (visit day + 90 on or before the latest synced day); more recent visits are \"not yet mature\", left out of the rate, and counted separately. The whole-clinic rate is over every service visit in the period.",
+  syncedThrough:
+    "Synced through: the latest clinic day with a synced sale at the selected branches. Returns and yearly cohorts are only seen up to this day.",
+} as const;

@@ -285,3 +285,38 @@ data the dashboard shows, so it is handled like a password. Replacing it (and re
 old one out of the new deployment; older deployments still hold the old token, so they must stay
 unreachable (Vercel Deployment Protection on, or deleted).
 _Avoid_: API key, password (the Kreloses password is a different thing)
+
+## Retention
+
+**Service visit**:
+A customer on a clinic day with at least one sold service line (Kreloses item type "service",
+quantity above zero) on an active sale whose line items are synced. Several service lines or
+sales on one day are one visit. Products, discount lines, returned lines, cancelled sales, walk-ins
+and sales whose line items are not synced yet never make a visit. A visit counts for every doctor
+credited with one of its service lines; a visit whose service lines are credited only to other
+staff, a generic account or no staff still counts for the whole clinic and as a return. With a
+branch filter, only visits at the selected branches exist.
+_Avoid_: Appointment, consultation (a visit need not include a consult), encounter
+
+**New / returning customer**:
+Among the customers a doctor saw for a service visit in a period: *new* if their first service
+visit in the synced history (with any doctor) falls in the period, otherwise *returning*. The
+synced history starts at the earliest synced sale, so "new" is approximate for periods starting
+less than 90 days after it.
+
+**Yearly cohort**:
+A doctor's cohort for year Y: the customers with a service visit attributed to that doctor in
+calendar year Y. *Retained (any doctor)*: any service visit in Y+1; *retained (same doctor)*: a
+service visit attributed to the same doctor in Y+1. A cohort is *still accruing* until the synced
+sales reach 31 December of Y+1.
+_Avoid_: Retention rate (without saying any/same doctor)
+
+**90-day return rate**:
+Of a doctor's service visits in a period, the share followed by another service visit of the same
+customer (any doctor) 1–90 days later. A visit is *not yet mature* — left out and counted
+separately — until its 90 days have passed in the synced sales.
+
+**Synced through**:
+The latest clinic day with a synced sale at the selected branches; returns and cohorts are only
+seen up to it.
+_Avoid_: Data as of (that is when a sync ran, per branch)

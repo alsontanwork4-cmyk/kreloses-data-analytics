@@ -79,7 +79,8 @@ export function HorizontalBarChart({
                 );
               }}
             />
-            <Bar dataKey="value" fill="var(--color-value)" radius={[0, 4, 4, 0]} maxBarSize={24} isAnimationActive={false}>
+            {/* minPointSize: Recharts drops a zero-value bar AND its label; a 2px stub keeps "0.0%" / "RM 0.00" visible. */}
+            <Bar dataKey="value" fill="var(--color-value)" radius={[0, 4, 4, 0]} maxBarSize={24} minPointSize={2} isAnimationActive={false}>
               <LabelList dataKey="valueLabel" position="right" className="fill-foreground" fontSize={12} />
             </Bar>
           </BarChart>
