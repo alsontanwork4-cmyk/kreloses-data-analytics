@@ -103,6 +103,8 @@ export async function syncNowAction(_previous: SyncNowState, formData: FormData)
   const result = await runSync(syncDeps(), String(formData.get("id") ?? ""), "manual", {
     dateRange: range,
     timeBudgetMs: syncTimeBudgetMs(),
+    // A month that stopped at the time limit carries on where it stopped.
+    resume: true,
   });
   revalidatePath(PATH);
   return { status: "done", ...describeSyncResult(result, monthLabel(month)) };

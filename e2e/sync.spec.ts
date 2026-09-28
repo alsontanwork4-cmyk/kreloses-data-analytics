@@ -71,7 +71,8 @@ test.describe("Sync now → Sync status → Overview", () => {
     await expect(september.getByTestId("sync-run-inserted")).toHaveText("11");
     await expect(september).toContainText("1 Sep 2026 – 30 Sep 2026");
     await expect(august.getByTestId("sync-run-seen")).toContainText("5");
-    await expect(page.getByTestId("branch-freshness")).toHaveText([/^Branch North.*\d{2}:\d{2}$/, /^Branch South.*\d{2}:\d{2}$/]);
+    // "Data as of" here is for today, so it depends on whether the synced month includes today.
+    await expect(page.getByTestId("branch-freshness")).toHaveText([/^Branch North/, /^Branch South/]);
 
     // Overview for September 2026.
     await page.goto("/overview?from=2026-09-01&to=2026-09-30");
@@ -83,7 +84,7 @@ test.describe("Sync now → Sync status → Overview", () => {
     await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-vs-previous")).toHaveText("+RM 3,555.40 (+154.6%) vs previous period");
     await expect(page.getByTestId("kpi-aov").getByTestId("kpi-vs-previous")).toHaveText("+RM 404.41 (+52.7%) vs previous period");
     // September 2025 was never synced: nothing to compare with.
-    await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-vs-last-year")).toHaveText("No sales to compare vs last year");
+    await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-vs-last-year")).toHaveText("No sales in the same period last year");
 
     const branches = page.getByTestId("branch-kpis");
     await expect(branches).toHaveCount(2);

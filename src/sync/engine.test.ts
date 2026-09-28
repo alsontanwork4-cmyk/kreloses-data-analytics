@@ -158,6 +158,36 @@ describe("Sync Engine", () => {
     ]);
   });
 
+  it("keeps the raw row current without counting a change when only fields the app does not use change", async () => {
+    const id = await h.connect(both);
+    const first = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+    const [before] = await db.sql`select fetched_at, sync_run_id::text from invoices where kreloses_sale_id = '700101'`;
+
+    h.fake.saleRows.find((row) => row.SaleId === 700101)!.InvoiceCategory = "Standard";
+    h.clock.advance(60_000);
+    const second = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+
+    expect(second.counts).toMatchObject({ inserted: 0, updated: 0, unchanged: 11 });
+    const [after] = await db.sql`
+      select fetched_at, sync_run_id::text, raw_header ->> 'InvoiceCategory' as category from invoices where kreloses_sale_id = '700101'
+    `;
+    expect(after).toEqual({ ...before, category: "Standard" });
+    expect(before).toEqual({ fetchedAt: expect.any(Date), syncRunId: first.runId });
+  });
+
+  it("stores a sale listed twice on one page once, from its first row", async () => {
+    const id = await h.connect(both);
+    const rows = h.fake.saleRows.filter((row) => row.SaleId === 700101 || row.SaleId === 700102);
+    const duplicate = { ...rows[0]!, NetAmount: "9.99" };
+    h.fake.intercept((request) =>
+      request.url.pathname === "/Sale/Get" ? Response.json({ Columns: [], Results: [...rows, duplicate], TotalCount: 3 }) : undefined,
+    );
+    const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+    expect(result.counts).toMatchObject({ inserted: 2, updated: 0 });
+    const [stored] = await db.sql`select net_amount from invoices where kreloses_sale_id = '700101'`;
+    expect(stored).toEqual({ netAmount: "1200.00" });
+  });
+
   it("shares rows between connections that see the same branch (Kreloses ids are global)", async () => {
     const northId = await h.connect(north, "North only");
     const bothId = await h.connect(both, "Both");
@@ -340,6 +370,22 @@ describe("Sync Engine", () => {
       ]);
     });
 
+    it("marks a run whose connection was deleted and that never finished as interrupted, once it is long gone", async () => {
+      const id = await h.connect(both);
+      const hoursAgo = (hours: number) => new Date(h.clock.now.getTime() - hours * 3_600_000);
+      await db.sql`
+        insert into sync_runs (connection_id, connection_label, mode, date_from, date_to, started_at)
+        values
+          (null, 'Deleted long ago', 'manual', '2026-09-01', '2026-09-30', ${hoursAgo(2)}),
+          (null, 'Deleted just now', 'manual', '2026-09-01', '2026-09-30', ${hoursAgo(0.01)})
+      `;
+      ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
+      const runs = Object.fromEntries((await listSyncRuns(db.sql)).map((run) => [run.connectionLabel, [run.status, run.errorCode]]));
+      expect(runs["Deleted long ago"]).toEqual(["failed", "interrupted"]);
+      // It may still be finishing in another server instance.
+      expect(runs["Deleted just now"]).toEqual(["running", null]);
+    });
+
     it("says so for a connection that does not exist", async () => {
       expect(await runSync(h.deps(), "424242", "manual", { dateRange: SEPTEMBER })).toEqual({ status: "not_found" });
     });
@@ -361,6 +407,29 @@ describe("Sync Engine", () => {
     const rest = ran(await runSync(h.deps(), id, "backfill", { dateRange: SEPTEMBER, pageSize: 4, startPage: 3 }));
     expect(rest).toMatchObject({ status: "succeeded", counts: { pages: 1, inserted: 3 } });
     expect(await db.sql`select 1 from invoices`).toHaveLength(11);
+  });
+
+  it("with resume, carries on from the latest stopped run of the same connection and dates", async () => {
+    const id = await h.connect(both);
+    h.fake.intercept((request) => {
+      if (request.url.pathname === "/Sale/Get") h.clock.advance(10_000);
+      return undefined;
+    });
+    const options = { dateRange: SEPTEMBER, pageSize: 4, timeBudgetMs: 15_000, resume: true };
+    expect(ran(await runSync(h.deps(), id, "manual", options))).toMatchObject({ status: "partial", counts: { pages: 2 } });
+
+    const pagesRequested = () =>
+      h.fake.requests
+        .filter((request) => request.url.pathname === "/Sale/Get")
+        .map((request) => (JSON.parse(request.body!) as { request: { RequestingPage: number } }).request.RequestingPage);
+    const before = pagesRequested().length;
+    const resumed = ran(await runSync(h.deps(), id, "manual", options));
+    expect(resumed).toMatchObject({ status: "succeeded", counts: { pages: 1, inserted: 3 } });
+    expect(pagesRequested().slice(before)).toEqual([3]);
+
+    // Once a run of those dates has finished, the next one starts from page 1 again.
+    const again = ran(await runSync(h.deps(), id, "manual", { ...options, timeBudgetMs: 60_000 }));
+    expect(again).toMatchObject({ status: "succeeded", counts: { pages: 3, unchanged: 11 } });
   });
 
   it("keeps synced sales when the connection is deleted", async () => {

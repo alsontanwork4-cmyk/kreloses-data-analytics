@@ -18,7 +18,12 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
   const filterState = parseFilter(await searchParams);
   const { filter } = filterState;
   const sql = getDb();
-  const [kpis, freshness] = await Promise.all([getOverviewKpis(sql, filter), getDataFreshness(sql)]);
+  // Freshness for the period shown, for every branch (so "nothing synced yet" is told apart from a
+  // branch filter that matches nothing).
+  const [kpis, freshness] = await Promise.all([
+    getOverviewKpis(sql, filter),
+    getDataFreshness(sql, { dateFrom: filter.dateFrom, dateTo: filter.dateTo }),
+  ]);
   const dataAsOf = new Map(freshness.map((branch) => [branch.branchId, branch.dataAsOf]));
 
   return (
@@ -62,7 +67,7 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
                           {branch.branchName}
                         </h3>
                         <p data-testid="branch-data-as-of" className="text-xs text-muted-foreground">
-                          {asOf ? `Data as of ${formatClinicDateTime(asOf)}` : "No complete sync yet"}
+                          {asOf ? `Data as of ${formatClinicDateTime(asOf)}` : "Not synced up to the end of this period yet"}
                         </p>
                       </div>
                       <KpiGrid kpis={branch} idPrefix="branch-kpi" size="sm" />

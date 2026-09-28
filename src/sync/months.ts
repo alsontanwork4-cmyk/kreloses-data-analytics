@@ -53,7 +53,7 @@ export function describeSyncResult(result: SyncResult, what: string): { tone: "o
     case "partial":
       return {
         tone: "warning",
-        message: `Stopped ${what} at the time limit after ${plural(result.counts.invoicesSeen, "invoice")}. Sync again to finish.`,
+        message: `Stopped ${what} at the time limit after ${plural(result.counts.invoicesSeen, "invoice")}. Sync ${what} again to carry on from where it stopped.`,
       };
     case "failed":
       return { tone: "error", message: `Sync of ${what} failed. ${result.error?.message ?? ""}`.trim() };

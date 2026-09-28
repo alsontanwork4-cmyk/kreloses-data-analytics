@@ -19,12 +19,9 @@ const MAX_WHOLE_DIGITS = 10;
  */
 export function parseAmountSen(value: unknown): number | null | undefined {
   if (value === null || value === undefined) return null;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return undefined;
-    const sen = Math.round(value * 100);
-    if (Math.abs(value * 100 - sen) > 1e-6 || Math.abs(sen) >= 10 ** (MAX_WHOLE_DIGITS + 2)) return undefined;
-    return sen === 0 ? 0 : sen;
-  }
+  // A JSON number is read through its decimal text (1199.5 → "1199.5"), never multiplied as a float;
+  // anything JavaScript cannot write as a plain 2-dp decimal ("1e+21", "0.30000000000000004") is refused.
+  if (typeof value === "number") return Number.isFinite(value) ? parseAmountSen(String(value)) : undefined;
   if (typeof value !== "string") return undefined;
 
   let text = value.trim();

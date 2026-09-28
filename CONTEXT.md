@@ -134,6 +134,8 @@ chosen by the owner), *nightly* and *history backfill* (later). Outcomes: succee
 _Avoid_: Job, import, refresh
 
 **Data as of**:
-For a branch, when the latest successful sync run that read that branch finished. Changes made in
-Kreloses after that are not in the numbers yet.
+For a branch and the period being looked at, when the latest successful sync run finished that read
+that branch up to the period's last day (or, if the period ends after the run started, up to the
+day the run started). Syncing an older month does not make the current month look fresh. Changes
+made in Kreloses after that time are not in the numbers yet.
 _Avoid_: Last updated, last refreshed

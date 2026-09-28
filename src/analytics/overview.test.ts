@@ -209,7 +209,7 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
 
   it("reports 'data as of' per branch: the latest succeeded run covering it", async () => {
     const asOf = async () =>
-      Object.fromEntries((await getDataFreshness(db.sql)).map((branch) => [branch.branchName, branch.dataAsOf?.toISOString() ?? null]));
+      Object.fromEntries((await getDataFreshness(db.sql, SEPTEMBER)).map((branch) => [branch.branchName, branch.dataAsOf?.toISOString() ?? null]));
 
     const later = new Date("2026-10-01T05:00:00Z");
     h.clock.now = later;
@@ -229,7 +229,7 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
     });
     expect(await asOf()).toEqual(freshness);
 
-    expect(await getDataFreshness(db.sql, { branchIds: [branchId.south] })).toEqual([
+    expect(await getDataFreshness(db.sql, { ...SEPTEMBER, branchIds: [branchId.south] })).toEqual([
       { branchId: branchId.south, branchName: "Branch South", dataAsOf: expect.any(Date) },
     ]);
   });

@@ -22,6 +22,7 @@ import {
   markInterruptedRuns,
   NO_COUNTS,
   recordProgress,
+  resumablePage,
   startRun,
   type SyncCheckpoint,
   type SyncCounts,
@@ -84,6 +85,12 @@ export interface SyncOptions {
   pageSize?: number;
   /** First page to read, when carrying on from a checkpoint. Default 1. */
   startPage?: number;
+  /**
+   * Carry on from the connection's latest run of exactly these dates if it stopped at its time
+   * budget (`partial`); otherwise start from page 1. Ignored when `startPage` is given. "Sync now"
+   * uses it, so "sync again" finishes a month rather than starting it over.
+   */
+  resume?: boolean;
   /** Retries per request for RateLimited / Transient. Default 3. */
   maxRetries?: number;
 }
@@ -130,6 +137,11 @@ export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMo
   if (attempt.status !== "acquired") return attempt;
   try {
     await markInterruptedRuns(deps.sql, connectionId, now());
+    let runOptions = options;
+    if (options.resume && options.startPage === undefined) {
+      const nextPage = await resumablePage(deps.sql, connectionId, range, options.pageSize ?? SALE_LIST_PAGE_SIZE);
+      if (nextPage !== null) runOptions = { ...options, startPage: nextPage };
+    }
     const startedAt = now();
     const runId = await startRun(deps.sql, {
       connectionId,
@@ -139,7 +151,7 @@ export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMo
       dateTo: range.to,
       startedAt,
     });
-    return await execute({ deps, connectionId, runId, range, options, now, deadline: startedAt.getTime() + budgetMs });
+    return await execute({ deps, connectionId, runId, range, options: runOptions, now, deadline: startedAt.getTime() + budgetMs });
   } finally {
     await releaseConnectionLease(deps.sql, attempt.lease);
   }

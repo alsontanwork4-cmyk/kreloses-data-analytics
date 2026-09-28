@@ -191,10 +191,11 @@ Supabase's default template.
   e.g. `count(*)::int`), and the session time zone is never relied on — use
   `at time zone 'Asia/Kuala_Lumpur'` explicitly.
 - **Money** (RM): columns are `numeric(12,2)`. Sums, discount spreads and other money arithmetic
-  happen in SQL (`numeric` is exact); values come back as strings like `'1234.50'`. If JS must do
-  money maths, convert to integer sen first (`Math.round(Number(value) * 100)` on a 2-dp string)
-  and back at the end. Never do floating-point arithmetic on money. Format for display only at the
-  edge (components/CSV).
+  happen in SQL (`numeric` is exact); values come back as strings like `'1234.50'` (type `Money`).
+  If JS must do money maths, use the one helper, `@/lib/money`: `moneyToSen("1234.50")` →
+  `123450` (exact, from the decimal string — never `Number(value) * 100`), integer arithmetic on sen,
+  then `senToMoney(sen)` → `"1234.50"`. No floating-point arithmetic on money anywhere. Format for
+  display only at the edge (components/CSV): `formatRinggit`, `formatRinggitChange`.
 
 ### Migrations
 
@@ -282,8 +283,9 @@ The only code that knows Kreloses exists. Import from `@/kreloses`:
 login(credentials: { email; password }, options?: ReaderOptions): Promise<KrelosesSession>
 listLocations(session): Promise<{ id: string; name: string }[]>   // POST /Report/GetFilter {report: 14}; never empty
 fetchFilterTemplate(session, report: number): Promise<unknown>     // raw filter template (uncached)
-listInvoices(session, { page, dateRange?, includeCancelled, pageSize? }): Promise<InvoicePage>
-  // POST /Sale/Get, one page: { invoices: KrelosesInvoice[], totalCount, page, rowCount, hasMore }
+listInvoices(session, { page, dateRange?, includeCancelled, pageSize?, previous? }): Promise<InvoicePage>
+  // POST /Sale/Get, one page: { invoices: KrelosesInvoice[], totalCount, page, rowCount, hasMore, span }
+  // pass the previous page back as `previous` for every page after the first
 readerOptionsFromEnv(process.env): ReaderOptions                   // real Kreloses, or the e2e fake outside production/Vercel
 session.postJson(path, body): Promise<unknown>                     // AJAX POST to a sea endpoint (#4: /Sale/Get)
 session.getHtml(path): Promise<string>                             // page load of a sea page (#5: /Sale/Overview/{id})
@@ -339,7 +341,10 @@ session.getHtml(path): Promise<string>                             // page load 
   the server-side date filter, the `SaleDate` format (`/Date(ms)/` is read as UTC; an ISO string
   without a zone as KL wall-clock time) and the sort order are unrecorded guesses, so the Reader
   also drops rows outside the range itself and returns `hasMore: false` once a whole page is
-  older than `dateRange.from` (the list is newest first).
+  older than `dateRange.from` — but only while every page seen so far is newest first (otherwise
+  it pages on to TotalCount). Paging that does not add up raises `LayoutChanged` instead of losing
+  sales: a page shorter than asked while TotalCount says more (a capped page size), more rows than
+  asked, or a page repeating the previous one's first/last sale (RequestingPage ignored).
 
 #### Live login check (real Kreloses)
 
@@ -353,7 +358,10 @@ could be data — non-identifier keys, more than 20 keys, or values that all sha
 `{Staff: {Ong: 1}}` — are shown only as `{<n keys>: …}`). It then reads ONE Sale List page (previous
 month up to today, all statuses) and prints only its structure: the filter template's status
 options, selection mechanism and date pattern, the response shape, TotalCount, which expected fields
-are present/missing (and other field names), `SaleDate` patterns (digits as `9`), how amounts are
+are present/missing (and other field names), `SaleDate` patterns (digits as `9`), how many sales
+fall in each 3-hour slot of the KL day as the Reader reads them (clinic hours showing at night would
+mean `/Date()/` holds KL time sent as UTC), whether rows come newest first, how many rows fall
+outside the requested range, how amounts are
 formatted (separators / parentheses / minus / currency: yes or no), the status labels seen, whether
 cancelled sales appear, and whether the Reader parses the page — never a name, amount, number or
 id. It is skipped unless credentials are set, needs no database, and is never part of `npm test`. Run it from a terminal without saving the password in
@@ -413,7 +421,8 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   `tax_amount`, `total_amount`, `payment_status`, `total_payments`, `total_refunds`
   (`numeric(12,2)`, Kreloses's sign), `raw_header` (jsonb), `sync_run_id`, `fetched_at` (when the
   header was last written, i.e. first read or changed — an identical re-read leaves the row alone),
-  `detail_fetched_at` (#5: line items need a (re)fetch when null or `< fetched_at`).
+  `detail_fetched_at` (#5: line items need a (re)fetch when null or `< fetched_at`). `raw_header`
+  is refreshed on its own when only unparsed fields change (no new `fetched_at`).
 - `sync_runs` — `connection_id`, `connection_label`, `mode` (`nightly` | `backfill` | `manual`),
   `status` (`running` | `succeeded` | `partial` | `failed`), `date_from` / `date_to`, `started_at`,
   `finished_at`, `counts` (`{pages, invoicesSeen, inserted, updated, unchanged}`), `checkpoint`
@@ -429,22 +438,29 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
 runSync(deps: SyncDeps, connectionId, mode: "manual" | "nightly" | "backfill", options?): Promise<SyncResult>
   // deps: { sql, login(id) → KrelosesSession, reader?, now?, sleep? }; syncDeps() (@/sync/context) in the app
   // options: { dateRange? (default: current clinic month), timeBudgetMs? (default 200 s),
-  //            pageSize?, startPage? (resume), maxRetries? (default 3) }
+  //            pageSize?, startPage?, resume? (carry on from the latest partial run of the same
+  //            connection + dates), maxRetries? (default 3) }
   // → { status: "succeeded" | "partial" | "failed", runId, counts, error? } | { status: "busy", heldFor, until } | { status: "not_found" }
 listSyncRuns(sql, { limit? }): Promise<SyncRun[]>   // newest first, for the Sync status page
 ```
 
 A run takes the connection's lease (else `busy`, no run row), marks the connection's stale
-`running` runs `interrupted`, logs in, stores the visible branches (and the connection's login
+`running` runs `interrupted` (and runs of deleted connections left `running` for over an hour),
+logs in, stores the visible branches (and the connection's login
 status), then reads Sale List pages serially (the Reader's polite delay). Each page is upserted
 **idempotently** (`on conflict … do update … where (…) is distinct from (…)`: a re-run writes
-nothing and counts `unchanged`) together with the run's counts and checkpoint in one transaction.
+nothing and counts `unchanged`; a change only in fields the app does not parse refreshes
+`raw_header` without counting as a change or moving `fetched_at`) together with the run's counts
+and checkpoint in one transaction. Each page is handed back to the Reader as `previous`, so paging
+that does not advance fails the run.
 Before each page it checks the time budget and stops as `partial` with a checkpoint. Errors:
 `AuthFailed` and `LayoutChanged` fail the run at once (AuthFailed and key problems also mark the
 connection failed); an expired session gets one fresh login per run; `RateLimited` / `Transient`
 are retried with backoff (5 s, 15 s, 45 s, or Retry-After) while the budget allows. Every run ends
 with a `sync_runs` row, failures included (`describeSyncFailure` words the error).
-"Sync now" (Connections page, owner only) runs `manual` for one chosen month (`@/sync/months`).
+"Sync now" (Connections page, owner only) runs `manual` for one chosen month (`@/sync/months`)
+with `resume: true`, so syncing a month that stopped at the time limit again carries on from its
+checkpoint.
 
 **Extension points.** #5 (line items): after `saveInvoicePage` in `execute()` (`engine.ts`), fetch
 `getInvoice` for the page's invoices with `detail_fetched_at is null or detail_fetched_at <
@@ -466,7 +482,9 @@ getOverviewKpis(sql, filter): Promise<OverviewKpis>
   // { period, previousPeriod, lastYear, total: KpiSet, branches: (KpiSet & { branchId, branchName })[] }
   // KpiSet = { revenue: Kpi<Money>, invoices: Kpi<number>, customers: Kpi<number>, aovPerCustomer: Kpi<Money | null> }
   // Kpi<T> = { value, previousPeriod: { base, change, changePercent }, lastYear: { … } }  (changePercent null when base is 0)
-getDataFreshness(sql, { branchIds? }?): Promise<{ branchId, branchName, dataAsOf: Date | null }[]>
+getDataFreshness(sql, { dateFrom?, dateTo?, branchIds? }?): Promise<{ branchId, branchName, dataAsOf: Date | null }[]>
+  // latest succeeded run covering the branch whose dates include least(dateTo, the day it started);
+  // no dateTo = "now" (runs that read the day they ran). An old month never makes today look fresh.
 METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); #17's MCP answers quote them
 ```
 

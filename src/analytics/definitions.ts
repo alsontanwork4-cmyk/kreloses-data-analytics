@@ -17,7 +17,7 @@ export const METRIC_DEFINITIONS = {
   change:
     "Change: the value minus the comparison value; the percentage is the change divided by the comparison value, rounded to one decimal place, and absent when the comparison value is zero.",
   dataAsOf:
-    "Data as of: for each branch, when the latest successful sync that read that branch finished. Sales changed in Kreloses after that time are not included yet.",
+    "Data as of: for each branch, when the latest successful sync finished that read that branch up to the last day of the period (or, for a period that ends later, up to the day the sync ran). Syncing an older month does not make a later period fresher. Sales changed in Kreloses after that time are not included yet.",
 } as const;
 
 export type MetricName = keyof typeof METRIC_DEFINITIONS;

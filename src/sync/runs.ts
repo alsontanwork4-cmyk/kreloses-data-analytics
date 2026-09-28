@@ -93,8 +93,16 @@ export async function startRun(
 }
 
 /**
- * Marks the connection's runs that are still `running` as failed/`interrupted`. Only call it while
- * holding the connection's lease: then no run of that connection can really be running.
+ * No run lasts anywhere near this long (its time budget is at most 280 s, its lease 2 min more),
+ * so a `running` row this old belongs to a server that died.
+ */
+const ORPHANED_AFTER_MS = 60 * 60_000;
+
+/**
+ * Marks runs that are still `running` but cannot be as failed/`interrupted`: this connection's
+ * (only call it while holding the connection's lease: then none of its runs can really be
+ * running), and runs whose connection was deleted once they are over an hour old (a younger one
+ * may still be finishing on another server instance).
  */
 export async function markInterruptedRuns(sql: Sql, connectionId: string, now: Date): Promise<void> {
   await sql`
@@ -103,8 +111,32 @@ export async function markInterruptedRuns(sql: Sql, connectionId: string, now: D
       finished_at = greatest(started_at, ${now}),
       error_code = 'interrupted',
       error = 'This run stopped before it finished (the server restarted or ran out of time). The next sync reads its range again.'
-    where connection_id = ${connectionId} and status = 'running'
+    where status = 'running'
+      and (
+        connection_id = ${connectionId}
+        or (connection_id is null and started_at < ${new Date(now.getTime() - ORPHANED_AFTER_MS)})
+      )
   `;
+}
+
+/**
+ * The page to carry on from when the connection's latest run of exactly these dates stopped at its
+ * time budget (`partial`, same page size); null otherwise (the next run starts from page 1).
+ */
+export async function resumablePage(
+  sql: Sql,
+  connectionId: string,
+  range: { from: IsoDate; to: IsoDate },
+  pageSize: number,
+): Promise<number | null> {
+  const [latest] = await sql<{ status: SyncRunStatus; checkpoint: SyncCheckpoint | null }[]>`
+    select status, checkpoint from sync_runs
+    where connection_id = ${connectionId} and date_from = ${range.from} and date_to = ${range.to}
+    order by started_at desc, id desc
+    limit 1
+  `;
+  if (latest?.status !== "partial" || !latest.checkpoint || latest.checkpoint.pageSize !== pageSize) return null;
+  return latest.checkpoint.nextPage;
 }
 
 export async function recordProgress(sql: Queryable, runId: string, counts: SyncCounts, checkpoint: SyncCheckpoint | null): Promise<void> {

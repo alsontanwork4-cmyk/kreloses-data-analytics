@@ -37,12 +37,15 @@ export default async function SyncStatusPage() {
           <h2 id="freshness-heading" className="text-base font-medium">
             Data as of
           </h2>
+          <p className="text-xs text-muted-foreground">
+            When the latest successful sync that read up to the day it ran finished (a sync of an older month does not count).
+          </p>
           <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {freshness.map((branch) => (
               <li key={branch.branchId} data-testid="branch-freshness" className="rounded-lg border bg-card px-3 py-2 text-sm">
                 <span className="font-medium">{branch.branchName}</span>
                 <span className="block text-muted-foreground">
-                  {branch.dataAsOf ? formatClinicDateTime(branch.dataAsOf) : "No complete sync yet"}
+                  {branch.dataAsOf ? formatClinicDateTime(branch.dataAsOf) : "Not synced up to today yet"}
                 </span>
               </li>
             ))}
@@ -106,7 +109,9 @@ function RunCard({ run }: { run: SyncRun }) {
         </Item>
       </dl>
       {run.status === "partial" && run.checkpoint ? (
-        <p className="text-muted-foreground">Stopped at its time limit before page {run.checkpoint.nextPage}; sync again to read the rest.</p>
+        <p className="text-muted-foreground">
+          Stopped at its time limit before page {run.checkpoint.nextPage}; the next sync of these dates carries on from there.
+        </p>
       ) : null}
       {run.error ? (
         <p data-testid="sync-run-error" className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-destructive">

@@ -5,7 +5,9 @@ import { senToMoney } from "@/lib/money";
 /**
  * The Sync Engine's writes. Every upsert is idempotent: a row is only written when a value
  * actually changed (`on conflict … do update … where (…) is distinct from (…)`), so reading the
- * same Kreloses data twice changes nothing — not even timestamps.
+ * same Kreloses data twice changes nothing — not even timestamps. For invoices, only the parsed
+ * header columns count as a change (new `fetched_at` / `sync_run_id`); `raw_header` alone is kept
+ * current silently.
  */
 
 /** Stores the branches a connection can see (name, and which connection saw it last). */
@@ -36,8 +38,12 @@ export async function saveInvoicePage(
   sql: Queryable,
   values: { runId: string; connectionId: string; invoices: KrelosesInvoice[]; fetchedAt: Date },
 ): Promise<PageWrite> {
-  // A sale can appear twice when rows shift between pages; keep the first (newest) reading.
-  const invoices = [...new Map(values.invoices.map((invoice) => [invoice.saleId, invoice])).values()];
+  // A sale should appear once per page; if it appears twice, keep its first row (both come from
+  // the same response). Across pages (rows shift when a sale is added mid-listing) the later page
+  // is written last, so the newest reading wins.
+  const firstRows = new Map<string, KrelosesInvoice>();
+  for (const invoice of values.invoices) if (!firstRows.has(invoice.saleId)) firstRows.set(invoice.saleId, invoice);
+  const invoices = [...firstRows.values()];
   if (invoices.length === 0) return { inserted: 0, updated: 0, unchanged: values.invoices.length };
 
   // Branches first seen on an invoice (normally already stored from the location list).
@@ -69,7 +75,16 @@ export async function saveInvoicePage(
     total_refunds: senToMoney(invoice.totalRefundsSen),
     raw_header: invoice.raw,
   }));
-  const written = await sql<{ inserted: boolean }[]>`
+  const changed = sql`(
+      i.sale_number, i.branch_id, i.customer_id, i.sale_at, i.status, i.status_name,
+      i.gross_amount, i.discount_amount, i.net_amount, i.tax_amount, i.total_amount,
+      i.payment_status, i.total_payments, i.total_refunds
+    ) is distinct from (
+      excluded.sale_number, excluded.branch_id, excluded.customer_id, excluded.sale_at, excluded.status, excluded.status_name,
+      excluded.gross_amount, excluded.discount_amount, excluded.net_amount, excluded.tax_amount, excluded.total_amount,
+      excluded.payment_status, excluded.total_payments, excluded.total_refunds
+    )`;
+  const written = await sql<{ inserted: boolean; changed: boolean }[]>`
     insert into invoices as i (
       kreloses_sale_id, sale_number, branch_id, customer_id, sale_at, status, status_name,
       gross_amount, discount_amount, net_amount, tax_amount, total_amount,
@@ -102,21 +117,15 @@ export async function saveInvoicePage(
       total_payments = excluded.total_payments,
       total_refunds = excluded.total_refunds,
       raw_header = excluded.raw_header,
-      sync_run_id = excluded.sync_run_id,
-      fetched_at = excluded.fetched_at
-    where (
-      i.sale_number, i.branch_id, i.customer_id, i.sale_at, i.status, i.status_name,
-      i.gross_amount, i.discount_amount, i.net_amount, i.tax_amount, i.total_amount,
-      i.payment_status, i.total_payments, i.total_refunds
-    ) is distinct from (
-      excluded.sale_number, excluded.branch_id, excluded.customer_id, excluded.sale_at, excluded.status, excluded.status_name,
-      excluded.gross_amount, excluded.discount_amount, excluded.net_amount, excluded.tax_amount, excluded.total_amount,
-      excluded.payment_status, excluded.total_payments, excluded.total_refunds
-    )
-    returning (xmax = 0) as inserted
+      -- Only a change in the columns above counts as a change (and makes #5 re-read the details);
+      -- a change in fields the app does not read just refreshes raw_header.
+      sync_run_id = case when ${changed} then excluded.sync_run_id else i.sync_run_id end,
+      fetched_at = case when ${changed} then excluded.fetched_at else i.fetched_at end
+    where ${changed} or i.raw_header is distinct from excluded.raw_header
+    returning (xmax = 0) as inserted, sync_run_id = ${values.runId}::bigint as changed
   `;
   const inserted = written.filter((row) => row.inserted).length;
-  const updated = written.length - inserted;
+  const updated = written.filter((row) => !row.inserted && row.changed).length;
   return { inserted, updated, unchanged: values.invoices.length - inserted - updated };
 }
 

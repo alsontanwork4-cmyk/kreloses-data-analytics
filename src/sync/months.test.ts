@@ -30,5 +30,10 @@ describe("Sync now: months and messages", () => {
       describeSyncResult({ status: "failed", runId: "1", counts, error: { code: "transient", message: "Kreloses could not be reached." } }, "September 2026"),
     ).toEqual({ tone: "error", message: "Sync of September 2026 failed. Kreloses could not be reached." });
     expect(describeSyncResult({ status: "busy", heldFor: "sync", until: new Date() }, "x").message).toMatch(/already running/);
+    // "Sync now" resumes a stopped month, so this is what really happens next.
+    expect(describeSyncResult({ status: "partial", runId: "1", counts: { ...counts, invoicesSeen: 8 } }, "September 2026")).toEqual({
+      tone: "warning",
+      message: "Stopped September 2026 at the time limit after 8 invoices. Sync September 2026 again to carry on from where it stopped.",
+    });
   });
 });
