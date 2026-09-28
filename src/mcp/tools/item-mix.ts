@@ -9,6 +9,7 @@ import {
   getTopItemsByDoctor,
   METRIC_DEFINITIONS,
   MIX_BUCKET_LABELS,
+  MIX_COMPARISON_THRESHOLD_POINTS,
   MIX_BUCKETS,
   type ClinicMixBucket,
   type DateRange,
@@ -113,7 +114,7 @@ export const itemMixTool = defineTool({
   name: "item_mix",
   title: "Service mix",
   description: [
-    `Service mix per doctor: the dashboard's Mix page as data. For a period (clinic days, Asia/Kuala_Lumpur; default month to date) and optionally some branches and doctors (by id or name): each doctor's revenue per service-mix group (${joinAnd(MIX_BUCKETS.map((bucket) => MIX_BUCKET_LABELS[bucket]))}) and its share compared with all doctors together (above / below at ±5 points), each doctor's top items, and surgery and consult revenue per doctor. groups narrows the answer to some groups and ranks top items within them. Read-only. Every result states data as of per branch, and carries every definition in full.`,
+    `Service mix per doctor: the dashboard's Mix page as data. For a period (clinic days, Asia/Kuala_Lumpur; default month to date) and optionally some branches and doctors (by id or name): each doctor's revenue per service-mix group (${joinAnd(MIX_BUCKETS.map((bucket) => MIX_BUCKET_LABELS[bucket]))}) and its share compared with all doctors together (above / below at ±${MIX_COMPARISON_THRESHOLD_POINTS} points), each doctor's top items, and surgery and consult revenue per doctor. groups narrows the answer to some groups and ranks top items within them. Read-only. Every result states data as of per branch, and carries every definition in full.`,
     "Definitions (the dashboard's own; in full in every result):",
     `- ${definitionExcerpt("revenue", 2)}`,
     `- ${METRIC_DEFINITIONS.serviceMix}`,
@@ -196,7 +197,11 @@ function summarise(mix: ServiceMix, covers: FilterEcho, groups: MixBucket[] | nu
       ? `${formatRinggit(unmapped)} is on items no rule recognises (Unmapped); the owner can assign them to groups in Settings → Items.`
       : "",
     pending.invoices > 0
-      ? `${plural(pending.invoices, "sale")} (${formatRinggit(pending.revenue)}) ${pending.invoices === 1 ? "has" : "have"} line items not synced yet: ${pending.invoices === 1 ? "its" : "their"} revenue is in the whole clinic's "${MIX_BUCKET_LABELS.pending}" bucket and in no doctor's mix yet.`
+      ? `${plural(pending.invoices, "sale")} (${formatRinggit(pending.revenue)}) ${pending.invoices === 1 ? "has" : "have"} line items not synced yet: ${pending.invoices === 1 ? "its" : "their"} revenue is ` +
+        // With groups, the "not synced yet" bucket is not in the answer: say what it means rather than point at it.
+        (groups
+          ? `counted in the whole clinic's ${formatRinggit(mix.clinic.revenue)} but not yet in any service group or doctor's mix, so the group figures leave ${pending.invoices === 1 ? "it" : "them"} out.`
+          : `in the whole clinic's "${MIX_BUCKET_LABELS.pending}" bucket and in no doctor's mix yet.`)
       : "",
   ]
     .filter(Boolean)

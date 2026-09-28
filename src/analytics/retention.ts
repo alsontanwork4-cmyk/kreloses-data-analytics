@@ -31,7 +31,7 @@ const LIMITED_HISTORY_DAYS = 90;
  * A cohort year is only `partialYear` when the synced history starts after this day of January: a
  * backfill from 1 Jan whose first sale falls a few days later (New Year holidays) is a full year.
  */
-const FULL_YEAR_HISTORY_BY_DAY = 7;
+export const FULL_YEAR_HISTORY_BY_DAY = 7;
 const ALL_BRANCHES: BranchScope = { all: true };
 
 /** New vs returning customers in the period (`METRIC_DEFINITIONS.newVsReturning`). */

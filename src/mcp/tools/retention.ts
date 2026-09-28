@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getRetention, METRIC_DEFINITIONS, type Retention } from "@/analytics";
+import { FULL_YEAR_HISTORY_BY_DAY, getRetention, METRIC_DEFINITIONS, type Retention } from "@/analytics";
 import { formatIsoDate } from "@/filters";
 
 import { defineTool } from "./define";
@@ -27,7 +27,9 @@ const figures = {
       z.object({
         year: count,
         accruing: z.boolean().describe("The next year is not over in the synced data yet: more customers may still come back"),
-        partialYear: z.boolean().describe("The synced history starts after 7 January of this year: customers seen earlier in it are missing"),
+        partialYear: z
+          .boolean()
+          .describe(`The synced history starts after ${FULL_YEAR_HISTORY_BY_DAY} January of this year: customers seen earlier in it are missing`),
         customers: count.describe("Cohort size"),
         retainedAnyDoctor: count,
         retainedAnyDoctorPercent: rate,
@@ -66,10 +68,10 @@ export const retentionTool = defineTool({
   name: "retention",
   title: "Customer retention",
   description: [
-    "Customer retention: the dashboard's Retention page as data, per doctor and for the whole clinic, counted in service visits: new vs returning customers in the period, the 90-day return rate (recent visits whose 90 days have not passed are \"not yet mature\" and left out), and yearly cohorts retained with any doctor and with the same doctor the next year (flagged accruing while that year is not over, partial year when the synced history starts after 7 January). For a period (clinic days, Asia/Kuala_Lumpur; default month to date; cohorts ignore it) and optionally some branches and doctors (by id or name). Read-only. Every result states data as of per branch, and carries every definition in full.",
+    `Customer retention: the dashboard's Retention page as data, per doctor and for the whole clinic, counted in service visits: new vs returning customers in the period, the 90-day return rate (recent visits whose 90 days have not passed are "not yet mature" and left out), and yearly cohorts retained with any doctor and with the same doctor the next year (flagged accruing while that year is not over, partial year when the synced history starts after ${FULL_YEAR_HISTORY_BY_DAY} January). For a period (clinic days, Asia/Kuala_Lumpur; default month to date; cohorts ignore it) and optionally some branches and doctors (by id or name). Read-only. Every result states data as of per branch, and carries every definition in full.`,
     "Definitions (the dashboard's own; in full in every result):",
     `- ${METRIC_DEFINITIONS.serviceVisit}`,
-    `- ${definitionExcerpt("yearlyCohort", 3)}`,
+    `- ${definitionExcerpt("yearlyCohort", 2)}`,
   ].join("\n"),
   input: filterInput,
   output: { covers: filterOutput, retention: retentionOutput },

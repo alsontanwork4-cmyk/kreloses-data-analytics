@@ -88,7 +88,16 @@ export {
   type ItemsPerInvoiceTrend,
 } from "./upsell";
 export { UPSELL_METRICS } from "./upsell-definitions";
-export { getRetention, type DoctorRetention, type NewVsReturning, type NinetyDayReturns, type Retention, type RetentionFigures, type YearCohort } from "./retention";
+export {
+  FULL_YEAR_HISTORY_BY_DAY,
+  getRetention,
+  type DoctorRetention,
+  type NewVsReturning,
+  type NinetyDayReturns,
+  type Retention,
+  type RetentionFigures,
+  type YearCohort,
+} from "./retention";
 export { getDataFreshness, type BranchFreshness } from "./freshness";
 export { comparisonPeriods, type DateRange } from "./periods";
 export { METRIC_DEFINITIONS, type MetricName } from "./definitions";
