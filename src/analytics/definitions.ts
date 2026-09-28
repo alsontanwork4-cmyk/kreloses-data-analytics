@@ -43,6 +43,10 @@ export const METRIC_DEFINITIONS = {
     "Change: the value minus the comparison value; the percentage is the change divided by the comparison value, rounded to one decimal place, and absent when the comparison value is zero.",
   dataAsOf:
     "Data as of: for each branch, when the latest sync finished that read that branch's whole sale list (succeeded, or only some invoice pages could not be opened) up to the last day of the period (or, for a period that ends later, up to the day the sync ran). Syncing an older month does not make a later period fresher. Sales changed in Kreloses after that time are not included yet.",
+  salesSearch:
+    "Sales search: individual active sales (invoices) on clinic days (Asia/Kuala_Lumpur) in the period and branches that match every criterion given; cancelled sales are never found. A sale's revenue is its net amount (after discounts): the sum of its credited lines. Its credits split that revenue by the staff member (or group) each line is credited to, so they add up to it. With a doctor filter, a sale matches when at least one of its lines is credited to one of those doctors, and the whole sale is still shown. A sale whose line items are not synced yet has one \"line items not synced yet\" credit for its whole net amount and cannot match a doctor or item search. Customer and item searches match part of the name in any case (walk-in sales have no customer; discount lines are not items); amount limits apply to the sale's revenue and include the limits.",
+  lastSyncRun:
+    "Last sync run: for each Kreloses connection, what happened to its most recent sync: succeeded (read its whole date range), stopped at its time limit (the next sync of those dates carries on), some invoice pages missing (everything else was read; those sales count as \"line items not synced yet\" until a later sync reads them), failed (with the reason) or still running; and whether the connection's latest login to Kreloses worked.",
 } as const;
 
 export type MetricName = keyof typeof METRIC_DEFINITIONS;
