@@ -68,28 +68,28 @@ test.describe("Item groups → Mix page", () => {
     const revenue = page.getByTestId("mix-revenue");
     const mixColumns = ["name", "revenue", "consult", "surgery", "diagnostics", "hospital_treatment", "preventive", "unmapped"];
     expect(await tableText(revenue, mixColumns)).toEqual([
-      ["Dr Bravo Brown", "RM 3,352.00", "RM 176.15", "RM 700.00", "RM 0.00", "RM 1,423.31", "RM 1,052.54", "RM 0.00"],
+      ["Dr Bravo Brown", "RM 3,252.00", "RM 176.15", "RM 636.36", "RM 0.00", "RM 1,386.95", "RM 1,052.54", "RM 0.00"],
       ["Dr Alpha Anderson", "RM 1,654.35", "RM 144.00", "RM 864.00", "RM 0.00", "RM 0.00", "RM 300.50", "RM 153.85"],
       ["Dr Delta", "RM 480.00", "RM 84.37", "RM 0.00", "RM 515.63", "RM 0.00", "RM 0.00", "RM 0.00"],
-      ["All doctors (clinic average)", "RM 5,486.35", "RM 404.52", "RM 1,564.00", "RM 515.63", "RM 1,423.31", "RM 1,353.04", "RM 153.85"],
-      ["Whole clinic", "RM 5,855.40", "RM 404.52", "RM 1,564.00", "RM 515.63", "RM 1,472.04", "RM 1,353.04", "RM 253.75"],
+      ["All doctors (clinic average)", "RM 5,386.35", "RM 404.52", "RM 1,500.36", "RM 515.63", "RM 1,386.95", "RM 1,353.04", "RM 153.85"],
+      ["Whole clinic", "RM 5,755.40", "RM 404.52", "RM 1,500.36", "RM 515.63", "RM 1,435.68", "RM 1,353.04", "RM 253.75"],
     ]);
     await expect(page.getByTestId("unmapped-note")).toContainText("RM 253.75 in this period is on items no rule recognises");
     await expect(page.getByTestId("mix-chart").locator(".recharts-bar-rectangle").first()).toBeVisible();
-    await expect(page.getByRole("img", { name: /^Revenue by service group: Dr Bravo Brown RM 3,352\.00 \(Consult RM 176\.15, Surgery RM 700\.00/ })).toBeVisible();
+    await expect(page.getByRole("img", { name: /^Revenue by service group: Dr Bravo Brown RM 3,252\.00 \(Consult RM 176\.15, Surgery RM 636\.36/ })).toBeVisible();
 
     const csv = await downloadCsv(page, revenue);
     expect(csv.name).toBe("mix-revenue_2026-09-01_to_2026-09-30.csv");
     expect(csv.text.split("\r\n").slice(0, 2)).toEqual([
       "﻿Doctor,Revenue (RM),Consult (RM),Surgery (RM),Diagnostics (RM),Hospital & treatment (RM),Rehab & TCVM (RM),Medicines & supplements (RM),Preventive (RM),Retail & other (RM),Unmapped (RM)",
-      "Dr Bravo Brown,3352.00,176.15,700.00,0.00,1423.31,0.00,0.00,1052.54,0.00,0.00",
+      "Dr Bravo Brown,3252.00,176.15,636.36,0.00,1386.95,0.00,0.00,1052.54,0.00,0.00",
     ]);
 
     // Compared with all doctors together: shares and marked differences (±5 points).
     const share = page.getByTestId("mix-share");
     const alpha = rowWhere(share, "name", "Dr Alpha Anderson");
     await expect(cell(alpha, "surgery")).toContainText("52.2%");
-    await expect(cell(alpha, "surgery")).toContainText("+23.7 pts");
+    await expect(cell(alpha, "surgery")).toContainText("+24.3 pts");
     await expect(cell(alpha, "surgery").locator("[data-comparison]")).toHaveAttribute("data-comparison", "above");
     await expect(cell(alpha, "consult").locator("[data-comparison]")).toHaveAttribute("data-comparison", "in_line");
     await expect(cell(rowWhere(share, "name", "Dr Bravo Brown"), "surgery").locator("[data-comparison]")).toHaveAttribute("data-comparison", "below");
@@ -97,18 +97,18 @@ test.describe("Item groups → Mix page", () => {
     const shareCsv = (await downloadCsv(page, share)).text.split("\r\n");
     const shareHeader = shareCsv[0]!.replace("﻿", "").split(",");
     const alphaCsv = Object.fromEntries(shareCsv.find((line) => line.startsWith("Dr Alpha Anderson,"))!.split(",").map((value, index) => [shareHeader[index], value]));
-    expect([alphaCsv["Surgery (%)"], alphaCsv["Surgery vs average (points)"], alphaCsv["Surgery vs average"]]).toEqual(["52.2", "23.70", "Above"]);
-    expect([alphaCsv["Consult (%)"], alphaCsv["Consult vs average (points)"], alphaCsv["Consult vs average"]]).toEqual(["8.7", "1.30", "In line"]);
+    expect([alphaCsv["Surgery (%)"], alphaCsv["Surgery vs average (points)"], alphaCsv["Surgery vs average"]]).toEqual(["52.2", "24.30", "Above"]);
+    expect([alphaCsv["Consult (%)"], alphaCsv["Consult vs average (points)"], alphaCsv["Consult vs average"]]).toEqual(["8.7", "1.20", "In line"]);
     const averageCsv = shareCsv.find((line) => line.startsWith("All doctors (clinic average),"))!.split(",");
-    expect(averageCsv[shareHeader.indexOf("Surgery (%)")]).toBe("28.5");
+    expect(averageCsv[shareHeader.indexOf("Surgery (%)")]).toBe("27.9");
     expect(averageCsv[shareHeader.indexOf("Surgery vs average")]).toBe("");
 
     // Surgery and consult revenue per doctor; top items per doctor (N switchable).
     expect(await tableText(page.getByTestId("service-lines"), ["name", "surgery", "surgery-share", "consult", "consult-share"])).toEqual([
-      ["Dr Bravo Brown", "RM 700.00", "20.9%", "RM 176.15", "5.3%"],
+      ["Dr Bravo Brown", "RM 636.36", "19.6%", "RM 176.15", "5.4%"],
       ["Dr Alpha Anderson", "RM 864.00", "52.2%", "RM 144.00", "8.7%"],
       ["Dr Delta", "RM 0.00", "0.0%", "RM 84.37", "17.6%"],
-      ["All revenue", "RM 1,564.00", "26.7%", "RM 404.52", "6.9%"],
+      ["All revenue", "RM 1,500.36", "26.1%", "RM 404.52", "7.0%"],
     ]);
     await page.getByRole("navigation", { name: "Top items per doctor" }).getByRole("link", { name: "Top 3" }).click();
     await expect(page).toHaveURL(/[?&]top=3/);
@@ -116,7 +116,7 @@ test.describe("Item groups → Mix page", () => {
     expect(await tableText(page.getByTestId("top-items"), ["doctor", "rank", "item", "group", "revenue"])).toEqual([
       ["Dr Bravo Brown", "1", "Dental scaling", "Preventive", "RM 1,052.54"],
       ["Dr Bravo Brown", "2", "Hospitalisation (per day)", "Hospital & treatment", "RM 1,023.31"],
-      ["Dr Bravo Brown", "3", "Surgery - Wound stitching", "Surgery", "RM 700.00"],
+      ["Dr Bravo Brown", "3", "Surgery - Wound stitching", "Surgery", "RM 636.36"],
       ["Dr Alpha Anderson", "1", "Surgery - Spay", "Surgery", "RM 864.00"],
       ["Dr Alpha Anderson", "2", 'Antibiotic tablets "Amoxi" {250mg}', "Medicines & supplements", "RM 192.00"],
       ["Dr Alpha Anderson", "3", "Deworming tablets", "Preventive", "RM 180.50"],
@@ -127,12 +127,12 @@ test.describe("Item groups → Mix page", () => {
     // --- The Doctors page: revenue per working day; the Overview: surgery and consult KPIs. ---
     await page.goto(`/doctors?${SEPTEMBER}`);
     expect(await tableText(page.getByTestId("doctor-ranking"), ["doctor", "working-days", "per-working-day"])).toEqual([
-      ["Dr Bravo Brown", "3", "RM 1,117.33"],
+      ["Dr Bravo Brown", "3", "RM 1,084.00"], // 3,252.00 ÷ 3
       ["Dr Alpha Anderson", "1", "RM 1,654.35"],
       ["Dr Delta Not in staff list", "1", "RM 480.00"],
     ]);
     await page.goto(`/overview?${SEPTEMBER}`);
-    await expect(page.getByTestId("kpi-surgery").getByTestId("kpi-value")).toHaveText("RM 1,564.00");
+    await expect(page.getByTestId("kpi-surgery").getByTestId("kpi-value")).toHaveText("RM 1,500.36");
     await expect(page.getByTestId("kpi-consult").getByTestId("kpi-value")).toHaveText("RM 404.52");
     await expect(page.getByTestId("service-lines-pending-note")).toHaveCount(0);
     // A sale whose line items are not synced yet is in revenue but in neither service line: the page says so.
@@ -141,8 +141,8 @@ test.describe("Item groups → Mix page", () => {
     await pendAt(1);
     try {
       await page.reload();
-      await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-value")).toHaveText("RM 5,855.40");
-      await expect(page.getByTestId("kpi-surgery").getByTestId("kpi-value")).toHaveText("RM 1,564.00");
+      await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-value")).toHaveText("RM 5,755.40");
+      await expect(page.getByTestId("kpi-surgery").getByTestId("kpi-value")).toHaveText("RM 1,500.36");
       await expect(page.getByTestId("service-lines-pending-note")).toHaveText(
         "1 invoice in this period (RM 2,300.00) has line items not synced yet: it is in revenue, invoices and customers, but not yet in surgery or consult revenue. The next sync reads it.",
       );

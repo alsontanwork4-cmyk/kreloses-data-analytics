@@ -107,7 +107,7 @@ test.describe("Trends → doctor detail", () => {
     await expect(page).toHaveURL(/[?&]measure=surgery/);
     await expect(chart.getByText("Monthly surgery revenue by doctor", { exact: true })).toBeVisible();
     expect(await tableText(table, months)).toEqual([
-      ["Dr Bravo Brown", "RM 1,000.00", "RM 700.00", "RM 1,700.00"],
+      ["Dr Bravo Brown", "RM 1,000.00", "RM 636.36", "RM 1,636.36"], // 700202 after its refund share (#6)
       ["Dr Alpha Anderson", "RM 0.00", "RM 864.00", "RM 864.00"],
       ["Dr Delta Not in staff list", "RM 0.00", "RM 0.00", "RM 0.00"],
     ]);
