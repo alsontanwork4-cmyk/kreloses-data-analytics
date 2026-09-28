@@ -3,11 +3,13 @@ import type { Sql } from "@/db/sql";
 import { listLocations, login, type KrelosesSession, type ReaderOptions } from "@/kreloses";
 
 import { CredentialsKeyError, decryptSecret, encryptSecret, type Keyring } from "./encryption";
+import { ConnectionBusy, withConnectionLease } from "./lock";
 import { describeTestFailure } from "./messages";
 import {
   deleteConnectionRow,
   insertConnection,
   isConnectionId,
+  listConnections,
   readCredentials,
   recordTestOutcome,
   updateConnectionDetails,
@@ -43,7 +45,8 @@ export interface ConnectionInput {
 export type ConnectionField = "label" | "email" | "password";
 
 export type SaveResult =
-  | { ok: true; connection: ConnectionSummary }
+  /** `loginTestSkipped: "busy"`: saved, but a sync is using the login, so it was not tested (status stays "untested"). */
+  | { ok: true; connection: ConnectionSummary; loginTestSkipped?: "busy" }
   | { ok: false; fieldErrors: Partial<Record<ConnectionField, string>> }
   | { ok: false; formError: string };
 
@@ -96,12 +99,23 @@ export async function saveConnection(context: ConnectionsContext, input: Connect
 
   const tested = await runLoginTest(context, id);
   if (!tested) return { ok: false, formError: "That connection no longer exists. Reload the page." };
+  if (tested instanceof ConnectionBusy) {
+    const [connection] = (await listConnections(context.sql)).filter((candidate) => candidate.id === id);
+    if (!connection) return { ok: false, formError: "That connection no longer exists. Reload the page." };
+    return { ok: true, connection, loginTestSkipped: "busy" };
+  }
   return { ok: true, connection: tested };
 }
 
-/** Logs in with a saved connection again and stores the result. Null if it no longer exists. */
+/**
+ * Logs in with a saved connection again and stores the result. Null if it no longer exists.
+ * Throws `ConnectionBusy` (from `./lock`) while a sync is using the connection: the app never runs
+ * two Kreloses sessions for the same login at once.
+ */
 export async function testConnection(context: ConnectionsContext, id: string): Promise<ConnectionSummary | null> {
-  return runLoginTest(context, id);
+  const tested = await runLoginTest(context, id);
+  if (tested instanceof ConnectionBusy) throw tested;
+  return tested;
 }
 
 export async function deleteConnection(sql: Sql, id: string): Promise<boolean> {
@@ -129,25 +143,56 @@ export async function loginAsConnection(context: ConnectionsContext, id: string)
   return login({ email: stored.email, password }, context.reader);
 }
 
-async function runLoginTest(context: ConnectionsContext, id: string): Promise<ConnectionSummary | null> {
-  let outcome: TestOutcome;
-  try {
-    const session = await loginAsConnection(context, id);
-    outcome = { status: "ok", visibleLocations: await listLocations(session) };
-  } catch (error) {
-    if (error instanceof ConnectionNotFound) return null;
-    const failure = failed(error);
-    outcome = failure;
-    if (failure.code === "internal") {
-      // Not a Kreloses answer: a bug or misconfiguration. Log the error type and message only.
-      console.error(`[connections] login test for connection ${id} failed unexpectedly: ${errorSummary(error)}`);
-    }
-  }
-  return recordTestOutcome(context.sql, id, outcome);
+/** A login test (log in + list locations) never takes longer than this; its lease expires after it. */
+const LOGIN_TEST_LEASE_MS = 3 * 60_000;
+
+async function runLoginTest(context: ConnectionsContext, id: string): Promise<ConnectionSummary | ConnectionBusy | null> {
+  const result = await withConnectionLease(
+    context.sql,
+    id,
+    { purpose: "login-test", ttlMs: LOGIN_TEST_LEASE_MS, now: () => new Date() },
+    async () => {
+      let outcome: TestOutcome;
+      try {
+        const session = await loginAsConnection(context, id);
+        outcome = { status: "ok", visibleLocations: await listLocations(session) };
+      } catch (error) {
+        if (error instanceof ConnectionNotFound) return null;
+        outcome = failed(error, id);
+      }
+      return recordTestOutcome(context.sql, id, outcome);
+    },
+  );
+  if (result.status === "not_found") return null;
+  if (result.status === "busy") return new ConnectionBusy(result.heldFor, result.until);
+  return result.value;
 }
 
-function failed(error: unknown): TestOutcome & { status: "failed" } {
-  return { status: "failed", ...describeTestFailure(error) };
+/**
+ * Stores what a login (by the Sync Engine) showed about a connection, exactly as a login test
+ * would: `ok` with the branches it can see, or `failed` with the owner-facing reason (so the
+ * Connections page shows a sync's login failure too). Returns false if the connection is gone.
+ */
+export async function recordLoginOutcome(
+  sql: Sql,
+  id: string,
+  outcome: { ok: true; visibleLocations: { id: string; name: string }[] } | { ok: false; error: unknown },
+): Promise<boolean> {
+  const stored = await recordTestOutcome(
+    sql,
+    id,
+    outcome.ok ? { status: "ok", visibleLocations: outcome.visibleLocations } : failed(outcome.error, id),
+  );
+  return stored !== null;
+}
+
+function failed(error: unknown, id: string): TestOutcome & { status: "failed" } {
+  const failure = describeTestFailure(error);
+  if (failure.code === "internal") {
+    // Not a Kreloses answer: a bug or misconfiguration. Log the error type and message only.
+    console.error(`[connections] login for connection ${id} failed unexpectedly: ${errorSummary(error)}`);
+  }
+  return { status: "failed", ...failure };
 }
 
 function duplicateField(error: unknown): "email" | "label" | null {

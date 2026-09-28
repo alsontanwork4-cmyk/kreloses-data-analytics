@@ -42,3 +42,11 @@ export interface SqlOptions {
 }
 
 export type Sql = ReturnType<typeof createSql>;
+
+type SqlTypes = Sql extends postgres.Sql<infer Types> ? Types : never;
+
+/** Something queries run on: the pool (`Sql`) or the transaction inside `sql.begin(tx => …)`. */
+export type Queryable = Sql | postgres.TransactionSql<SqlTypes>;
+
+/** A value for `sql.json(...)` (postgres.js's JSON type). */
+export type JsonValue = postgres.JSONValue;

@@ -148,7 +148,7 @@ function describeAmounts(rows: Record<string, unknown>[]): string {
   const kinds = new Set(values.map((value) => (value === null || value === "" ? "empty" : typeof value === "string" ? "strings" : typeof value === "number" ? "numbers" : "other")));
   const strings = values.filter((value): value is string => typeof value === "string");
   const yesNo = (test: (value: string) => boolean) => (strings.some(test) ? "yes" : "no");
-  const order = ["strings", "numbers", "empty", "other"];
+  const order = ["strings", "numbers", "empty", "other"] as const;
   return [
     order.filter((kind) => kinds.has(kind)).join(", ") || "none",
     `thousand separators: ${yesNo((value) => /\d,\d{3}/.test(value))}`,
