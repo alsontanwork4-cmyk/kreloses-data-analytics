@@ -14,6 +14,10 @@ export interface DataTableColumn<Row> extends TableColumn<Row> {
   cell?: (row: Row) => ReactNode;
   /** `secondary` columns are hidden on phones (below the `sm` breakpoint); the CSV always has them. */
   priority?: "primary" | "secondary";
+  /** Only in the CSV, never shown: e.g. a percentage or base value the page shows inside another column's `cell`. */
+  exportOnly?: boolean;
+  /** A shorter header on screen (default `header`, which the CSV always uses), e.g. "vs last week" after its metric. */
+  label?: ReactNode;
 }
 
 /**
@@ -57,6 +61,7 @@ export function DataTable<Row>({
   const numeric = (column: DataTableColumn<Row>) => column.kind !== "text";
   const hidden = (column: DataTableColumn<Row>) => (column.priority === "secondary" ? "hidden sm:table-cell" : undefined);
   const Heading = headingLevel === 3 ? "h3" : "h2";
+  const shown = columns.filter((column) => !column.exportOnly);
   return (
     <section className="flex min-w-0 flex-col gap-2" data-testid={testId}>
       <div className="flex flex-wrap items-end justify-between gap-2">
@@ -76,7 +81,7 @@ export function DataTable<Row>({
             <caption className="sr-only">{caption}</caption>
             <thead>
               <tr className="border-b bg-muted/40">
-                {columns.map((column, index) => (
+                {shown.map((column, index) => (
                   <th
                     key={column.key}
                     scope="col"
@@ -87,7 +92,7 @@ export function DataTable<Row>({
                       hidden(column),
                     )}
                   >
-                    {column.header}
+                    {column.label ?? column.header}
                   </th>
                 ))}
               </tr>
@@ -95,7 +100,7 @@ export function DataTable<Row>({
             <tbody>
               {rows.map((row, rowIndex) => (
                 <tr key={rowKey(row, rowIndex)} data-testid="data-table-row" className={cn("border-b last:border-b-0", rowClassName?.(row))}>
-                  {columns.map((column, index) => {
+                  {shown.map((column, index) => {
                     const content = column.cell ? column.cell(row) : formatCell(column.kind, column.value(row));
                     const className = cn(
                       "px-3 py-2",

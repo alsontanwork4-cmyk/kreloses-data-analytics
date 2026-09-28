@@ -10,6 +10,19 @@
  */
 export { getOverviewKpis, type BranchKpis, type Kpi, type KpiChange, type KpiSet, type OverviewKpis } from "./overview";
 export {
+  dailyComparisonDays,
+  defaultDailyDay,
+  getDailySales,
+  resolveDailyDay,
+  type DailyBranchRow,
+  type DailyDoctorRow,
+  type DailyFigures,
+  type DailyGroup,
+  type DailyGroupRow,
+  type DailyMetric,
+  type DailySales,
+} from "./daily";
+export {
   getDoctorRanking,
   getStaffAliasRevenue,
   listDoctors,

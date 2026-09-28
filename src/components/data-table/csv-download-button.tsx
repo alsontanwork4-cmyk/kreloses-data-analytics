@@ -4,6 +4,8 @@ import { Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
+import { withByteOrderMark } from "./csv";
+
 /**
  * Saves a CSV that was built on the server from the table's own rows (`toCsv`), so the file
  * always matches the numbers shown. The download happens in the browser (a Blob), with no second
@@ -11,7 +13,7 @@ import { Button } from "@/components/ui/button";
  */
 export function CsvDownloadButton({ csv, fileName, label = "Export CSV" }: { csv: string; fileName: string; label?: string }) {
   const download = () => {
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([withByteOrderMark(csv)], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = fileName;

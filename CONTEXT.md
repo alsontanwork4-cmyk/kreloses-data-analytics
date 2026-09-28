@@ -101,6 +101,14 @@ The same number of clinic days immediately before the selected period (1–30 Se
 **Same period last year**:
 The same calendar dates one year earlier (29 Feb becomes 28 Feb).
 
+**Same weekday last week**:
+The clinic day seven days before a day (Sunday 27 Sep 2026 → Sunday 20 Sep 2026). The Daily page
+compares each day with it and with the same date last year.
+
+**Same date last year**:
+For one day, the same calendar date one year earlier (27 Sep 2026 → 27 Sep 2025, usually another
+weekday; 29 Feb → 28 Feb).
+
 ## Sales and metrics
 
 Every metric is defined once, in the Analytics Service (`src/analytics`); `METRIC_DEFINITIONS`
@@ -220,6 +228,14 @@ year; the current year (1 January to today) with the same dates last year, never
 **Doctor detail**:
 One doctor's page: their ranking figures for the global filter, their monthly trend and their
 branch split. Only doctors have one; other staff and generic accounts do not.
+
+**Daily sales**:
+One clinic day's revenue, invoices, customers and AOV per customer — in total, per branch and per
+doctor (other staff, generic accounts, no staff on line and line items not synced yet as separate
+groups) — each compared with the same weekday last week and the same date last year. The Daily page
+shows yesterday by default (the clinic's yesterday); the global filter's branches and doctors apply,
+its date range does not.
+_Avoid_: Daily report, day summary
 
 **Change**:
 A KPI minus its value in a comparison period; as a percentage, the change ÷ the comparison value,
