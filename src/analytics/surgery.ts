@@ -303,11 +303,14 @@ export interface TopProcedures {
 
 /**
  * The top procedures by fees — overall and per doctor — in the filter, at most `limit` per list
- * (default `DEFAULT_TOP_PROCEDURES`, clamped to 1–`MAX_TOP_PROCEDURES`).
+ * (default `DEFAULT_TOP_PROCEDURES`, also for a limit that is not a finite number; truncated and
+ * clamped to 1–`MAX_TOP_PROCEDURES`).
  */
 export async function getTopProcedures(sql: Sql, filter: GlobalFilter, options: { limit?: number } = {}): Promise<TopProcedures> {
   const period: DateRange = { dateFrom: filter.dateFrom, dateTo: filter.dateTo };
-  const limit = Math.min(MAX_TOP_PROCEDURES, Math.max(1, Math.trunc(options.limit ?? DEFAULT_TOP_PROCEDURES)));
+  // NaN / ±Infinity (e.g. an unchecked MCP argument) would pass the clamp and reach SQL: use the default.
+  const requested = options.limit !== undefined && Number.isFinite(options.limit) ? options.limit : DEFAULT_TOP_PROCEDURES;
+  const limit = Math.min(MAX_TOP_PROCEDURES, Math.max(1, Math.trunc(requested)));
   const rows = await sql<{ staffId: string | null; itemKey: string; name: string; cases: number; fees: string; averageFee: string; staffFees: string }[]>`
     with facts as (${revenueFacts(sql, { branches: branchScope(filter), staff: staffScope(filter) })}),
     lines as (

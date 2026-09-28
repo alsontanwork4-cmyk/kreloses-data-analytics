@@ -159,7 +159,12 @@ export default async function MixSurgeryPage({ searchParams }: PageProps<"/mix/s
 
   const pending = surgery.pendingLineItems;
   const pendingOne = pending.invoices === 1;
-  const muted = (row: { kind?: CaseRow["kind"]; total?: boolean }) => (row.kind === "total" || row.kind === "branch" || row.total ? "bg-muted/40" : undefined);
+  // Sales but no case in the filter: the case tables show their empty message, not a row of zeros.
+  const noCases = surgery.total.cases === 0;
+  const NO_CASES = "No surgery cases in this period.";
+  // Total rows are shaded; in the follow-up table (whole filter, branches, then doctors) the branch subtotals too.
+  const totalShade = (row: { kind?: CaseRow["kind"]; total?: boolean }) => (row.kind === "total" || row.total ? "bg-muted/40" : undefined);
+  const subtotalShade = (row: CaseRow) => (row.kind === "total" || row.kind === "branch" ? "bg-muted/40" : undefined);
 
   return (
     <PageShell
@@ -212,10 +217,11 @@ export default async function MixSurgeryPage({ searchParams }: PageProps<"/mix/s
               caption="Surgery cases by doctor"
               description="Surgery fees are the doctor's own surgery lines on their cases; the whole-visit value is everything on those sales, whoever it is credited to."
               columns={caseColumns("Doctor")}
-              rows={doctorRows}
+              rows={noCases ? [] : doctorRows}
               rowKey={(row) => row.key}
-              rowClassName={muted}
+              rowClassName={totalShade}
               export={{ name: "surgery-cases-by-doctor", filter }}
+              empty={NO_CASES}
               testId="surgery-doctors"
               headingLevel={3}
             />
@@ -224,11 +230,11 @@ export default async function MixSurgeryPage({ searchParams }: PageProps<"/mix/s
               caption="Surgery cases by branch"
               description="Every case once, at the branch of its sale."
               columns={caseColumns("Branch")}
-              rows={branchRows}
+              rows={noCases ? [] : branchRows}
               rowKey={(row) => row.key}
-              rowClassName={muted}
+              rowClassName={totalShade}
               export={{ name: "surgery-cases-by-branch", filter }}
-              empty="No branch in this filter."
+              empty={NO_CASES}
               testId="surgery-branches"
               headingLevel={3}
             />
@@ -244,11 +250,11 @@ export default async function MixSurgeryPage({ searchParams }: PageProps<"/mix/s
                 </>
               }
               columns={followUpColumns}
-              rows={surgery.total.cases > 0 ? followUpRows : []}
+              rows={noCases ? [] : followUpRows}
               rowKey={(row) => `${row.kind}:${row.key}`}
-              rowClassName={muted}
+              rowClassName={subtotalShade}
               export={{ name: "surgery-follow-up", filter }}
-              empty="No surgery cases in this period."
+              empty={NO_CASES}
               testId="surgery-follow-up"
               headingLevel={3}
             />
@@ -298,7 +304,7 @@ export default async function MixSurgeryPage({ searchParams }: PageProps<"/mix/s
             columns={vaccineColumns}
             rows={vaccineRows}
             rowKey={(row) => row.key}
-            rowClassName={muted}
+            rowClassName={totalShade}
             export={{ name: "vaccines-dental", filter }}
             testId="vaccines-dental"
           />

@@ -1160,6 +1160,8 @@ getVaccineDentalRevenue(sql, filter): Promise<VaccineDentalRevenue>   // src/ana
   the total under a doctor filter: the selected doctors' lines, and only their cases); **whole-visit
   value** = Σ revenue of every line on the sale (all staff; counted in full for each doctor of a
   shared case). Averages = ÷ cases (sen, half away from zero); fee share = fees ÷ whole visit (1 dp).
+  Surgery fees ≠ #9's surgery revenue: that counts every surgery line in the period, so a surgery
+  item returned on a LATER sale lowers surgery revenue but never the fee of the case it was sold on.
 - **Post-op follow-up** reuses #13's `serviceVisits(sql, { all: true })`: another service visit of
   the customer 1–14 days after the case day, at ANY branch (clinic-wide, like retention: a follow-up
   at the other branch counts under a branch filter), possibly after the period. A case is mature

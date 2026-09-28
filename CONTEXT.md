@@ -332,7 +332,9 @@ _Avoid_: Surgery, procedure (for the whole case), operation (for a sedation-only
 **Surgery fee / whole-visit value**:
 A case's surgery fee is the revenue of its surgery lines (for a doctor: their own surgery lines on
 it); its whole-visit value is the revenue of the whole sale, every line and whoever it is credited
-to. Averages are per case.
+to. Averages are per case. Surgery fees are not surgery revenue: a surgery item returned on a later
+sale lowers surgery revenue but never the fee of the case it was sold on.
+_Avoid_: Surgery revenue (for the fees of cases)
 
 **Top procedures**:
 Operation items by the fees of their lines on the cases they were sold on, with those cases and the

@@ -162,6 +162,26 @@ test.describe("Mix → surgery, vaccines & dental", () => {
       ["Selected doctors", "3", "2", "1", "RM 1,600.00", "RM 2,620.00"],
     ]);
 
+    // Sales but no surgery case in the dates (15–17 Sep: rechecks and a consult only): the case tables say so
+    // instead of showing a row of zeros.
+    await page.goto("/mix/surgery?from=2026-09-15&to=2026-09-17");
+    for (const testId of ["surgery-doctors", "surgery-branches", "surgery-follow-up"]) {
+      await expect(rows(page.getByTestId(testId))).toHaveCount(0);
+      await expect(page.getByTestId(testId)).toContainText("No surgery cases in this period.");
+    }
+    await expect(page.getByTestId("surgery-cases-chart")).toHaveCount(0);
+    await expect(rows(page.getByTestId("vaccines-dental")).first()).toBeVisible();
+
+    // On a phone, nothing scrolls sideways (the tables scroll inside themselves).
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/mix/surgery?${SEPTEMBER}`);
+    await expect(rows(page.getByTestId("surgery-doctors"))).toHaveCount(4);
+    await expect(page.getByTestId("surgery-cases-chart")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.getByRole("region", { name: "Filters" }).getByRole("combobox", { name: "Doctor" }).selectOption({ label: "Dr Bravo Brown" });
+    await expect(page).toHaveURL(/[?&]doctor=\d+/);
+
     // Back on the service mix tab, the filter is kept and the view-specific ?top= is dropped.
     await page.getByRole("navigation", { name: "Mix views" }).getByRole("link", { name: "Service mix" }).click();
     await expect(page).toHaveURL(/\/mix\?from=2026-09-01&to=2026-09-30&doctor=\d+$/);

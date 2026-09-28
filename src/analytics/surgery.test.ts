@@ -247,9 +247,14 @@ describe("Analytics Service: surgery department, vaccines and dental (fed by the
       ["Syn Mass removal", 1, "600.00"],
     ]);
     expect(bravo.doctors.map((doctor) => doctor.name)).toEqual(["Dr Bravo Brown"]);
-    // The limit is clamped.
+    // The limit is clamped; a limit that is not a finite number (e.g. from an MCP argument) falls back to the default.
     expect((await getTopProcedures(db.sql, SEPTEMBER, { limit: 0 })).limit).toBe(1);
     expect((await getTopProcedures(db.sql, SEPTEMBER, { limit: 500 })).limit).toBe(50);
+    expect((await getTopProcedures(db.sql, SEPTEMBER, { limit: 2.9 })).limit).toBe(2);
+    for (const limit of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const result = await getTopProcedures(db.sql, SEPTEMBER, { limit });
+      expect([result.limit, result.overall.length]).toEqual([5, 2]);
+    }
   });
 
   it("vaccine and dental-scaling revenue per doctor, with each as a share of the doctor's revenue", async () => {
