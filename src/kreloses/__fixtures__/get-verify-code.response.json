@@ -1,0 +1,10 @@
+{
+  "comment": "GET https://www.kreloses.com/Account/VerifyCode: the one-time-code form.",
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-cache, no-store"
+  },
+  "setCookie": [],
+  "bodyFile": "login-verify-code.html"
+}

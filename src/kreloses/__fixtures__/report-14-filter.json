@@ -1,0 +1,73 @@
+{
+  "ReportId": 14,
+  "ReportName": "Sale List",
+  "Filters": [
+    {
+      "Id": 1,
+      "Name": "Location",
+      "Type": "MultiSelect",
+      "IsRequired": false,
+      "Options": [
+        { "Value": "", "Text": "All Locations", "Selected": false },
+        { "Value": "1101", "Text": "Branch North", "Selected": false },
+        { "Value": "1102", "Text": "Branch South", "Selected": false }
+      ]
+    },
+    {
+      "Id": 2,
+      "Name": "Sale status",
+      "Type": "MultiSelect",
+      "IsRequired": false,
+      "Options": [
+        { "Value": "1", "Text": "Active", "Selected": true },
+        { "Value": "2", "Text": "Cancelled", "Selected": false }
+      ]
+    },
+    {
+      "Id": 3,
+      "Name": "Payment",
+      "Type": "MultiSelect",
+      "IsRequired": false,
+      "Options": [
+        { "Value": "1", "Text": "Paid", "Selected": false },
+        { "Value": "2", "Text": "Partially paid", "Selected": false },
+        { "Value": "3", "Text": "Unpaid", "Selected": false }
+      ]
+    },
+    {
+      "Id": 4,
+      "Name": "Customer",
+      "Type": "Lookup",
+      "IsRequired": false,
+      "Options": []
+    },
+    {
+      "Id": 5,
+      "Name": "Staff",
+      "Type": "MultiSelect",
+      "IsRequired": false,
+      "Options": [
+        { "Value": "501", "Text": "Dr Alpha Anderson", "Selected": false },
+        { "Value": "502", "Text": "Dr Bravo Brown", "Selected": false },
+        { "Value": "503", "Text": "Branch North General", "Selected": false }
+      ]
+    },
+    {
+      "Id": 6,
+      "Name": "Invoice category",
+      "Type": "MultiSelect",
+      "IsRequired": false,
+      "Options": [
+        { "Value": "1", "Text": "Standard", "Selected": false }
+      ]
+    },
+    {
+      "Id": 7,
+      "Name": "Date",
+      "Type": "DateRange",
+      "IsRequired": true,
+      "From": "01/09/2026",
+      "To": "28/09/2026"
+    }
+  ]
+}

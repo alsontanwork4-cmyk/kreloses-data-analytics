@@ -47,6 +47,7 @@ Re-run `npm run db:create-dev -- kx_dev_you` after pulling new migrations (idemp
 | `npm run lint` | ESLint |
 | `npm test` | Vitest (unit + database tests; needs the local Supabase stack) |
 | `npm run test:e2e` | Playwright smoke suite (see [E2E](#e2e-tests)) |
+| `npm run test:live` | Opt-in smoke test against the REAL Kreloses; skipped unless test credentials are set (see [Live login check](#live-login-check-real-kreloses)) |
 | `npm run db:create-dev -- <kx_name> [--reset] [--env]` | Create/migrate your own dev database |
 | `npm run db:drop-dev -- <kx_name>` | Drop it |
 
@@ -63,8 +64,11 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase API URL (Auth only) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key (`sb_publishable_…`) |
 | `OWNER_EMAIL` | Always on the allow-list as owner (upserted automatically) |
+| `CREDENTIALS_ENCRYPTION_KEY` | Server only. 32 random bytes, base64 (`openssl rand -base64 32`): encrypts Kreloses passwords at rest. Required to save or test a connection; `db:create-dev --env` generates a local one. Changing it makes stored passwords unreadable (re-enter them) |
 | `DATABASE_ADMIN_URL` | Local tooling only: superuser URL of the local cluster (default `postgresql://postgres:postgres@127.0.0.1:54322/postgres`) |
-| `E2E_MAILPIT_URL`, `E2E_PORT` | Local tooling only: e2e overrides |
+| `E2E_MAILPIT_URL`, `E2E_PORT`, `E2E_KRELOSES_PORT` | Local tooling only: e2e overrides |
+| `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
+| `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
 `SUPABASE_SECRET_KEY` (server only, never `NEXT_PUBLIC_`).
@@ -85,7 +89,9 @@ src/
   filters/        The shared global filter (URL <-> {dateFrom, dateTo, branchIds?, doctorIds?})
   components/     shell/ (app shell, nav config, PageShell), settings/ (tabs, SettingsSection),
                   filter-bar/, empty-state, ui/ (shadcn)
-  kreloses/       Kreloses Reader — the ONLY code that knows Kreloses exists (later)
+  kreloses/       Kreloses Reader — the ONLY code that knows Kreloses exists (login, locations;
+                  __fixtures__/ synthetic responses, testing/ the fake Kreloses)
+  connections/    Kreloses connections: encrypted credentials, login test, store
   sync/           Sync Engine (later)
   attribution/    Attribution & Rules — pure functions (later)
   analytics/      Analytics Service — the single source of every metric (later)
@@ -257,6 +263,103 @@ after its own request). The owner is
 `withRunDatabase(sql => …)` to put data into the run's database. Nav-driven tests read
 `NAV_ITEMS`, so new pages are covered automatically; extend the suite for your ticket's flow.
 
+The app under test talks to a **fake Kreloses** (`e2e/support/fake-kreloses-server.ts`, the same
+fake the unit tests use, on its own port) via `KRELOSES_BASE_URL_WWW/SEA`, with a throwaway
+`CREDENTIALS_ENCRYPTION_KEY` per run. Its synthetic logins are `SYNTHETIC_ACCOUNTS` in
+`src/kreloses/testing/fake-kreloses.ts` (`north`, `south`, `both`, `oneTimeCode`, `down`, …). A
+spec that creates connections must leave the table empty (the shell spec expects empty states).
+
+### Kreloses Reader (`src/kreloses/`)
+
+The only code that knows Kreloses exists. Import from `@/kreloses`:
+
+```ts
+login(credentials: { email; password }, options?: ReaderOptions): Promise<KrelosesSession>
+listLocations(session): Promise<{ id: string; name: string }[]>   // POST /Report/GetFilter {report: 14}; never empty
+fetchFilterTemplate(session, report: number): Promise<unknown>     // raw filter template (#4 passes it back as `filter`)
+readerOptionsFromEnv(process.env): ReaderOptions                   // real Kreloses, or the e2e fake outside production/Vercel
+session.postJson(path, body): Promise<unknown>                     // AJAX POST to a sea endpoint (#4: /Sale/Get)
+session.getHtml(path): Promise<string>                             // page load of a sea page (#5: /Sale/Overview/{id})
+```
+
+- **Errors** (all `KrelosesError`, safe to log/store — never passwords, cookie values, tokens or
+  query strings). What to do with each:
+  - `AuthFailed` — don't retry until the owner acts. `reason`: `bad_credentials` (the login form
+    came back without ever reaching sea; Kreloses's own message in `detail`) | `unexpected_step`
+    (`step`: `one_time_code` | `returned_to_login` (reached sea, then bounced to the login page) |
+    `redirected_elsewhere` (off Kreloses; not followed) | `too_many_redirects` |
+    `unrecognised_page`) | `session_expired` (an established session was answered with the login
+    page: log in again once).
+  - `LayoutChanged` — needs a code fix, don't retry: an unexpected page/JSON (`shape` = keys and
+    types, never values), HTTP 500 on the login form POST (ASP.NET's answer to an anti-forgery
+    mismatch), a Location filter with no locations, an app endpoint that redirects elsewhere or
+    answers other than 200.
+  - `RateLimited` (`retryAfterSeconds`) and `Transient` (`status` for a 5xx other than the login
+    POST's 500, absent for network errors/timeouts; `request` = `METHOD host/path`) — retry later.
+- **Session**: a browser-like session — a cookie jar that honours Domain/host-only/Path/Secure/
+  expiry (the login is on www, the app on sea), redirects followed by hand and only between the
+  two Kreloses hosts (at most 10 per request), requests **serial per session** with
+  `requestDelayMs` (default 1 s) between them. `postJson` and `getHtml` both recognise an expired
+  session the same way: a redirect to the login page, 401/403, ASP.NET Identity's AJAX answer
+  (HTTP 200, empty body, `X-Responded-JSON` 401/403), or the login form instead of the content.
+  `session.navigate({method, url, followRedirects})` is the lower-level page fetch.
+- **Transport**: `ReaderOptions.transport` is fetch-shaped (`(url, init) => Promise<Response>`,
+  always `redirect: "manual"`). Tests pass `createFakeKreloses().transport`. A Vitest setup file
+  (`src/test-support/no-real-kreloses.ts`) makes any `fetch` to `*.kreloses.com` throw and fails
+  the test, so a test that forgets the transport cannot reach the real site.
+- **Fixtures and the fake** (Seam 2): synthetic responses in `src/kreloses/__fixtures__/` (see its
+  README — none are real recordings yet), served by `createFakeKreloses()` in
+  `src/kreloses/testing/fake-kreloses.ts`. Every sea path needs a signed-in session in the fake
+  (page loads get a 302 to the login page, AJAX calls the `X-Responded-JSON` answer; option
+  `ajaxAuthFailure: "redirect"` for a plain 302). To extend for `listInvoices` / `getInvoice`
+  (#4, #5): add `*.response.json` + body fixtures and a route to `BUILT_IN_ROUTES` (or
+  `fake.addRoute({host: "sea", method, path, handler: ({request, account, fixture}) => …})` in a
+  test) — the login check comes for free — then the Reader function on top of `session.postJson`
+  / `session.getHtml`. Use `fake.intercept(request => Response | undefined)` for one-off failures
+  and `fake.expireSessions()` for expiry.
+
+#### Live login check (real Kreloses)
+
+`npm run test:live` logs in to the **real** Kreloses once, lists the locations the login can see,
+and prints a redacted diagnostic: each HTTP hop's method, host/path (no query string; path
+segments other than generic route words shown as `<segment>`, numbers as `<number>`), status and
+any `X-Responded-JSON` status, cookie names with their Domain/Path/expiry/flags (never values),
+whether a one-time-code step appeared, which host the session works on, the number of visible
+locations (not their names) and the shape (keys/types) of the GetFilter JSON (objects whose keys
+look like data, e.g. names, are shown only as `{<n keys>: …}`). It is skipped unless credentials are set, needs no
+database, and is never part of `npm test`. Run it from a terminal without saving the password in
+your shell history:
+
+```bash
+read -r "KRELOSES_TEST_EMAIL?Kreloses email: "; read -rs "KRELOSES_TEST_PASSWORD?Kreloses password: "; echo
+export KRELOSES_TEST_EMAIL KRELOSES_TEST_PASSWORD
+npm run test:live
+# Optional: also measure session lifetime (one tiny request every 5 minutes for 60 minutes)
+KRELOSES_TEST_SESSION_PROBE_MINUTES=60 npm run test:live
+unset KRELOSES_TEST_EMAIL KRELOSES_TEST_PASSWORD
+```
+
+(The `read "NAME?prompt"` form is zsh; in bash use `read -rp "Kreloses email: " KRELOSES_TEST_EMAIL`
+and `read -rsp "Kreloses password: " KRELOSES_TEST_PASSWORD`.) Check the output before sharing it.
+
+### Kreloses connections (`src/connections/`)
+
+A **connection** is one Kreloses login (the owner adds one per branch login) in the `connections`
+table: label, Kreloses email, password as an AES-256-GCM envelope
+`v1.<key id>.<iv>.<tag>.<ciphertext>` (`src/connections/encryption.ts`, key from
+`CREDENTIALS_ENCRYPTION_KEY`, see ADR 0003), `status` (`untested` | `ok` | `failed`),
+`last_error_code` / `last_error`, `last_tested_at`, `visible_locations` (`[{id, name}]`).
+
+- `saveConnection(context, input)` validates, encrypts, stores and then runs the live login test
+  (`login` + `listLocations`); a failed test still saves the connection, with a human message
+  (`describeTestFailure` in `messages.ts`: wrong password vs extra login step vs unreachable…).
+  `testConnection`, `deleteConnection`, `listConnections` complete the set. The page gets
+  `connectionsContext()` (`@/connections/context`, server only).
+- **The password never leaves the server**: `listConnections` / `ConnectionSummary` never select
+  `password_ciphertext`, actions return only what the page shows, and the password field is never
+  pre-filled (blank on edit = keep the stored one). Only `loginAsConnection(context, id)` decrypts,
+  just for the Reader call — use it from the Sync Engine to log in as a connection.
+
 ### Global filter
 
 The one filter every dashboard page and Analytics Service query takes lives in `@/filters`
@@ -323,6 +426,10 @@ When a hosted Supabase project and Vercel are set up:
 - Use the new API keys (`sb_publishable_…`); JWTs signed with asymmetric keys are verified locally
   by `getClaims()`.
 - Set `OWNER_EMAIL`.
+- Set `CREDENTIALS_ENCRYPTION_KEY` (`openssl rand -base64 32`, a fresh one — never reuse a local
+  key) as a sensitive, server-only variable. Losing or changing it means re-entering every
+  Kreloses password. Never set `KRELOSES_BASE_URL_*` there (the app refuses to start a login with
+  them in production).
 - **Confirm email must stay ON in hosted Supabase; never `supabase config push` the local
   `config.toml`.** (Locally it is on too.) The app also refuses non-magic-link sessions, but
   confirmation stops password sign-ups from getting a session at all.

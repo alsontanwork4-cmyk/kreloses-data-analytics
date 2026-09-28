@@ -1,0 +1,10 @@
+{
+  "comment": "POST https://sea.kreloses.com/Report/GetFilter {\"report\":14} (signed in): the Sale List filter template. The fake narrows the Location options to the ones the signed-in account can see.",
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [],
+  "bodyFile": "report-14-filter.json"
+}

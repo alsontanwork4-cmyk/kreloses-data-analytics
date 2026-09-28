@@ -9,7 +9,9 @@ import { databaseUrl } from "./src/db/admin";
  * E2E smoke suite (`npm run test:e2e`). Self-contained, and safe to run from several worktrees at
  * once: each run gets its own throwaway database (`kx_e2e_…`), its own Next.js dev server on its
  * own port (building into `.next-e2e`, so it doesn't disturb your dev server), and unique
- * synthetic emails. Magic links are read from the local Supabase mail catcher (Mailpit).
+ * synthetic emails. Magic links are read from the local Supabase mail catcher (Mailpit). The app
+ * logs in to a fake Kreloses (e2e/support/fake-kreloses-server.ts) on its own port, never the
+ * real one.
  *
  * Needs: `supabase start` (shared stack), `.env.local` with the Supabase URL + publishable key,
  * and once per machine `npx playwright install --only-shell chromium`.
@@ -28,6 +30,12 @@ process.env.E2E_PORT ||= String(
 const port = Number(process.env.E2E_PORT);
 const baseURL = `http://localhost:${port}`;
 
+// A fake Kreloses (synthetic fixtures) for the app to log in to: real Kreloses is never contacted.
+process.env.E2E_KRELOSES_PORT ||= String(port + 1000);
+const fakeKrelosesUrl = `http://127.0.0.1:${process.env.E2E_KRELOSES_PORT}`;
+// A throwaway key per run for encrypting the (synthetic) Kreloses passwords.
+process.env.E2E_CREDENTIALS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64");
+
 export default defineConfig({
   testDir: "e2e",
   // One server + one database per run; tests share them, so keep them in order.
@@ -44,19 +52,34 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command: `npx next dev --port ${port}`,
-    url: `${baseURL}/login`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    stdout: "ignore",
-    stderr: "pipe",
-    env: {
-      NEXT_DIST_DIR: ".next-e2e",
-      DATABASE_URL: databaseUrl(process.env.E2E_DB_NAME),
-      DATABASE_PREPARE: "true",
-      // The owner is seeded from OWNER_EMAIL by the app itself (that path is under test too).
-      OWNER_EMAIL: `e2e-owner-${process.env.E2E_RUN_ID}@example.test`,
+  webServer: [
+    {
+      command: "npx tsx e2e/support/fake-kreloses-server.ts",
+      url: `${fakeKrelosesUrl}/__health`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: { FAKE_KRELOSES_PORT: process.env.E2E_KRELOSES_PORT },
     },
-  },
+    {
+      command: `npx next dev --port ${port}`,
+      url: `${baseURL}/login`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        NEXT_DIST_DIR: ".next-e2e",
+        DATABASE_URL: databaseUrl(process.env.E2E_DB_NAME),
+        DATABASE_PREPARE: "true",
+        // The owner is seeded from OWNER_EMAIL by the app itself (that path is under test too).
+        OWNER_EMAIL: `e2e-owner-${process.env.E2E_RUN_ID}@example.test`,
+        CREDENTIALS_ENCRYPTION_KEY: process.env.E2E_CREDENTIALS_ENCRYPTION_KEY,
+        // Point the Kreloses Reader at the fake (allowed outside production, loopback only).
+        KRELOSES_BASE_URL_WWW: fakeKrelosesUrl,
+        KRELOSES_BASE_URL_SEA: fakeKrelosesUrl,
+      },
+    },
+  ],
 });

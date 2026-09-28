@@ -34,6 +34,21 @@ _Avoid_: Revoke, delete user
 One physical clinic location; corresponds to a Kreloses location.
 _Avoid_: Location, site, outlet, store
 
+**Connection**:
+One Kreloses login (email + password) that the app reads sales with. Each branch that has its own
+Kreloses login gets one connection; one login may see several branches. The password is stored
+encrypted and never shown again.
+_Avoid_: Account, integration, credential (the password alone)
+
+**Login test**:
+Logging in to Kreloses with a connection and listing the branches it can see. Runs whenever a
+connection is saved and on "Test again"; its result is the connection's status (Connected / Login
+failed / Not tested).
+
+**Visible branches**:
+The Kreloses locations a connection's login could see at its latest login test (none known after a
+failed test). "Location" is Kreloses's word; in the product they are branches.
+
 **Doctor**:
 A vet whose name appears on invoice lines and who is credited with revenue.
 _Avoid_: Vet, staff (staff also includes non-doctors)

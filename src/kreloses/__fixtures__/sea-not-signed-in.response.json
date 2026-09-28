@@ -1,0 +1,11 @@
+{
+  "comment": "Any sea.kreloses.com request without a valid auth cookie (never signed in, or the session expired): OWIN cookie auth redirects to the login page on www.",
+  "status": 302,
+  "headers": {
+    "Location": "https://www.kreloses.com/account/login?ReturnUrl=%2F",
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [],
+  "body": "<html><head><title>Object moved</title></head><body>\r\n<h2>Object moved to <a href=\"https://www.kreloses.com/account/login?ReturnUrl=%2F\">here</a>.</h2>\r\n</body></html>\r\n"
+}

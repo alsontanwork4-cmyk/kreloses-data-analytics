@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify - Kreloses</title>
+    <link href="/Content/bootstrap.css?v=SYNTHETIC" rel="stylesheet"/>
+</head>
+<body class="login-page">
+    <div class="container body-content">
+        <h2>Verify</h2>
+<form action="/Account/VerifyCode" class="form-horizontal" method="post" role="form"><input name="__RequestVerificationToken" type="hidden" value="SYNTHETIC-FORM-TOKEN-verify-0001" /><input id="Provider" name="Provider" type="hidden" value="Email Code" /><input id="ReturnUrl" name="ReturnUrl" type="hidden" value="/" /><input data-val="true" data-val-required="The Remember me? field is required." id="RememberMe" name="RememberMe" type="hidden" value="False" />            <h4>Enter the verification code we sent to your email.</h4>
+            <hr />
+            <div class="validation-summary-valid text-danger" data-valmsg-summary="true"><ul><li style="display:none"></li>
+</ul></div>
+            <div class="form-group">
+                <label class="col-md-2 control-label" for="Code">Code</label>
+                <div class="col-md-10">
+                    <input autocomplete="one-time-code" class="form-control" data-val="true" data-val-required="The Code field is required." id="Code" name="Code" type="text" value="" />
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="col-md-offset-2 col-md-10">
+                    <div class="checkbox">
+                        <input data-val="true" data-val-required="The Remember this browser? field is required." id="RememberBrowser" name="RememberBrowser" type="checkbox" value="true" /><input name="RememberBrowser" type="hidden" value="false" />
+                        <label for="RememberBrowser">Remember this browser?</label>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="col-md-offset-2 col-md-10">
+                    <input type="submit" class="btn btn-default" value="Submit" />
+                </div>
+            </div>
+</form>    </div>
+</body>
+</html>

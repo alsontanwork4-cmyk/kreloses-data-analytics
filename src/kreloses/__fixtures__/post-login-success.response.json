@@ -1,0 +1,13 @@
+{
+  "comment": "POST https://www.kreloses.com/account/login with valid credentials: the auth cookie is scoped to the parent domain so sea.kreloses.com receives it, then a redirect to the app on sea.",
+  "status": 302,
+  "headers": {
+    "Location": "https://sea.kreloses.com/",
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [
+    ".AspNet.ApplicationCookie={{AUTH_TICKET}}; domain=.kreloses.com; path=/; secure; HttpOnly; SameSite=Lax"
+  ],
+  "body": "<html><head><title>Object moved</title></head><body>\r\n<h2>Object moved to <a href=\"https://sea.kreloses.com/\">here</a>.</h2>\r\n</body></html>\r\n"
+}

@@ -1,0 +1,10 @@
+{
+  "comment": "GET https://sea.kreloses.com/Home/Index (signed in): the app shell.",
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private"
+  },
+  "setCookie": [],
+  "bodyFile": "sea-app-home.html"
+}
