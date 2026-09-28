@@ -21,7 +21,7 @@ import {
   type KrelosesSession,
   type KrelosesStaffMember,
 } from "@/kreloses";
-import { classifyUnclassifiedItems } from "@/items/store";
+import { reclassifyAllItems } from "@/items/store";
 import { upsertStaffDirectory } from "@/staff/store";
 
 import { countInvoicesNeedingLines, invoicesNeedingLines, recordMissingPage, saveInvoiceLines, type InvoiceNeedingLines, type SweepCursor } from "./lines";
@@ -242,9 +242,10 @@ export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMo
   if (attempt.status !== "acquired") return attempt;
   try {
     await markInterruptedRuns(deps.sql, connectionId, now());
-    // #9: item names stored without a service-mix classification (e.g. before item groups existed).
-    // Every run goes through here (manual, nightly and its sweep), so this is the catch-up for all.
-    await classifyUnclassifiedItems(deps.sql);
+    // #9: every item name's service-mix classification brought up to date with the rules as they are
+    // now — names stored without one, and rule changes made outside the app (a seed-rule migration).
+    // Every run goes through here (manual, nightly and its sweep).
+    await reclassifyAllItems(deps.sql);
     const resumeFrom =
       options.resume && options.startPage === undefined
         ? await findResumableRun(deps.sql, connectionId, { mode, range: requested, pageSize, now: now(), maxAgeMs: options.resumeMaxAgeMs ?? RESUME_MAX_AGE_MS })

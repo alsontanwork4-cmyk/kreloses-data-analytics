@@ -7,12 +7,12 @@ import {
   addItemRule,
   assignItem,
   classifyItemNames,
-  classifyUnclassifiedItems,
   clearItemAssignment,
   deleteItemRule,
   listItemRules,
   listItems,
   loadItemClassifier,
+  reclassifyAllItems,
 } from "./store";
 
 const NO_FLAGS = { surgery: false, consult: false, vaccine: false, dentalScaling: false, procedure: false };
@@ -80,6 +80,18 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Surgery review", as("consult", { consult: true })],
       ["Neuter check-up", as("consult", { consult: true })],
       ["Spay wound check", as("consult", { consult: true })],
+      ["Spay check", as("consult", { consult: true })],
+      ["Spay recheck", as("consult", { consult: true })],
+      ["Spay stitch check", as("consult", { consult: true })],
+      ["Neuter check", as("consult", { consult: true })],
+      ["Neuter recheck", as("consult", { consult: true })],
+      ["Neuter wound check", as("consult", { consult: true })],
+      ["Post-spay check", as("consult", { consult: true })],
+      // …but an operation bundled with a check is the operation.
+      ["Spay + pre-op check", as("surgery", { surgery: true, procedure: true })],
+      ["Spay incl. health check", as("surgery", { surgery: true, procedure: true })],
+      ["Neuter + pre-op check", as("surgery", { surgery: true, procedure: true })],
+      ["Neuter incl. health check", as("surgery", { surgery: true, procedure: true })],
       ["Post-op check", as("consult", { consult: true })],
       ["Post-operative review", as("consult", { consult: true })],
       ["Follow-up consultation", as("consult", { consult: true })],
@@ -110,6 +122,11 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Surgery pack / consumables", as("surgery", { surgery: true, procedure: false })],
       ["Surgical pack", as("surgery", { surgery: true, procedure: false })],
       ["Surgery - pack (sterile)", as("surgery", { surgery: true, procedure: false })],
+      ["Surgery pack", as("surgery", { surgery: true, procedure: false })],
+      ["Surgical pack/drapes", as("surgery", { surgery: true, procedure: false })],
+      ["Surgery package", as("surgery", { surgery: true, procedure: true })], // the SURGERY service ("surgery %")
+      ["Surgery - package (dog)", as("surgery", { surgery: true, procedure: true })],
+      ["Surgical package", "unmapped"],
       ["Surgical consumables", as("surgery", { surgery: true, procedure: false })],
       ["Surgery consumables", as("surgery", { surgery: true, procedure: false })],
       // A "package" / "pack" of an operation is the operation.
@@ -121,6 +138,11 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Tumor removal", as("surgery", { surgery: true, procedure: true })],
       ["Lump removal", as("surgery", { surgery: true, procedure: true })],
       ["Foreign body removal", as("surgery", { surgery: true, procedure: true })],
+      ["Linear foreign body enterotomy", as("surgery", { surgery: true, procedure: true })],
+      ["Eye foreign body flush", as("hospital_treatment")],
+      ["Foreign body flush (ear)", as("hospital_treatment")],
+      ["Eye foreign body removal", "unmapped"],
+      ["Ear foreign body removal", "unmapped"],
       ["Enterotomy (foreign body removal)", as("surgery", { surgery: true, procedure: true })],
       ["Sedation", as("surgery", { surgery: true, procedure: false })],
       ["General anaesthesia", as("surgery", { surgery: true, procedure: false })],
@@ -187,6 +209,15 @@ describe("item groups: stored rules, assignments and classifications", () => {
       ["Bandage removal", "unmapped"],
       ["Splint removal", "unmapped"],
       ["Tick removal", "unmapped"],
+      ["Stitch removal", "unmapped"],
+      ["Removal of sutures", "unmapped"],
+      ["Removal of cast", "unmapped"],
+      // …an operation that removes something and is then stitched stays the operation.
+      ["Castration - cryptorchid (testicle removal)", as("surgery", { surgery: true, procedure: true })],
+      ["Mass removal with stitching", as("surgery", { surgery: true, procedure: true })],
+      ["Lump removal and suturing", as("surgery", { surgery: true, procedure: true })],
+      ["Drain placement after mass removal", as("surgery", { surgery: true, procedure: true })],
+      ["Bandage after lump removal", as("surgery", { surgery: true, procedure: true })],
       ["Diagnostic section fee", "unmapped"], // not a C-section ("…c section…")
     ];
     const results = cases.map(([name]) => {
@@ -213,7 +244,7 @@ describe("item groups: stored rules, assignments and classifications", () => {
 
   it("an owner rule reclassifies every name at once; a duplicate or invalid rule is refused", async () => {
     await linesNamed([{ name: "Skin scraping test" }, { name: "Skin scraping test (deep)" }, { name: "RM10 OFF", type: 55 }]);
-    await classifyUnclassifiedItems(db.sql);
+    await reclassifyAllItems(db.sql);
     expect(await stored(["Skin scraping test", "Skin scraping test (deep)", "RM10 OFF"])).toEqual({
       "Skin scraping test": "unmapped",
       "Skin scraping test (deep)": "unmapped",
@@ -259,7 +290,7 @@ describe("item groups: stored rules, assignments and classifications", () => {
 
   it("a “leave unmapped” rule keeps matching items out of every group (and says so)", async () => {
     await linesNamed([{ name: "Consultation fee" }, { name: "Consultation" }]);
-    await classifyUnclassifiedItems(db.sql);
+    await reclassifyAllItems(db.sql);
     const added = await addItemRule(db.sql, { matchType: "pattern", pattern: "%fee%", priority: 100, classification: null });
     expect(added).toMatchObject({ status: "saved" });
     expect(await stored(["Consultation fee", "Consultation"])).toEqual({ "Consultation fee": "unmapped", Consultation: "consult" });
@@ -268,7 +299,7 @@ describe("item groups: stored rules, assignments and classifications", () => {
     expect((await listItemRules(db.sql)).find((rule) => rule.pattern === "%fee%")).toMatchObject({ classification: null, items: 1 });
     // A seeded one: cancellation fees never become surgery.
     await linesNamed([{ name: "Surgery cancellation fee" }]);
-    await classifyUnclassifiedItems(db.sql);
+    await reclassifyAllItems(db.sql);
     expect((await listItems(db.sql)).find((item) => item.itemKey === "surgery cancellation fee")).toMatchObject({
       source: "unmapped",
       rule: { pattern: "%fee%" }, // the owner's (priority 100) beats the seeded %cancel% (99)
@@ -277,7 +308,7 @@ describe("item groups: stored rules, assignments and classifications", () => {
 
   it("the owner's assignment beats the rules for every spelling of the item; clearing it goes back to the rules", async () => {
     await linesNamed([{ name: "Consultation" }, { name: "CONSULTATION " }, { name: "Consultation fee" }]);
-    await classifyUnclassifiedItems(db.sql);
+    await reclassifyAllItems(db.sql);
 
     expect(await assignItem(db.sql, { itemKey: itemKey("consultation"), classification: as("rehab_tcvm"), assignedBy: "owner@example.test" })).toEqual({
       status: "saved",
@@ -317,7 +348,7 @@ describe("item groups: stored rules, assignments and classifications", () => {
       { name: "Ear cleaner 100ml", type: 1 },
       { name: "RM10 OFF", type: 55 },
     ]);
-    await classifyUnclassifiedItems(db.sql);
+    await reclassifyAllItems(db.sql);
     await assignItem(db.sql, { itemKey: "ear cleaner 100ml", classification: as("medicines_supplements") });
 
     const items = await listItems(db.sql);
@@ -345,11 +376,26 @@ describe("item groups: stored rules, assignments and classifications", () => {
     ]);
   });
 
-  it("the catch-up classifies names stored without one (e.g. lines synced before item groups existed)", async () => {
+  it("the per-run recompute classifies names stored without one (e.g. lines synced before item groups existed)", async () => {
     await linesNamed([{ name: "X-ray" }, { name: "Microchip" }]);
     expect(await stored(["X-ray", "Microchip"])).toEqual({});
-    expect(await classifyUnclassifiedItems(db.sql)).toBe(2);
+    expect(await reclassifyAllItems(db.sql)).toBe(2);
     expect(await stored(["X-ray", "Microchip"])).toEqual({ "X-ray": "diagnostics", Microchip: "unmapped" });
-    expect(await classifyUnclassifiedItems(db.sql)).toBe(0);
+    expect(await reclassifyAllItems(db.sql)).toBe(0); // nothing changed, nothing written
+  });
+
+  it("the per-run recompute follows rules changed outside the app (a seed-rule migration), without touching the owner's assignments", async () => {
+    await linesNamed([{ name: "X-ray" }, { name: "Microchip" }, { name: "Grooming" }]);
+    await reclassifyAllItems(db.sql);
+    await assignItem(db.sql, { itemKey: "grooming", classification: as("rehab_tcvm") });
+    // What a migration does: plain SQL, no app code (so no recompute in the same transaction).
+    await db.sql`insert into item_group_rules (match_type, pattern, priority, mix_group, source) values ('exact', 'microchip', 0, 'preventive', 'seed')`;
+    await db.sql`update item_group_rules set mix_group = 'hospital_treatment' where match_type = 'pattern' and pattern = '%x-ray%' and source = 'seed'`;
+    await db.sql`insert into item_group_rules (match_type, pattern, priority, mix_group, source) values ('exact', 'grooming', 0, 'retail_other', 'seed')`;
+    expect(await stored(["X-ray", "Microchip", "Grooming"])).toEqual({ "X-ray": "diagnostics", Microchip: "unmapped", Grooming: "rehab_tcvm" });
+    expect(await reclassifyAllItems(db.sql)).toBe(2);
+    expect(await stored(["X-ray", "Microchip", "Grooming"])).toEqual({ "X-ray": "hospital_treatment", Microchip: "preventive", Grooming: "rehab_tcvm" });
+    await db.sql`update item_group_rules set mix_group = 'diagnostics' where match_type = 'pattern' and pattern = '%x-ray%' and source = 'seed'`;
+    await db.sql`delete from item_group_rules where match_type = 'exact' and pattern in ('microchip', 'grooming')`;
   });
 });
