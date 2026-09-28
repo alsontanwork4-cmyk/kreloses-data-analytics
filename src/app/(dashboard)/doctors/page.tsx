@@ -2,11 +2,12 @@ import { Stethoscope } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { getDataFreshness, getDoctorRanking, METRIC_DEFINITIONS, type MetricName, type StaffFigures } from "@/analytics";
+import { getDataFreshness, getDoctorRanking, getPendingLineItems, METRIC_DEFINITIONS, type MetricName, type StaffFigures } from "@/analytics";
 import { requireUser } from "@/auth/session";
 import { HorizontalBarChart } from "@/components/charts/horizontal-bar-chart";
 import { DataTable, type DataTableColumn } from "@/components/data-table/data-table";
 import { NoSalesYet } from "@/components/empty-state";
+import { PendingLineItemsNote } from "@/components/pending-line-items-note";
 import { PageShell } from "@/components/shell/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { getDb } from "@/db/client";
@@ -55,9 +56,10 @@ export default async function DoctorsPage({ searchParams }: PageProps<"/doctors"
   const { filter } = filterState;
   const splitByBranch = params.split === "branch";
   const sql = getDb();
-  const [ranking, freshness] = await Promise.all([
+  const [ranking, freshness, pending] = await Promise.all([
     getDoctorRanking(sql, filter, { splitByBranch }),
     getDataFreshness(sql, { dateFrom: filter.dateFrom, dateTo: filter.dateTo }),
+    getPendingLineItems(sql, filter),
   ]);
 
   const filterQuery = filterSearchParamsOnly(params);
@@ -121,6 +123,7 @@ export default async function DoctorsPage({ searchParams }: PageProps<"/doctors"
         <NoSalesYet user={user} filter={filter} what="Doctor rankings" icon={Stethoscope} />
       ) : (
         <>
+          <PendingLineItemsNote filter={filter} pending={pending} />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-muted-foreground" data-testid="total-revenue">
               All revenue in this period{filter.branchIds ? " and branch" : ""}:{" "}

@@ -6,7 +6,7 @@ import { listStaffMembers, remapAlias, setStaffKind } from "@/staff/store";
 import { runSync } from "@/sync/engine";
 import { clearSyncTables, createSyncHarness, type SyncHarness } from "@/sync/test-support";
 
-import { getDoctorRanking, getOverviewKpis, getStaffAliasRevenue, listDoctors } from "./index";
+import { getDoctorRanking, getOverviewKpis, getPendingLineItems, getStaffAliasRevenue, listDoctors } from "./index";
 
 /**
  * Seam 1: the Sync Engine reads the synthetic Sale List AND each invoice's Sale Overview page
@@ -71,11 +71,11 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     staff = Object.fromEntries(rows.map((row) => [row.fullName, row.id]));
   });
 
-  it("reconciles: per branch and per month, credited lines add up to the active invoices' net amounts, to the sen", async () => {
+  it("reconciles: per branch and per month, credited lines add up to the invoices' revenue base (active nets), to the sen", async () => {
     const rows = await db.sql<{ branch: string; month: string; net: string | null; credited: string | null }[]>`
       with nets as (
-        select b.name as branch, to_char(i.sale_date, 'YYYY-MM') as month, sum(i.net_amount) as net
-        from invoices i join branches b on b.id = i.branch_id where i.status = 'active' group by 1, 2
+        select b.name as branch, to_char(i.sale_date, 'YYYY-MM') as month, sum(i.revenue_base) as net
+        from invoices i join branches b on b.id = i.branch_id group by 1, 2
       ),
       credited as (
         select b.name as branch, to_char(i.sale_date, 'YYYY-MM') as month, sum(c.credited_amount) as credited
@@ -307,6 +307,11 @@ describe("Analytics Service: doctors (fed by the Sync Engine, line items include
     expect(ranking.groups.pending).toEqual({ revenue: "2300.00", invoices: 1, customers: 1, aovPerCustomer: "2300.00", itemsPerInvoice: null, sharePercent: 39.3 });
     expect(ranking.doctors.find((doctor) => doctor.name === "Dr Bravo Brown")!.revenue).toBe("1276.15"); // 3,352.00 − 2,075.85
     expect(ranking.groups.noStaff.revenue).toBe("54.90");
+    // A doctor filter hides pending sales (nobody is credited yet), so pages say how many there are.
+    const withDoctor = { ...SEPTEMBER, doctorIds: [staff["Dr Bravo Brown"]!] };
+    expect((await getDoctorRanking(db.sql, withDoctor)).groups.pending.invoices).toBe(0);
+    expect(await getPendingLineItems(db.sql, withDoctor)).toEqual({ invoices: 1, revenue: "2300.00" });
+    expect(await getPendingLineItems(db.sql, { ...withDoctor, branchIds: [branch.south] })).toEqual({ invoices: 0, revenue: "0.00" });
 
     // The next sync reads the page and everything is credited again.
     pageDown = false;

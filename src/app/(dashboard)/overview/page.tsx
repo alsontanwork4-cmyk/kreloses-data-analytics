@@ -1,10 +1,11 @@
 import { LayoutDashboard } from "lucide-react";
 import type { Metadata } from "next";
 
-import { getDataFreshness, getOverviewKpis, METRIC_DEFINITIONS, type KpiSet, type MetricName } from "@/analytics";
+import { getDataFreshness, getOverviewKpis, getPendingLineItems, METRIC_DEFINITIONS, type KpiSet, type MetricName } from "@/analytics";
 import { requireUser } from "@/auth/session";
 import { EmptyState, NoSalesYet } from "@/components/empty-state";
 import { KpiTile } from "@/components/kpi-tile";
+import { PendingLineItemsNote } from "@/components/pending-line-items-note";
 import { PageShell } from "@/components/shell/page-shell";
 import { getDb } from "@/db/client";
 import { formatClinicDateTime, formatDateRange, parseFilter } from "@/filters";
@@ -32,9 +33,10 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
   const sql = getDb();
   // Freshness for the period shown, for every branch (so "nothing synced yet" is told apart from a
   // branch filter that matches nothing).
-  const [kpis, freshness] = await Promise.all([
+  const [kpis, freshness, pending] = await Promise.all([
     getOverviewKpis(sql, filter),
     getDataFreshness(sql, { dateFrom: filter.dateFrom, dateTo: filter.dateTo }),
+    getPendingLineItems(sql, filter),
   ]);
   const dataAsOf = new Map(freshness.map((branch) => [branch.branchId, branch.dataAsOf]));
 
@@ -59,6 +61,7 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
                 customers with at least one line credited to them.
               </p>
             ) : null}
+            <PendingLineItemsNote filter={filter} pending={pending} />
             <KpiGrid kpis={kpis.total} idPrefix="kpi" />
             <p className="text-xs text-muted-foreground">
               Compared with the previous period ({formatDateRange(kpis.previousPeriod.dateFrom, kpis.previousPeriod.dateTo)}) and

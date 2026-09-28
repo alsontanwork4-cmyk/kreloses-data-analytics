@@ -20,6 +20,7 @@ export {
   type StaffGroup,
   type StaffRow,
 } from "./doctors";
+export { getPendingLineItems, type PendingLineItems } from "./pending";
 export { getDataFreshness, type BranchFreshness } from "./freshness";
 export { comparisonPeriods, type DateRange } from "./periods";
 export { METRIC_DEFINITIONS, type MetricName } from "./definitions";
