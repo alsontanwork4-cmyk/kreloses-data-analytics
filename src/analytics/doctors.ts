@@ -3,6 +3,7 @@ import type { GlobalFilter } from "@/filters";
 import { moneyToSen, type Money } from "@/lib/money";
 
 import { branchScope, factsScope, revenueFacts } from "./facts";
+import { itemsPerInvoiceSql } from "./items-per-invoice";
 import type { DateRange } from "./periods";
 
 /**
@@ -114,7 +115,7 @@ export async function getDoctorRanking(sql: Sql, filter: GlobalFilter, options: 
       count(distinct f.invoice_id)::int as invoices,
       count(distinct f.customer_id)::int as customers,
       round(sum(f.revenue) / nullif(count(distinct f.customer_id), 0), 2)::text as aov,
-      round(count(f.invoice_line_id)::numeric / nullif(count(distinct f.invoice_id), 0), 2)::text as items_per_invoice,
+      ${itemsPerInvoiceSql(sql)}::text as items_per_invoice,
       round(100 * sum(f.revenue) / nullif(${total!.revenue}::numeric, 0), 1)::text as share
     from facts f
     where ${inPeriod}

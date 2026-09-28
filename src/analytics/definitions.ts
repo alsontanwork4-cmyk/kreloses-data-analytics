@@ -1,4 +1,5 @@
 import { RETENTION_DEFINITIONS } from "./retention-definitions";
+import { UPSELL_DEFINITIONS } from "./upsell-definitions";
 
 /**
  * Plain-language definitions of every metric the Analytics Service returns. The dashboard shows
@@ -59,6 +60,7 @@ export const METRIC_DEFINITIONS = {
   lastSyncRun:
     "Last sync run: for each Kreloses connection, what happened to its most recent sync: succeeded (read its whole date range), stopped at its time limit (the next sync of those dates carries on), some invoice pages missing (everything else was read; those sales count as \"line items not synced yet\" until a later sync reads them), failed (with the reason) or still running; and whether the connection's latest login to Kreloses worked.",
   ...RETENTION_DEFINITIONS,
+  ...UPSELL_DEFINITIONS,
   mixGroup:
     "Service-mix group: every item sold belongs to one of eight groups — Consult, Surgery, Diagnostics, Hospital & treatment, Rehab & TCVM, Medicines & supplements, Preventive, Retail & other — and may carry surgery, consult, vaccine, dental-scaling and procedure flags. The owner's assignment for an item (Settings → Items) decides first; otherwise exact-name rules, then pattern rules (SQL ILIKE style: % any characters, _ one character; names compared ignoring case and extra spaces), each by priority (highest first); the first rule that matches decides, and a rule may leave matching items unmapped (e.g. cancellation fees). An item no rule recognises is \"Unmapped\" until the owner assigns it. Changing a rule or an assignment changes every figure at once, past periods included, without re-syncing. The starting rules follow the spec's definitions and common item names; they are not the owner's original hand-built rules.",
   serviceMix:

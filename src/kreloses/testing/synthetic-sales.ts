@@ -12,11 +12,13 @@ import type { SaleListRow, SaleOverviewModel } from "./fake-kreloses";
  * place sales on dates relative to "today" (e2e).
  *
  * Shapes follow the shared fixtures: `/Date(ms)/` sale dates, formatted amounts ("1,234.50",
- * negatives in parentheses), ItemType 1 (product) / 4 (service), short staff names on lines. The
- * lines add up to the net amount (no discount lines, no tax), so each line is credited exactly its
- * own amount. A line is one unit at its amount unless it gives `quantity` and `unitPrice` (a charged
- * amount below quantity × unit price is an item-level discount). Customer `n` is Kreloses customer
- * `90000 + n`, "Customer 000n"; `null` is a walk-in.
+ * negatives in parentheses), ItemType 1 (product) / 4 (service) / 55 (discount line), short staff
+ * names on lines. The lines add up to the net amount (no tax), so without a discount line each line
+ * is credited exactly its own amount; a discount line (a negative amount, written like the shared
+ * fixtures' "5% DISCOUNT" lines) is spread over the others by the Sync Engine. A line is one unit at
+ * its amount unless it gives `quantity` and `unitPrice` (a charged amount below quantity × unit
+ * price is an item-level discount). Customer `n` is Kreloses customer `90000 + n`, "Customer 000n";
+ * `null` is a walk-in.
  *
  * No `import.meta` and no file reads: the Playwright specs import this module too.
  */
@@ -40,8 +42,8 @@ export interface SyntheticLine {
   staff: string | null;
   /** The charged amount (after any item-level discount); by default quantity 1 at this unit price. */
   amount: Money;
-  /** Default 4 (service). */
-  itemType?: 1 | 4;
+  /** Default 4 (service). 55: a discount line on the whole invoice (a negative `amount`, no staff). */
+  itemType?: 1 | 4 | 55;
   /** Quantity as Kreloses writes it ("2", "0.5", "(1)" for a return is written from a negative). Default 1. */
   quantity?: number;
   /** Price per unit; required with a `quantity` other than 1. Default: `amount`. */
@@ -70,6 +72,7 @@ export function syntheticSales(sales: readonly SyntheticSale[]): {
 function saleListRow(sale: SyntheticSale): SaleListRow {
   const branch = BRANCHES[sale.branch];
   const net = formatAmount(netSen(sale));
+  const { gross, discounts } = grossAndDiscounts(sale);
   return {
     SaleId: sale.saleId,
     SaleName: saleName(sale),
@@ -79,8 +82,8 @@ function saleListRow(sale: SyntheticSale): SaleListRow {
     CustomerName: sale.customer === null ? null : customerName(sale.customer),
     SaleDate: aspNetDate(sale.at),
     SaleStatusName: sale.status ?? "Active",
-    GrossAmount: net,
-    Discounts: "0.00",
+    GrossAmount: gross,
+    Discounts: discounts,
     NetAmount: net,
     TaxAmount: "0.00",
     Total: net,
@@ -93,6 +96,7 @@ function saleListRow(sale: SyntheticSale): SaleListRow {
 function saleOverviewModel(sale: SyntheticSale): SaleOverviewModel {
   const branch = BRANCHES[sale.branch];
   const net = formatAmount(netSen(sale));
+  const { gross, discounts } = grossAndDiscounts(sale);
   return {
     Sale: {
       SaleId: sale.saleId,
@@ -118,13 +122,14 @@ function saleOverviewModel(sale: SyntheticSale): SaleOverviewModel {
         Amount: formatAmount(moneyToSen(line.amount)),
         StaffName: line.staff ?? "",
         ItemType: line.itemType ?? 4,
-        DiscountName: discountSen > 0 ? "Item discount" : null,
-        DiscountAmount: formatAmount(discountSen),
+        ...(line.itemType === 55
+          ? { DiscountName: line.name, DiscountAmount: formatAmount(-moneyToSen(line.amount)) }
+          : { DiscountName: discountSen > 0 ? "Item discount" : null, DiscountAmount: formatAmount(discountSen) }),
       };
     }),
     Totals: {
-      GrossAmount: net,
-      Discounts: "0.00",
+      GrossAmount: gross,
+      Discounts: discounts,
       NetAmount: net,
       TaxAmount: "0.00",
       Total: net,
@@ -149,6 +154,12 @@ function lineUnits(line: SyntheticLine): { quantity: number; unitPriceSen: numbe
 
 function netSen(sale: SyntheticSale): number {
   return sale.lines.reduce((sum, line) => sum + moneyToSen(line.amount), 0);
+}
+
+/** The header's gross (the item lines) and discounts (what its discount lines take off); without one, gross = net and discounts 0. */
+function grossAndDiscounts(sale: SyntheticSale): { gross: string; discounts: string } {
+  const discountSen = -sale.lines.filter((line) => line.itemType === 55).reduce((sum, line) => sum + moneyToSen(line.amount), 0);
+  return { gross: formatAmount(netSen(sale) + discountSen), discounts: formatAmount(discountSen) };
 }
 
 function saleName(sale: SyntheticSale): string {

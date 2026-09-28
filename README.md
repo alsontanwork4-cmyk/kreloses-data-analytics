@@ -950,6 +950,53 @@ getRetention(sql, filter): Promise<Retention>
 - Charts: `<HorizontalBarChart>` now draws a zero value as a 2px stub (`minPointSize`), so a 0.0%
   rate (or RM 0.00) keeps its bar label.
 
+### Upsell (`src/analytics/upsell.ts`, #14)
+
+How often each doctor's consults include diagnostics, products or a second service, and average
+items per invoice per month (spec stories 46–47). Definitions: `UPSELL_DEFINITIONS`
+(`upsell-definitions.ts`, spread into `METRIC_DEFINITIONS`; names in `UPSELL_METRICS`) and CONTEXT.md
+"Upsell". The Upsell page (`/upsell`) and a future MCP tool only render this:
+
+```ts
+getConsultAttachRates(sql, filter): Promise<ConsultAttachRates>
+  // { period, doctors: (AttachRateSet & { staffId, name, source, active })[]   kind doctor, within the doctor filter,
+  //                                                                            with ≥ 1 consult invoice; most consult invoices first, then name
+  //   allDoctors: AttachRateSet     every doctor's consult invoices pooled, dates + branches (doctor filter ignored)
+  //   pendingLineItems }            sales not synced yet in dates + branches: they cannot be classified, so they are left out
+  // AttachRateSet = { consultInvoices, wholeInvoice: AttachFigures, ownLines: AttachFigures }
+  // AttachFigures = { diagnostics, products, secondService, anyAddOn: { invoices, percent (1 dp, SQL; null without consult invoices) } }
+getItemsPerInvoiceTrend(sql, filter, { now? }): Promise<ItemsPerInvoiceTrend>
+  // { period, months: TrendMonth[] (#10's trendMonths: partial months flagged), doctors: { staffId, name, source, active,
+  //   total, points: { month, itemLines, invoices, itemsPerInvoice (2 dp | null) }[] }[] }   most invoices first, then name
+itemsPerInvoiceSql(sql)   // (./items-per-invoice.ts) THE items-per-invoice aggregate over revenueFacts rows `f`; getDoctorRanking uses it too
+```
+
+- **Consult invoice** (orchestrator decision): an active invoice in the dates and branches, line items
+  synced, with ≥ 1 line credited to the doctor whose item has the consult flag (#9) and quantity > 0 (a
+  free consult counts, a returned one does not). Two consulting doctors on one invoice: it is each one's.
+- **Add-on**: a line on that invoice that is NOT a consult line and charged more than zero
+  (`invoice_lines.amount`, its own amount after any item discount — so a free add-on, a returned item
+  and a discount line, which is no credited line at all, never count). Diagnostics = `mix_group =
+  'diagnostics'`; product = ItemType 1 (`PRODUCT_ITEM_TYPE`); second service = ItemType 4 (not
+  consult). They overlap (an X-ray service is diagnostics AND a second service); "any add-on" is ≥ 1 of
+  the three. **Whole invoice** (the default) counts add-ons credited to anyone on the invoice (the
+  visit's basket); **own lines** only those credited to the doctor. Both come back from one query.
+- Pending sales (line items not synced yet) cannot be classified: excluded, and the page shows
+  `<PendingLineItemsNote doctorsOnly>` with `pendingLineItems`.
+- Items per invoice over time = #5's definition (`itemsPerInvoiceSql`) per clinic month; the whole
+  period equals the Doctors page's figure (tested).
+- The page: attach-rate `<GroupedBarChart>` (series = the three add-on kinds, slots 1–3) and table
+  (`upsell-attach-rates[-own-lines]` CSV, with each rate's invoice count as an export-only column),
+  the `?addons=own` switch (page-specific param the filter bar keeps), the items-per-invoice
+  `<LineTrendChart axisFormat="decimal">` (toggleable doctors, colours in `listTrendDoctors` order as on
+  Trends) and monthly table (`upsell-items-per-invoice` CSV with the lines and invoices behind each
+  figure), empty states per section.
+- Tests: `upsell.test.ts` (Seam 1) syncs `testing/upsell-scenario.ts` (hand-built sales, Aug–Sep 2026:
+  diagnostics by another doctor, a free product, two consult lines, consult + surgery, a discount line,
+  a returned product, a missing invoice page…) and documents every hand-computed rate;
+  `e2e/upsell.spec.ts` serves the same scenario through the fake and checks the page, CSVs and filters.
+  `syntheticSales` lines may now be `itemType: 55` (a discount line: negative amount, no staff).
+
 ### Item groups and service mix (`src/items/`, #9)
 
 Every item sold (discount lines excluded) is in one of eight **service-mix groups** — keys
@@ -1214,6 +1261,12 @@ const columns: DataTableColumn<Row>[] = [
   be summed at all. Trends gives the slots to active doctors in the Kreloses staff list first
   (`listTrendDoctors` order passed as `stableSeriesSlots`'s `compare`), so current doctors get the
   colours and each keeps theirs whatever the filter shows.
+- `<GroupedBarChart rows={[{ id, label, values, valueLabels }]} series={[{ key, label, color }]} title domain? />`
+  (#14) is the grouped horizontal bar chart (Upsell: attach rates per doctor, one bar per add-on kind):
+  series in fixed order with stable colours, a 2px gap between a group's bars, the exact value at each
+  tip, an HTML legend and a tooltip listing the row; `domain={[0, 100]}` for percentages.
+  `<LineTrendChart axisFormat="decimal">` labels the value axis with plain numbers on round ticks
+  (items per invoice) instead of ringgit.
 - `<StackedBarChart rows={[{ id, label, values, valueLabels, totalLabel }]} series={[{ key, label, color }]} title />`
   is the part-to-whole chart (Mix page: groups per doctor): series in a fixed order with stable
   colours (the eight groups take slots 1–8 in `MIX_GROUPS` order; "Unmapped" is neutral

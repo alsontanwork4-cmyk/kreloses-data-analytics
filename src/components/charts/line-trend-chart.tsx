@@ -38,6 +38,16 @@ export interface TrendChartSeries {
 const HEIGHT = 300;
 const NEUTRAL = "var(--muted-foreground)";
 const COMPACT = new Intl.NumberFormat("en-MY", { notation: "compact", maximumFractionDigits: 1 });
+const DECIMAL = new Intl.NumberFormat("en-MY", { maximumFractionDigits: 2 });
+const ROUND_STEPS = [0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100];
+
+/** Ticks 0, step, 2·step… up to the first multiple of a round step at or above `max`, at most 4 intervals. */
+function roundTicks(max: number): number[] {
+  if (max <= 0) return [0, 1];
+  const step = ROUND_STEPS.find((candidate) => max / candidate <= 4) ?? Math.ceil(max / 4);
+  const intervals = Math.ceil(max / step - 1e-9);
+  return Array.from({ length: intervals + 1 }, (_, index) => index * step);
+}
 
 /**
  * A line chart over time, one toggleable line per series (e.g. monthly revenue per doctor) — the
@@ -54,6 +64,7 @@ export function LineTrendChart({
   periods,
   series,
   testId,
+  axisFormat = "ringgit",
 }: {
   /** What the chart shows, e.g. "Monthly revenue by doctor" (also the start of the accessible summary). */
   title: string;
@@ -62,6 +73,8 @@ export function LineTrendChart({
   periods: readonly TrendChartPeriod[];
   series: readonly TrendChartSeries[];
   testId?: string;
+  /** The value axis's tick labels: `ringgit` (default) "RM 1.2K"; `decimal` plain numbers ("1.5"), e.g. items per invoice. */
+  axisFormat?: "ringgit" | "decimal";
 }) {
   const router = useRouter();
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
@@ -69,6 +82,8 @@ export function LineTrendChart({
   const key = (id: string) => `s${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   const color = (item: TrendChartSeries) => (single ? seriesColor(1) : item.slot === null ? NEUTRAL : seriesColor(item.slot));
   const visible = series.filter((item) => !hidden.has(item.id));
+  // A decimal axis (e.g. items per invoice) gets round ticks from 0 over EVERY series, so hiding a line never rescales it.
+  const decimalTicks = axisFormat === "decimal" ? roundTicks(Math.max(0, ...series.flatMap((item) => item.values.filter((value) => value !== null)))) : undefined;
 
   const config = Object.fromEntries(series.map((item) => [key(item.id), { label: item.label, color: color(item) }])) satisfies ChartConfig;
   const data = periods.map((period, index) => ({
@@ -155,8 +170,8 @@ export function LineTrendChart({
               width={76}
               tickLine={false}
               axisLine={false}
-              domain={[(min: number) => Math.min(0, min), "auto"]}
-              tickFormatter={(value: number) => `RM ${COMPACT.format(value)}`}
+              {...(decimalTicks ? { ticks: decimalTicks, domain: [0, decimalTicks.at(-1)!] } : { domain: [(min: number) => Math.min(0, min), "auto"] })}
+              tickFormatter={(value: number) => (axisFormat === "decimal" ? DECIMAL.format(value) : `RM ${COMPACT.format(value)}`)}
             />
             <ChartTooltip
               cursor={{ strokeDasharray: "3 3" }}

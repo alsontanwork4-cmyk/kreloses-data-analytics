@@ -340,6 +340,34 @@ A doctor's revenue in the period (and selected branches) divided by their workin
 branch, rounded to the sen. With one branch selected: that branch's revenue per day worked
 anywhere, so the branches' figures add up to the total.
 
+## Upsell
+
+**Consult invoice**:
+For a doctor, an active invoice in the period with at least one consult line credited to them (sold:
+quantity above zero, so a free consult counts and a returned one does not). An invoice with consult
+lines of two doctors is a consult invoice of each. Sales whose line items are not synced yet cannot
+be classified and are left out (pages say how many).
+_Avoid_: Consultation (that is the item), visit (see Service visit)
+
+**Add-on**:
+A line on a consult invoice that is not a consult line and charged more than zero (its own amount,
+after any item discount): a free add-on, a returned item or a discount line never counts. Kinds:
+*diagnostics* (an item in the Diagnostics group), *product* (Kreloses item type product) and *second
+service* (a service other than a consult). The kinds overlap: an X-ray service is diagnostics and a
+second service.
+_Avoid_: Upsell item, extra
+
+**Attach rate**:
+The share of a doctor's consult invoices with at least one add-on of a kind (or of any kind), to one
+decimal. Counted on the **whole invoice** by default — add-ons credited to anyone, the visit's
+basket — or on the **doctor's own lines** only. **All doctors** pools every doctor's consult invoices
+(an invoice with two consulting doctors counts for each); the doctor filter never changes it.
+_Avoid_: Conversion rate, upsell rate
+
+**Items per invoice over time**:
+A doctor's items per invoice (see Items per invoice) per calendar month of clinic days, partial months
+flagged as in a Monthly trend.
+
 ## Syncing
 
 **Sync run**:
