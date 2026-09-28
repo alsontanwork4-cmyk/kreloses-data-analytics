@@ -1,7 +1,16 @@
 import { LayoutDashboard } from "lucide-react";
 import type { Metadata } from "next";
 
-import { getDataFreshness, getOverviewKpis, getPendingLineItems, METRIC_DEFINITIONS, type KpiSet, type MetricName } from "@/analytics";
+import {
+  getDataFreshness,
+  getOverviewKpis,
+  getPendingLineItems,
+  getServiceLineKpis,
+  METRIC_DEFINITIONS,
+  type KpiSet,
+  type MetricName,
+  type ServiceLineKpiSet,
+} from "@/analytics";
 import { requireUser } from "@/auth/session";
 import { EmptyState, NoSalesYet } from "@/components/empty-state";
 import { KpiTile } from "@/components/kpi-tile";
@@ -9,6 +18,8 @@ import { PendingLineItemsNote } from "@/components/pending-line-items-note";
 import { PageShell } from "@/components/shell/page-shell";
 import { getDb } from "@/db/client";
 import { formatClinicDateTime, formatDateRange, parseFilter } from "@/filters";
+import { formatCount } from "@/lib/format";
+import { formatRinggit } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Overview" };
@@ -18,6 +29,8 @@ const DEFINITIONS: MetricName[] = [
   "invoices",
   "customers",
   "aovPerCustomer",
+  "surgeryRevenue",
+  "consultRevenue",
   "creditedLine",
   "previousPeriod",
   "lastYear",
@@ -33,12 +46,14 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
   const sql = getDb();
   // Freshness for the period shown, for every branch (so "nothing synced yet" is told apart from a
   // branch filter that matches nothing).
-  const [kpis, freshness, pending] = await Promise.all([
+  const [kpis, freshness, pending, serviceLines] = await Promise.all([
     getOverviewKpis(sql, filter),
     getDataFreshness(sql, { dateFrom: filter.dateFrom, dateTo: filter.dateTo }),
     getPendingLineItems(sql, filter),
+    getServiceLineKpis(sql, filter),
   ]);
   const dataAsOf = new Map(freshness.map((branch) => [branch.branchId, branch.dataAsOf]));
+  const branchServiceLines = new Map(serviceLines.branches.map((branch) => [branch.branchId, branch]));
 
   return (
     <PageShell
@@ -62,7 +77,14 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
               </p>
             ) : null}
             <PendingLineItemsNote filter={filter} pending={pending} />
-            <KpiGrid kpis={kpis.total} idPrefix="kpi" />
+            {!filter.doctorIds && pending.invoices > 0 ? (
+              <p data-testid="service-lines-pending-note" className="rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
+                {formatCount(pending.invoices)} {pending.invoices === 1 ? "invoice" : "invoices"} in this period ({formatRinggit(pending.revenue)}){" "}
+                {pending.invoices === 1 ? "has" : "have"} line items not synced yet: {pending.invoices === 1 ? "it is" : "they are"} in revenue,
+                invoices and customers, but not yet in surgery or consult revenue. The next sync reads {pending.invoices === 1 ? "it" : "them"}.
+              </p>
+            ) : null}
+            <KpiGrid kpis={kpis.total} serviceLines={serviceLines.total} idPrefix="kpi" />
             <p className="text-xs text-muted-foreground">
               Compared with the previous period ({formatDateRange(kpis.previousPeriod.dateFrom, kpis.previousPeriod.dateTo)}) and
               the same period last year ({formatDateRange(kpis.lastYear.dateFrom, kpis.lastYear.dateTo)}).
@@ -91,7 +113,7 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
                           {asOf ? `Data as of ${formatClinicDateTime(asOf)}` : "Not synced up to the end of this period yet"}
                         </p>
                       </div>
-                      <KpiGrid kpis={branch} idPrefix="branch-kpi" size="sm" />
+                      <KpiGrid kpis={branch} serviceLines={branchServiceLines.get(branch.branchId)} idPrefix="branch-kpi" size="sm" />
                     </article>
                   </li>
                 );
@@ -113,15 +135,21 @@ export default async function OverviewPage({ searchParams }: PageProps<"/overvie
   );
 }
 
-/** Four KPI tiles; columns follow the space the grid actually has (a container query), not the window. */
-function KpiGrid({ kpis, idPrefix, size }: { kpis: KpiSet; idPrefix: string; size?: "sm" }) {
+/** The KPI tiles (four, plus surgery and consult revenue); columns follow the space the grid actually has (a container query), not the window. */
+function KpiGrid({ kpis, serviceLines, idPrefix, size }: { kpis: KpiSet; serviceLines?: ServiceLineKpiSet; idPrefix: string; size?: "sm" }) {
   return (
     <div className="@container">
-      <div className={cn("grid grid-cols-1 gap-3", size === "sm" ? "@xs:grid-cols-2 @3xl:grid-cols-4" : "@md:grid-cols-2 @4xl:grid-cols-4")}>
+      <div className={cn("grid grid-cols-1 gap-3", size === "sm" ? "@xs:grid-cols-2 @3xl:grid-cols-3" : "@md:grid-cols-2 @4xl:grid-cols-3")}>
         <KpiTile title="Revenue" kind="money" kpi={kpis.revenue} testId={`${idPrefix}-revenue`} size={size} />
         <KpiTile title="Invoices" kind="count" kpi={kpis.invoices} testId={`${idPrefix}-invoices`} size={size} />
         <KpiTile title="Customers" kind="count" kpi={kpis.customers} testId={`${idPrefix}-customers`} size={size} />
         <KpiTile title="AOV per customer" kind="money" kpi={kpis.aovPerCustomer} testId={`${idPrefix}-aov`} size={size} />
+        {serviceLines ? (
+          <>
+            <KpiTile title="Surgery revenue" kind="money" kpi={serviceLines.surgeryRevenue} testId={`${idPrefix}-surgery`} size={size} />
+            <KpiTile title="Consult revenue" kind="money" kpi={serviceLines.consultRevenue} testId={`${idPrefix}-consult`} size={size} />
+          </>
+        ) : null}
       </div>
     </div>
   );

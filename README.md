@@ -101,10 +101,12 @@ src/
   connections/    Kreloses connections: encrypted credentials, login test, store
   sync/           Sync Engine: Sale List → invoices/branches/customers, line items → credited
                   lines, sync_runs log, lease
-  attribution/    Attribution & Rules — PURE functions: crediting lines, staff-name matching
+  attribution/    Attribution & Rules — PURE functions: crediting lines, staff-name matching, item
+                  groups (item name → service-mix group + flags)
   staff/          Staff directory + staff names on lines (aliases): matching, remap, kinds
+  items/          Item groups: rules, the owner's assignments, derived classifications (#9)
   analytics/      Analytics Service — the single source of every metric (Overview KPIs, doctor
-                  ranking, freshness)
+                  ranking, freshness, service mix, surgery / consult, working days)
   lib/            money (exact RM strings ↔ integer sen, display), format (display only)
   mcp/            Read-only MCP server (/api/mcp): bearer-token check, stateless Streamable HTTP
                   handler, tools/ (one file per tool + the registry)
@@ -280,7 +282,8 @@ after its own request). The owner is
 `addConnection(page, …)` / `syncMonth(card, "September 2026")` (`e2e/support/connections.ts`) add a
 connection and run "Sync now" (it reads line items too: allow ~15 s per synthetic month);
 `clearSyncedData()` (`e2e/support/db.ts`) empties every synced table — call it before and after a
-spec that syncs.
+spec that syncs. A spec that changes item groups (`e2e/mix.spec.ts`) also deletes
+`item_assignments`, owner `item_group_rules` and `item_classifications` before and after.
 
 The app under test talks to a **fake Kreloses** (`e2e/support/fake-kreloses-server.ts`, the same
 fake the unit tests use, on its own port) via `KRELOSES_BASE_URL_WWW/SEA`, with a throwaway
@@ -577,13 +580,8 @@ Every revenue figure is a sum of **credited lines** (spec: Attribution & Rules; 
   `credited_amount` column is the pre-refund amount (null on pending rows). Reconciliation (tested
   per branch and month): Σ revenue = Σ `revenue_base`, and Σ credited amount = Σ active net.
 
-**#9 (item groups / mix)**: keep the item → group rules in their own table(s) and resolve them at
-query time, exactly like staff: add a pure matcher in `src/attribution/` (item name/type →
-`{group, surgery, consult, vaccine, dental}`), store the owner's rules (e.g. `item_groups` +
-per-name overrides), and add `mix_group` and the four flags as columns of `revenueFacts` by joining
-`invoice_lines` (`item_name`, `item_type`) on `invoice_line_id`. Do not copy groups onto
-`credited_lines` (a rule change must change history at once, spec story 26). Pending rows have no
-item (group "Line items not synced yet"); the unitemised remainder has none either.
+**#9 (item groups / mix)** is in place: `revenueFacts` has the item and its service-mix group and
+flags as columns (see [Item groups and service mix](#item-groups-and-service-mix-srcitems-9)).
 
 **#6 (nightly / change detection / refunds)**: which invoices get their lines (re)read is decided
 in ONE place, `invoicesNeedingLines()` (`src/sync/lines.ts`): active, `not lines_current` (never
@@ -731,7 +729,15 @@ authentication. Tests: `createSyncHarness(sql, { requestDelayMs? })` / `clearSyn
 `snapshotSyncedData(sql)` (every synced row by natural keys, for "identical state" assertions) in
 `src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps; `h.fake.saleOverviews`
 edits line items; `clearSyncTables` empties staff too). The lease follows the DATABASE clock: to
-simulate expiry, move `connection_locks.expires_at` into the past.
+simulate expiry, move `connection_locks.expires_at` into the past. For hand-built sales instead of the
+shared fixture set: `syntheticSales([{ saleId, branch: "north" | "south", at: "2026-10-05 10:00" (KL),
+customer, status?, page?, lines: [{ name, amount, staff, itemType?, quantity?, unitPrice? }] }])` →
+`{ rows, overviews }` (`src/kreloses/testing/synthetic-sales.ts`; a line is one unit at `amount` unless
+it gives `quantity` + `unitPrice`) → `createSyncHarness(sql, { fake: { saleList: { rows }, saleOverviews: overviews } })`.
+#9: every run (manual, nightly and its sweep) first classifies item names stored without a
+service-mix classification (`classifyUnclassifiedItems`, in `runSync`), and `saveInvoiceLines`
+classifies new item names in its transaction (`classifyItemNames`) — see
+[Item groups](#item-groups-and-service-mix-srcitems-9).
 
 ### Analytics Service (`src/analytics/`)
 
@@ -776,6 +782,9 @@ getConnectionSyncStatus(sql): Promise<ConnectionSyncStatus[]>
   //   outcome: running | succeeded | stopped_at_time_limit | invoice_pages_missing | failed, dateFrom, dateTo,
   //   startedAt, finishedAt, error, warnings: string[] } | null }   (never the Kreloses email or password)
 listBranches(sql) / listDoctorNames(sql)   // (#17) directory lookups for resolving typed names: { id, name } / { id, name, lineNames }
+// #9 service mix (src/analytics/mix.ts, service-lines.ts) — see "Item groups and service mix":
+getServiceMix, getTopItemsByDoctor, getItemRevenue, getServiceLinesByDoctor, getMonthlyServiceLineRevenue,
+getServiceLineKpis, getRevenuePerWorkingDay, serviceLineCondition
 METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); MCP results quote them verbatim
 ```
 
@@ -784,7 +793,9 @@ What counts as revenue — and who it is credited to — is decided in ONE place
 rows), columns `sale_date, branch_id, customer_id, invoice_id, revenue` (after refunds),
 `credited_line_id, invoice_line_id, staff_alias_id, staff_id, credit_group, gross_amount` and
 `credited_amount` (before refunds; #6) (see
-[Credited lines](#credited-lines-the-revenue-model)). Build every new metric on it (`with facts as
+[Credited lines](#credited-lines-the-revenue-model)) plus the item: `item_name, item_type,
+item_key, mix_group, is_surgery, is_consult, is_vaccine, is_dental_scaling, is_procedure` (see
+[Item groups](#item-groups-and-service-mix-srcitems-9)). Build every new metric on it (`with facts as
 (${revenueFacts(sql, scope)}) …`): `sum(revenue)`, `count(distinct invoice_id)`, `count(distinct
 customer_id)`, `count(invoice_line_id)` (item lines), grouped by `staff_id` / `credit_group` /
 `branch_id` / `sale_date`. With `doctorIds` (staff ids) it keeps only lines credited to them, so
@@ -812,9 +823,9 @@ getDoctorDetail(sql, staffId, filter, { now? }): Promise<DoctorDetail>
   // { status: "not_found" } | { status: "not_a_doctor", staff: { staffId, name, kind } }
   // | { status: "ok", doctor, period, totalRevenue, figures: StaffFigures (= their getDoctorRanking row), branches: BranchFigures[],
   //     months, monthly: TrendPoint[], pendingLineItems }   — the filter's own doctorIds are ignored (the view is for staffId)
-TREND_MEASURES, availableTrendMeasures()     // revenue, aovPerCustomer (+ surgeryRevenue, consultRevenue once item groups exist)
+TREND_MEASURES, availableTrendMeasures()     // revenue, aovPerCustomer, surgeryRevenue, consultRevenue
 listTrendDoctors(sql): Promise<TrendDoctor[]> // every doctor, colour-slot order: active Kreloses-listed first, then the rest, by name
-ITEM_GROUP_MEASURES_AVAILABLE                // false until #9's surgery/consult flags are on revenueFacts
+ITEM_GROUP_MEASURES_AVAILABLE                // true: #9's surgery/consult flags are on revenueFacts
 ```
 
 - Months are clinic (KL) calendar months of `sale_date`: a sale at 00:30 KL on the 1st is the new
@@ -825,11 +836,10 @@ ITEM_GROUP_MEASURES_AVAILABLE                // false until #9's surgery/consult
   so they are in no series: the Trends page always shows `<PendingLineItemsNote doctorsOnly>`.
 - Year on year: each whole year against the previous one; the current year (1 Jan → today) against
   the same dates last year (`addYears`, so 29 Feb → 28 Feb), never against a whole year.
-- **Wiring surgery / consult (#9):** set `ITEM_GROUP_MEASURES_AVAILABLE = true` in `trends.ts` and
-  check the flag column names in `itemGroupRevenue()` (`f.surgery`, `f.consult`) against #9's
-  `revenueFacts`. The Trends page's measure switch (`?measure=surgery|consult`) and the figures
-  (`surgeryRevenue` / `consultRevenue`, otherwise null) follow; add a test with hand-computed
-  surgery/consult months.
+- **Surgery / consult (#9, wired):** `itemGroupRevenue()` sums `revenueFacts` rows with
+  `serviceLineCondition(sql, "surgery" | "consult")` (`f.is_surgery` / `f.is_consult`), the same
+  definition as the Mix page and the Overview tiles; the measure switch offers
+  `?measure=surgery|consult`. `trends.test.ts` has the hand-computed surgery / consult months.
 - Seam 1 test: `trends.test.ts` adds its own synthetic sales (`src/analytics/__fixtures__/trend-sales.json`:
   2024 → early 2026, sales at 23:30 KL on 31 Dec and 00:30 KL on the 1st) to the shared fixtures in
   its own fake Kreloses, and documents every hand-computed month and year.
@@ -935,6 +945,119 @@ getRetention(sql, filter): Promise<Retention>
 - Charts: `<HorizontalBarChart>` now draws a zero value as a 2px stub (`minPointSize`), so a 0.0%
   rate (or RM 0.00) keeps its bar label.
 
+### Item groups and service mix (`src/items/`, #9)
+
+Every item sold (discount lines excluded) is in one of eight **service-mix groups** — keys
+`MIX_GROUPS` = `consult`, `surgery`, `diagnostics`, `hospital_treatment`, `rehab_tcvm`,
+`medicines_supplements`, `preventive`, `retail_other` (labels `MIX_GROUP_LABELS`: Consult, Surgery,
+Diagnostics, Hospital & treatment, Rehab & TCVM, Medicines & supplements, Preventive, Retail &
+other) — with five **flags** (spec stories 23–27, 35, 40–43; ADR 0010):
+
+| Flag (`revenueFacts` column) | Meaning |
+| --- | --- |
+| `is_surgery` | A surgery line (spec "Surgery": the SURGERY service, neutering/spay, cryoablation, cystotomy, tooth extraction, pyometra, C-section, FHO, hernia repair, closed reduction, wound stitching, anaesthesia/sedation and related surgical charges) |
+| `is_procedure` | An actual operation. Always implies `is_surgery` (the pure checker and CHECK constraints enforce it). `is_surgery and not is_procedure` = a sedation / anaesthesia-only charge — for #15: a surgery case is an operation when ANY of its surgery lines is a procedure, otherwise "sedation only" |
+| `is_consult` | A consult line (CONSULTATION services and the TCVM examination; the TCVM exam is in the Consult group) |
+| `is_vaccine` | A vaccination (seeded in the Preventive group) — #15 vaccine revenue |
+| `is_dental_scaling` | Dental scaling (seeded in the Preventive group) — #15 dental revenue |
+
+Flags are independent of the group (the owner can flag a Diagnostics item as consult), except
+procedure ⇒ surgery. Unmapped / no-item / pending rows have every flag false.
+
+- **The matcher** (`src/attribution/item-groups.ts`, PURE): an item is identified by `itemKey(name)`
+  (NFKC, trimmed, whitespace collapsed, lower case). Precedence: the owner's **assignment** for the
+  item key → **exact** rules (text = key) → **pattern** rules (SQL `ILIKE` semantics on the key:
+  `%` any run, `_` one character, `\` escapes; the whole name must match; matched in O(n·m), never
+  via a regex) — within exact and within pattern rules by `priority` (higher wins), ties to the
+  lower id; an exact rule beats every pattern — else `unmapped`. The first matching rule decides,
+  and a rule may say **leave unmapped** (`classification: null`, stored as `mix_group = 'unmapped'`
+  with no flags): matching items stay unmapped (`{ source: "unmapped", ruleId }`) instead of falling
+  through to a broader rule. `createItemClassifier(rules, assignments)`, `classifyItem`,
+  `patternMatches`, `checkItemRule` (validates + normalises a rule), `checkItemFlags`.
+- **Tables** (migration `…_item_groups.sql`): `item_group_rules` (`match_type` exact|pattern,
+  `pattern` stored normalised, `priority` −10000…10000, `mix_group` (or `unmapped` = leave unmapped), the five `is_*` flags, `source`
+  seed|owner, `created_by`; unique (match_type, pattern)); `item_assignments` (`item_key` primary
+  key, group + flags, `assigned_by`); `item_classifications` — DERIVED, one row per raw
+  `invoice_lines.item_name` of a sold line: `item_key`, `mix_group` (a group or `unmapped`), the
+  flags, `source` assignment|rule|unmapped, `rule_id` (also set when a leave-unmapped rule decided). Never copy groups/flags onto `credited_lines`.
+- **Keeping `item_classifications` current** (`src/items/store.ts`, its only writer): every rule /
+  assignment change (`addItemRule`, `deleteItemRule`, `assignItem`, `clearItemAssignment`) recomputes
+  every known name in the same transaction, so every figure over all history follows at commit;
+  `saveInvoiceLines` calls `classifyItemNames(tx, names)` for new names; `runSync` first runs
+  `classifyUnclassifiedItems(sql)` (catch-up). Writers take
+  `pg_advisory_xact_lock(hashtext('item_classifications'))`. A name with no row counts as
+  `unmapped` in `revenueFacts` (its revenue is never lost). Anything else that inserts
+  `invoice_lines` (e.g. a #6 re-credit step) should call `classifyItemNames` in its transaction too.
+- **Seed rules**: from the spec's Surgery / Consult definitions plus conservative common vet names
+  for the other groups. Priorities: 99 leave unmapped (`%cancel%`; removing stitches / sutures /
+  a drain, cast, bandage, splint or tick) · 98 consult (`%consult%`: "Spay consult", "Vaccination &
+  consultation"; the TCVM exam) · 96 exceptions (post-op wording only — surgery follow-up / recheck /
+  review, post-op check / visit / review, spay / neuter check, wound check, check-up → Consult, so
+  "Follow-up X-ray" stays Diagnostics and "Follow up vaccination" a vaccine; pre-anaesthetic and
+  heartworm tests → Diagnostics; heartworm treatment → Hospital & treatment; a scaling under
+  anaesthesia → Preventive dental scaling, NOT a surgery line; drops / anaesthetic creams →
+  Medicines; flea comb and the vaccine card / certificate / book / record as a phrase → Retail &
+  other ("Vaccination - Rabies (with certificate)" stays a vaccine); the surgical pack /
+  consumables itself (`surgery pack%`, not "Surgery - Spay package") → Surgery but not an
+  operation) · 95 a generic `%review%` → leave unmapped · 92 operations named by what is removed
+  (mass, tumour, lump, foreign body) · 91 operations (the SURGERY service, `surgery %`, named procedures; C-section anchored as a word) ·
+  90 sedation / anaesthesia (surgery, not an operation — "Sedation for X-ray" too, per the spec) ·
+  80 preventive · 60 diagnostics, rehab & TCVM · 50 hospital & treatment · 40 medicines · 30 retail;
+  owner rules default to 100. Every probe name is pinned in `src/items/store.test.ts`. The owner's
+  original hand-built rules were not available: unknown items stay **unmapped** (a visible bucket)
+  and Settings → Items is where they are reconciled. Also `listItemRules(sql)`, `listItems(sql)` (per item key: name, spellings, item
+  types, lines, source, classification, deciding rule), `loadItemClassifier(sql)`.
+- **In `revenueFacts`**: `item_name`, `item_type`, `item_key` (null on the unitemised remainder and
+  pending rows), `mix_group` = a group | `unmapped` | `no_item` (unitemised remainder) | `pending`
+  (line items not synced yet: its whole revenue base), and the five flags. Every credited sen is in
+  exactly one `mix_group`, so group totals add up to revenue (tested per doctor and for the clinic,
+  over all history).
+
+Analytics (`src/analytics/mix.ts`, `service-lines.ts`; definitions `METRIC_DEFINITIONS.mixGroup`,
+`serviceMix`, `mixShare`, `mixComparison`, `topItems`, `surgeryRevenue`, `consultRevenue`,
+`workingDay`, `revenuePerWorkingDay`):
+
+```ts
+getServiceMix(sql, filter): Promise<ServiceMix>
+  // { period, thresholdPoints (MIX_COMPARISON_THRESHOLD_POINTS = 5),
+  //   doctors: { staffId, name, source, revenue, groups: Record<MixBucket, MixComparison> }[]  (the filter's doctors; revenue desc, name)
+  //   allDoctors: { revenue, groups: Record<MixBucket, MixShare> }      the clinic average: all doctors in dates + branches (doctor filter ignored)
+  //   clinic: { revenue, groups: Record<ClinicMixBucket, MixShare> } } all revenue in dates + branches (doctor filter ignored)
+  // MixBucket = MixGroup | "unmapped" (MIX_BUCKETS); ClinicMixBucket adds "no_item" | "pending" (CLINIC_MIX_BUCKETS); labels MIX_BUCKET_LABELS
+  // MixShare = { revenue: Money, sharePercent: number | null }  (1 dp; null when the row's total ≤ 0)
+  // MixComparison = MixShare & { averageSharePercent, differencePoints (doctor − all doctors, pp, 1 dp),
+  //                              comparison: "above" | "below" | "in_line" | null }  (above/below when |difference| ≥ 5.0)
+getTopItemsByDoctor(sql, filter, { limit? }): Promise<{ period, limit, doctors: { staffId, name, revenue, items: TopItem[] }[] }>
+  // limit default 5, max 50; TopItem = { itemKey, name (most frequent spelling), group, revenue, sharePercent (of the doctor's revenue), lines, invoices }; positive revenue only
+getItemRevenue(sql, filter): Promise<Record<itemKey, Money>>   // dates + branches, doctor filter ignored (Settings → Items)
+getServiceLinesByDoctor(sql, filter): Promise<{ period, total: ServiceLineFigures, doctors: (ServiceLineFigures & { staffId, name, source })[] }>
+  // ServiceLineFigures = { revenue, surgeryRevenue, consultRevenue, surgerySharePercent, consultSharePercent }; total = the whole filter (doctor filter applies)
+getMonthlyServiceLineRevenue(sql, filter, line: "surgery" | "consult"): Promise<{ month: "YYYY-MM"; staffId; revenue: Money }[]>
+  // per doctor (kind doctor) per month, by month then doctor name — for the Trends measure switch (#10)
+serviceLineCondition(sql, line)   // the SQL fragment `f.is_surgery` / `f.is_consult`, for a query over revenueFacts aliased f
+getServiceLineKpis(sql, filter): Promise<ServiceLineKpis>
+  // { period, previousPeriod, lastYear, total: { surgeryRevenue: Kpi<Money>, consultRevenue: Kpi<Money> },
+  //   branches: (… & { branchId, branchName })[] } — the same comparisons as getOverviewKpis
+getRevenuePerWorkingDay(sql, filter, { splitByBranch? }): Promise<Record<staffId, WorkingDayFigures>>
+  // { staffId, revenue (= the ranking's revenue), workingDays, revenuePerWorkingDay: Money | null,
+  //   branches?: { branchId, revenue, revenuePerWorkingDay }[] }
+  // working day = a clinic day with ≥ 1 consult or surgery line credited to them at ANY branch:
+  // the branch filter narrows the revenue, never the days
+```
+
+Pages: **Mix** (`/mix`, everyone): a stacked bar chart of revenue per group per doctor
+(`<StackedBarChart>`), "Revenue by service group" (doctors, all doctors, whole clinic; CSV), "Mix
+compared with the clinic average" (shares, ↗ / ↘ at ±5 points), "Surgery and consult revenue", "Top N
+items per doctor" (`?top=3|5|10`, default 5). The share table's CSV also has, per group, the
+difference in points and Above / Below / In line (export-only columns). **Settings → Items**
+(`/settings/items`, owner only): unmapped items by revenue in the URL's period (the top 100 shown,
+with the count when there are more; the CSV has all), all items (search `?q=`; same cap), the rules
+(add — including "Leave unmapped" — / delete). Changes revalidate the whole dashboard. The
+**Doctors** page has "Working days" ("Working days (any branch)" when split by branch: the count is
+the doctor's, repeated per branch) and "Revenue per working day"; the **Overview** has Surgery
+revenue and Consult revenue tiles, and says how many sales are not synced yet (in revenue but in
+neither service line) whenever there are any.
+
 ### Global filter
 
 The one filter every dashboard page and Analytics Service query takes lives in `@/filters`
@@ -975,11 +1098,11 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   a tab per settings page from `SETTINGS_NAV_ITEMS` (also in `nav-config.ts`: `href`, `label`,
   optional minimum `role`); `/settings` redirects to the first tab the user's role may see
   (`/forbidden` if none), and the sidebar's Settings link goes straight there (the `landing`
-  option on its `NAV_ITEMS` entry), so clicks don't redirect. To add a settings page (#5 doctors, #9 items — their slots are reserved
-  as comments in the list): create `src/app/(dashboard)/settings/<name>/page.tsx` that calls
+  option on its `NAV_ITEMS` entry), so clicks don't redirect. Tabs today: Doctors (#5), Items (#9), Users. To add a settings
+  page: create `src/app/(dashboard)/settings/<name>/page.tsx` that calls
   `requireRole(...)` and returns `<SettingsSection title description>…</SettingsSection>`
   (`@/components/settings/settings-section`, an `h2` — don't render another `PageShell`), then
-  replace your slot's comment with its entry. The tabs and the e2e suite (`e2e/users.spec.ts`
+  add its entry to `SETTINGS_NAV_ITEMS`. The tabs and the e2e suite (`e2e/users.spec.ts`
   visits every tab) pick it up.
 - Timestamps for display: `formatClinicDateTime(date)` (`@/filters`) → `'28 Sep 2026, 09:05'` in
   the clinic's time zone. Money: `formatRinggit("1234.50")` → `'RM 1,234.50'`,
@@ -1040,6 +1163,8 @@ const columns: DataTableColumn<Row>[] = [
   scrolls sideways on a phone; `priority: "secondary"` hides a column below `sm` (the CSV keeps it).
 - `exportOnly: true` keeps a column in the CSV only (e.g. a percentage the page shows inside another
   column's `cell`); `label` is a shorter on-screen header (the CSV always uses `header`).
+- `export.rows` exports other rows than those shown — e.g. every row when the table shows only the
+  first N (say so in the description; Settings → Items).
 - The download button makes sure the file starts with exactly one byte-order mark
   (`withByteOrderMark`): React drops it from a long CSV string on its way to the browser.
 - e2e: rows are `data-testid="data-table-row"`, cells `[data-column="<key>"]`, the button "Export CSV".
@@ -1073,6 +1198,11 @@ const columns: DataTableColumn<Row>[] = [
   be summed at all. Trends gives the slots to active doctors in the Kreloses staff list first
   (`listTrendDoctors` order passed as `stableSeriesSlots`'s `compare`), so current doctors get the
   colours and each keeps theirs whatever the filter shows.
+- `<StackedBarChart rows={[{ id, label, values, valueLabels, totalLabel }]} series={[{ key, label, color }]} title />`
+  is the part-to-whole chart (Mix page: groups per doctor): series in a fixed order with stable
+  colours (the eight groups take slots 1–8 in `MIX_GROUPS` order; "Unmapped" is neutral
+  `--muted-foreground`), a 2px surface gap between segments, negatives left of zero, the total at the
+  tip, an HTML legend and a tooltip listing every segment.
 
 ### MCP server (`src/mcp/`)
 

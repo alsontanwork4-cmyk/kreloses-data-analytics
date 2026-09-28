@@ -128,7 +128,8 @@ export async function getOverviewKpis(sql: Sql, filter: GlobalFilter): Promise<O
   };
 }
 
-function moneyChange<T extends Money | null>(value: T, base: T): KpiChange<T> {
+/** A money KPI's change against `base` (exact, in integer sen). */
+export function moneyChange<T extends Money | null>(value: T, base: T): KpiChange<T> {
   if (value === null || base === null) return { base, change: null as T, changePercent: null };
   const valueSen = moneyToSen(value);
   const baseSen = moneyToSen(base);

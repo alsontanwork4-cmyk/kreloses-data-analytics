@@ -88,3 +88,37 @@ export {
 export { getConnectionSyncStatus, type ConnectionSyncStatus, type LastSyncRun, type SyncRunOutcome } from "./sync-status";
 export { listBranches, listDoctorNames } from "./lookups";
 export { branchScope, factsScope, revenueFacts, staffScope, type BranchScope, type FactsScope, type StaffScope } from "./facts";
+export {
+  CLINIC_MIX_BUCKETS,
+  DEFAULT_TOP_ITEMS,
+  getItemRevenue,
+  getServiceMix,
+  getTopItemsByDoctor,
+  MAX_TOP_ITEMS,
+  MIX_BUCKET_LABELS,
+  MIX_BUCKETS,
+  MIX_COMPARISON_THRESHOLD_POINTS,
+  type ClinicMixBucket,
+  type DoctorMix,
+  type DoctorTopItems,
+  type MixBucket,
+  type MixComparison,
+  type MixComparisonResult,
+  type MixShare,
+  type ServiceMix,
+  type TopItem,
+} from "./mix";
+export {
+  getMonthlyServiceLineRevenue,
+  getRevenuePerWorkingDay,
+  getServiceLineKpis,
+  getServiceLinesByDoctor,
+  SERVICE_LINES,
+  serviceLineCondition,
+  type DoctorServiceLines,
+  type ServiceLine,
+  type ServiceLineFigures,
+  type ServiceLineKpis,
+  type ServiceLineKpiSet,
+  type WorkingDayFigures,
+} from "./service-lines";

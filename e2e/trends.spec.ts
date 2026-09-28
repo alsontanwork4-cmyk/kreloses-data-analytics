@@ -98,6 +98,30 @@ test.describe("Trends → doctor detail", () => {
       ["Dr Delta Not in staff list", "RM 800.00", "RM 480.00", "RM 1,280.00"],
     ]);
 
+    // Surgery and consult revenue (#9: the surgery / consult flags of each line's item, seeded rules):
+    // surgery = 700091 Tooth extraction (Bravo, Aug) · 700101 Spay (Alpha) · 700202 Wound stitching (Bravo);
+    // consult = Consultation lines (Alpha 700090 in Aug, 700101; Bravo 700102 + 700203; Delta 700201).
+    await expect(page.getByRole("main")).toContainText("surgery revenue and consult revenue per doctor");
+    const measureNav = page.getByRole("navigation", { name: "Measure" });
+    await measureNav.getByRole("link", { name: "Surgery revenue" }).click();
+    await expect(page).toHaveURL(/[?&]measure=surgery/);
+    await expect(chart.getByText("Monthly surgery revenue by doctor", { exact: true })).toBeVisible();
+    expect(await tableText(table, months)).toEqual([
+      ["Dr Bravo Brown", "RM 1,000.00", "RM 636.36", "RM 1,636.36"], // 700202 after its refund share (#6)
+      ["Dr Alpha Anderson", "RM 0.00", "RM 864.00", "RM 864.00"],
+      ["Dr Delta Not in staff list", "RM 0.00", "RM 0.00", "RM 0.00"],
+    ]);
+    await measureNav.getByRole("link", { name: "Consult revenue" }).click();
+    await expect(page).toHaveURL(/[?&]measure=consult/);
+    await expect(chart.getByText("Monthly consult revenue by doctor", { exact: true })).toBeVisible();
+    expect(await tableText(table, months)).toEqual([
+      ["Dr Bravo Brown", "RM 0.00", "RM 176.15", "RM 176.15"],
+      ["Dr Alpha Anderson", "RM 100.00", "RM 144.00", "RM 244.00"],
+      ["Dr Delta Not in staff list", "RM 0.00", "RM 84.37", "RM 84.37"],
+    ]);
+    await measureNav.getByRole("link", { name: "AOV per customer" }).click();
+    await expect(page).toHaveURL(/[?&]measure=aov/);
+
     // Branch switch (the global branch filter, URL state); the measure is kept.
     await page.getByRole("navigation", { name: "Branch" }).getByRole("link", { name: "Branch South" }).click();
     await expect(page).toHaveURL(/[?&]branch=\d+/);

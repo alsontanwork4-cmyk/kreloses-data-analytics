@@ -77,10 +77,10 @@ test.describe("Line items → Doctors page", () => {
     const csv = await downloadCsv(page, ranking(page));
     expect(csv.name).toBe("doctors_2026-09-01_to_2026-09-30.csv");
     expect(csv.text).toBe(
-      "﻿Doctor,Revenue (RM),Share of revenue (%),AOV per customer (RM),Invoices,Items per invoice,Customers\r\n" +
-        "Dr Bravo Brown,3252.00,56.5,813.00,4,1.50,4\r\n" +
-        "Dr Alpha Anderson,1654.35,28.7,827.18,3,2.00,2\r\n" +
-        "Dr Delta,480.00,8.3,480.00,2,1.50,1\r\n",
+      "﻿Doctor,Revenue (RM),Share of revenue (%),AOV per customer (RM),Invoices,Items per invoice,Customers,Working days,Revenue per working day (RM)\r\n" +
+        "Dr Bravo Brown,3252.00,56.5,813.00,4,1.50,4,3,1084.00\r\n" +
+        "Dr Alpha Anderson,1654.35,28.7,827.18,3,2.00,2,1,1654.35\r\n" +
+        "Dr Delta,480.00,8.3,480.00,2,1.50,1,1,480.00\r\n",
     );
 
     // Split by branch: AOV per customer counted per branch.
@@ -97,12 +97,12 @@ test.describe("Line items → Doctors page", () => {
     const split = await downloadCsv(page, ranking(page));
     expect(split.name).toBe("doctors-by-branch_2026-09-01_to_2026-09-30.csv");
     expect(split.text.split("\r\n")).toEqual([
-      "﻿Doctor,Branch,Revenue (RM),Share of revenue (%),AOV per customer (RM),Invoices,Items per invoice,Customers",
-      "Dr Bravo Brown,Branch North,2155.85,37.5,1077.93,2,1.50,2",
-      "Dr Bravo Brown,Branch South,1096.15,19.0,548.08,2,1.50,2",
-      "Dr Alpha Anderson,Branch North,1500.50,26.1,750.25,2,2.50,2",
-      "Dr Alpha Anderson,Branch South,153.85,2.7,153.85,1,1.00,1",
-      "Dr Delta,Branch South,480.00,8.3,480.00,2,1.50,1",
+      "﻿Doctor,Branch,Revenue (RM),Share of revenue (%),AOV per customer (RM),Invoices,Items per invoice,Customers,Working days (any branch),Revenue per working day (RM)",
+      "Dr Bravo Brown,Branch North,2155.85,37.5,1077.93,2,1.50,2,3,718.62",
+      "Dr Bravo Brown,Branch South,1096.15,19.0,548.08,2,1.50,2,3,365.38",
+      "Dr Alpha Anderson,Branch North,1500.50,26.1,750.25,2,2.50,2,1,1500.50",
+      "Dr Alpha Anderson,Branch South,153.85,2.7,153.85,1,1.00,1,1,153.85",
+      "Dr Delta,Branch South,480.00,8.3,480.00,2,1.50,1,1,480.00",
       "",
     ]);
 

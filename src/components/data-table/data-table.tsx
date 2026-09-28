@@ -52,12 +52,16 @@ export function DataTable<Row>({
   columns: readonly DataTableColumn<Row>[];
   rows: readonly Row[];
   rowKey: (row: Row, index: number) => string;
-  /** CSV file name parts; omit to hide the button. */
-  export?: { name: string; filter: Pick<GlobalFilter, "dateFrom" | "dateTo"> };
+  /**
+   * CSV file name parts; omit to hide the button. `rows`: export these instead of the rows shown
+   * (e.g. every row when the table shows only the first N — say so in the description).
+   */
+  export?: { name: string; filter: Pick<GlobalFilter, "dateFrom" | "dateTo">; rows?: readonly Row[] };
   empty?: ReactNode;
   testId?: string;
   rowClassName?: (row: Row) => string | undefined;
 }) {
+  const exportRows = exportAs?.rows ?? rows;
   const numeric = (column: DataTableColumn<Row>) => column.kind !== "text";
   const hidden = (column: DataTableColumn<Row>) => (column.priority === "secondary" ? "hidden sm:table-cell" : undefined);
   const Heading = headingLevel === 3 ? "h3" : "h2";
@@ -69,8 +73,8 @@ export function DataTable<Row>({
           <Heading className="text-base font-medium">{caption}</Heading>
           {description ? <div className="text-xs text-muted-foreground">{description}</div> : null}
         </div>
-        {exportAs && rows.length > 0 ? (
-          <CsvDownloadButton csv={toCsv(columns, rows)} fileName={csvFileName(exportAs.name, exportAs.filter)} />
+        {exportAs && exportRows.length > 0 ? (
+          <CsvDownloadButton csv={toCsv(columns, exportRows)} fileName={csvFileName(exportAs.name, exportAs.filter)} />
         ) : null}
       </div>
       {rows.length === 0 ? (
