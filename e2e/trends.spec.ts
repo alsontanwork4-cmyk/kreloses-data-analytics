@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { clinicToday } from "../src/filters";
 import { SYNTHETIC_ACCOUNTS } from "../src/kreloses/testing/synthetic-accounts";
 
 import { signIn } from "./support/auth";
@@ -144,6 +145,27 @@ test.describe("Trends → doctor detail", () => {
     ]);
     await expect(page.getByTestId("doctor-trend-chart").locator(".recharts-line")).toHaveCount(1);
 
+    // The page's own doctor never leaks into the global filter: a date preset, a custom range and the
+    // way back to the ranking keep "all doctors".
+    const filters = page.getByRole("region", { name: "Filters" });
+    const mainNav = page.getByRole("navigation", { name: "Main" });
+    await filters.getByRole("link", { name: "Year to date" }).click();
+    await expect(page).toHaveURL(new RegExp(`/doctors/${alphaId}\\?range=year-to-date$`));
+    await expect(page.getByRole("heading", { level: 1, name: "Dr Alpha Anderson" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Back to the doctor ranking" }).first()).toHaveAttribute("href", "/doctors?range=year-to-date");
+    await expect(mainNav.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/overview?range=year-to-date");
+    await filters.getByRole("button", { name: "Custom" }).click();
+    await filters.getByLabel("From", { exact: true }).fill("2026-09-01");
+    await filters.getByLabel("To", { exact: true }).fill("2026-09-30");
+    await filters.getByRole("button", { name: "Apply" }).click();
+    await expect(page).toHaveURL(new RegExp(`/doctors/${alphaId}\\?from=2026-09-01&to=2026-09-30$`));
+    await expect(stat("doctor-revenue")).toHaveText("RM 1,654.35");
+    await page.getByRole("link", { name: "Back to the doctor ranking" }).first().click();
+    await expect(page).toHaveURL(/\/doctors\?from=2026-09-01&to=2026-09-30$/);
+    await expect(rows(page.getByTestId("doctor-ranking"))).toHaveCount(3);
+    await expect(filters.getByRole("combobox", { name: "Doctor" })).toHaveValue("");
+    await page.goto(`/doctors/${alphaId}?${AUG_SEP}`);
+
     // The filter bar's doctor selector opens another doctor's page.
     await page.getByRole("region", { name: "Filters" }).getByRole("combobox", { name: "Doctor" }).selectOption({ label: "Dr Bravo Brown" });
     await expect(page.getByRole("heading", { level: 1, name: "Dr Bravo Brown" })).toBeVisible();
@@ -161,6 +183,24 @@ test.describe("Trends → doctor detail", () => {
     const [charlie] = await withRunDatabase((sql) => sql<{ id: string }[]>`select id::text from staff where full_name = 'Charlie Chen'`);
     await page.goto(`/doctors/${charlie!.id}?${AUG_SEP}`);
     await expect(page.getByRole("heading", { level: 2, name: "Charlie Chen is not a doctor" })).toBeVisible();
+
+    // The year-on-year CSV is named after the years it covers (the date range does not apply to it): 2025 → today.
+    await page.goto(`/trends?${AUG_SEP}`);
+    const yoyCsv = await downloadCsv(page, yoy);
+    expect(yoyCsv.name).toBe(`trends-year-on-year_2025-01-01_to_${clinicToday()}.csv`);
+    expect(yoyCsv.text.split("\r\n")[1]).toMatch(/^Dr Alpha Anderson,All branches,12345\.60,/);
+    // With several branches picked, a doctor's combined row is for the selected branches, not all of them.
+    const branchIds = await withRunDatabase((sql) => sql<{ id: string }[]>`select id::text from branches order by id`);
+    await page.goto(`/trends?${AUG_SEP}&branch=${branchIds.map((branch) => branch.id).join(",")}`);
+    expect(await tableText(yoy, ["doctor", "branch"])).toEqual([
+      ["Dr Alpha Anderson", "Selected branches"],
+      ["Dr Alpha Anderson", "Branch North"],
+      ["Dr Alpha Anderson", "Branch South"],
+      ["Dr Bravo Brown", "Selected branches"],
+      ["Dr Bravo Brown", "Branch North"],
+      ["Dr Bravo Brown", "Branch South"],
+      ["Dr Delta Not in staff list", "Branch South"],
+    ]);
 
     // A manager sees the same pages.
     const managerContext = await browser.newContext();

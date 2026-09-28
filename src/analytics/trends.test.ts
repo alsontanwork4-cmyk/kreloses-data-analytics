@@ -7,7 +7,7 @@ import { SYNTHETIC_ACCOUNTS, type SaleListRow, type SaleOverviewModel } from "@/
 import { runSync } from "@/sync/engine";
 import { clearSyncTables, createSyncHarness, type SyncHarness } from "@/sync/test-support";
 
-import { getDoctorDetail, getDoctorRanking, getMonthlyTrends, getYearOnYear, trendMonths, type DoctorTrend, type TrendMonth } from "./index";
+import { getDoctorDetail, getDoctorRanking, getMonthlyTrends, getYearOnYear, listTrendDoctors, trendMonths, type DoctorTrend, type TrendMonth } from "./index";
 
 /**
  * Seam 1: the Sync Engine reads the shared synthetic Sale List + invoice pages
@@ -218,6 +218,23 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       const empty = await getMonthlyTrends(db.sql, { dateFrom: "2026-05-01", dateTo: "2026-06-30" }, { now: NOW });
       expect(empty.months.map((month) => month.month)).toEqual(["2026-05", "2026-06"]);
       expect(empty.doctors).toEqual([]);
+    });
+  });
+
+  describe("listTrendDoctors", () => {
+    it("lists every doctor in colour order: active doctors in the Kreloses staff list first, then the rest, each by name", async () => {
+      expect(await listTrendDoctors(db.sql)).toEqual([
+        { id: staff["Dr Alpha Anderson"], name: "Dr Alpha Anderson", source: "kreloses", active: true },
+        { id: staff["Dr Bravo Brown"], name: "Dr Bravo Brown", source: "kreloses", active: true },
+        { id: staff["Dr Delta"], name: "Dr Delta", source: "alias_only", active: true }, // not in the staff list (e.g. left)
+      ]);
+      // A doctor Kreloses no longer lists moves behind the active ones (whatever the filter shows).
+      await db.sql`update staff set active = false where id = ${staff["Dr Alpha Anderson"]!}`;
+      try {
+        expect((await listTrendDoctors(db.sql)).map((doctor) => doctor.name)).toEqual(["Dr Bravo Brown", "Dr Alpha Anderson", "Dr Delta"]);
+      } finally {
+        await db.sql`update staff set active = true where id = ${staff["Dr Alpha Anderson"]!}`;
+      }
     });
   });
 

@@ -8,7 +8,7 @@ import {
   getMonthlyTrends,
   getPendingLineItems,
   getYearOnYear,
-  listDoctors,
+  listTrendDoctors,
   METRIC_DEFINITIONS,
   type MetricName,
   type TrendMeasure,
@@ -84,12 +84,12 @@ export default async function TrendsPage({ searchParams }: PageProps<"/trends">)
   const measure = measures.find((info) => MEASURE_PARAMS[info.measure] === requested) ?? measures[0]!;
 
   const sql = getDb();
-  const [trends, yoy, freshness, pending, everyDoctor, branches] = await Promise.all([
+  const [trends, yoy, freshness, pending, colourOrder, branches] = await Promise.all([
     getMonthlyTrends(sql, filter),
     getYearOnYear(sql, filter),
     getDataFreshness(sql, { dateFrom: filter.dateFrom, dateTo: filter.dateTo }),
     getPendingLineItems(sql, filter),
-    listDoctors(sql),
+    listTrendDoctors(sql),
     listBranchOptions(),
   ]);
 
@@ -108,7 +108,13 @@ export default async function TrendsPage({ searchParams }: PageProps<"/trends">)
   const branchHref = (branchIds: string[] | undefined) => withSearchParams("/trends", mergeFilterIntoSearchParams(params, withBranches(branchIds)));
   const oneBranch = filter.branchIds?.length === 1 ? filter.branchIds[0] : undefined;
 
-  const slots = stableSeriesSlots(everyDoctor.map((doctor) => doctor.id));
+  // Colours by stable key over EVERY doctor (README "Charts"), active Kreloses-listed doctors first so
+  // they get the 8 colours; a line past the 8th is drawn in a neutral colour (lines are not summed).
+  const colourRank = new Map(colourOrder.map((doctor, index) => [doctor.id, index]));
+  const slots = stableSeriesSlots(
+    colourOrder.map((doctor) => doctor.id),
+    (a, b) => (colourRank.get(a) ?? Number.MAX_SAFE_INTEGER) - (colourRank.get(b) ?? Number.MAX_SAFE_INTEGER),
+  );
   const monthLabel = (month: TrendMonth) => formatMonth(month.month);
   const rows: MonthlyRow[] = trends.doctors.map((doctor) => ({
     staffId: doctor.staffId,
@@ -143,12 +149,14 @@ export default async function TrendsPage({ searchParams }: PageProps<"/trends">)
         : `${monthLabel(month)}: only ${formatDateRange(month.dateFrom, month.dateTo)} is in the date range.`,
     );
 
-  const yoyColumns = yearOnYearColumns(yoy.years, doctorHref);
+  const yoyColumns = yearOnYearColumns(yoy.years, doctorHref, filter.branchIds ? "Selected branches" : "All branches");
+  // The year-on-year table covers whole years whatever the date range: its CSV is named after them.
+  const yoyRange = yoy.years.length > 0 ? { dateFrom: yoy.years[0]!.dateFrom, dateTo: yoy.years.at(-1)!.dateTo } : filter;
 
   return (
     <PageShell
       title="Trends"
-      description="Monthly revenue, AOV, surgery and consult revenue per doctor, plus year-on-year."
+      description={`Monthly ${listInSentence(measures.map((info) => info.noun))} per doctor, plus year-on-year.`}
       filter={filterState}
     >
       {freshness.length === 0 ? (
@@ -258,7 +266,7 @@ export default async function TrendsPage({ searchParams }: PageProps<"/trends">)
             rows={yoy.rows}
             rowKey={(row) => `${row.staffId}:${row.branchId ?? "all"}`}
             rowClassName={(row) => (row.branchId === null ? "bg-muted/30" : undefined)}
-            export={{ name: "trends-year-on-year", filter }}
+            export={{ name: "trends-year-on-year", filter: yoyRange }}
             empty="No revenue has been credited to a doctor yet."
             testId="year-on-year"
           />
@@ -278,7 +286,7 @@ export default async function TrendsPage({ searchParams }: PageProps<"/trends">)
 }
 
 /** The year-on-year table's columns: revenue and AOV per customer per year, with the change against each year's comparison. */
-function yearOnYearColumns(years: YearColumn[], doctorHref: (staffId: string) => string): DataTableColumn<YearOnYearRow>[] {
+function yearOnYearColumns(years: YearColumn[], doctorHref: (staffId: string) => string, combinedBranches: string): DataTableColumn<YearOnYearRow>[] {
   const change = (value: (row: YearOnYearRow) => number | null, key: string, header: string): DataTableColumn<YearOnYearRow> => ({
     key,
     header,
@@ -294,7 +302,8 @@ function yearOnYearColumns(years: YearColumn[], doctorHref: (staffId: string) =>
       value: (row) => row.name,
       cell: (row) => <DoctorLink href={doctorHref(row.staffId)} name={row.name} aliasOnly={row.source === "alias_only"} />,
     },
-    { key: "branch", header: "Branch", kind: "text", value: (row) => row.branchName ?? "All branches" },
+    // A doctor's row for all the filter's branches together: "Selected branches" under a branch filter.
+    { key: "branch", header: "Branch", kind: "text", value: (row) => row.branchName ?? combinedBranches },
     ...years.flatMap((year, index): DataTableColumn<YearOnYearRow>[] => {
       const cell = (row: YearOnYearRow) => row.years[index]!;
       const to = year.partial ? ` to ${formatIsoDate(year.dateTo).replace(/ \d{4}$/, "")}` : "";
@@ -312,6 +321,11 @@ function yearOnYearColumns(years: YearColumn[], doctorHref: (staffId: string) =>
       ];
     }),
   ];
+}
+
+/** `["a", "b", "c"]` → `"a, b and c"`. */
+function listInSentence(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 function ChangeText({ value }: { value: number | null }) {

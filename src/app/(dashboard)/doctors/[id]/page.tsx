@@ -15,7 +15,7 @@ import { PageShell } from "@/components/shell/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getDb } from "@/db/client";
-import { filterSearchParamsOnly, formatDateRange, mergeFilterIntoSearchParams, parseFilter, withSearchParams, type FilterState, type GlobalFilter } from "@/filters";
+import { filterSearchParamsOnly, formatDateRange, mergeFilterIntoSearchParams, parseFilter, withSearchParams } from "@/filters";
 import { formatCount } from "@/lib/format";
 import { formatRinggit } from "@/lib/money";
 
@@ -32,6 +32,9 @@ const DEFINITIONS: MetricName[] = ["revenue", "aovPerCustomer", "invoices", "ite
  *   page saying so (their revenue is under "Not in the ranking" on the Doctors page).
  * - The page is for ONE doctor, so the global doctor filter is not applied to its figures; picking
  *   another single doctor in the filter bar opens that doctor's page instead.
+ * - The filter bar gets the URL's own filter state: the page never writes its doctor into the global
+ *   filter, so changing dates or branches, the nav links and "Back to the doctor ranking" keep
+ *   whatever doctor selection (usually none) the user had.
  */
 export default async function DoctorPage({ params, searchParams }: PageProps<"/doctors/[id]">) {
   const user = await requireUser();
@@ -47,7 +50,6 @@ export default async function DoctorPage({ params, searchParams }: PageProps<"/d
   const detail = await getDoctorDetail(getDb(), id, filter);
   if (detail.status === "not_found") notFound();
 
-  const withoutDoctors: GlobalFilter = { dateFrom: filter.dateFrom, dateTo: filter.dateTo, ...(filter.branchIds ? { branchIds: filter.branchIds } : {}) };
   const rankingHref = withSearchParams("/doctors", filterSearchParamsOnly(query));
   const backToRanking = (
     <Button asChild size="sm" variant="outline">
@@ -59,7 +61,7 @@ export default async function DoctorPage({ params, searchParams }: PageProps<"/d
     const { name, kind } = detail.staff;
     const owner = hasRole(user, "owner");
     return (
-      <PageShell title={name} description="Not a doctor" filter={{ range: filterState.range, filter: withoutDoctors }}>
+      <PageShell title={name} description="Not a doctor" filter={filterState}>
         <EmptyState
           icon={UserX}
           title={`${name} is not a doctor`}
@@ -85,7 +87,6 @@ export default async function DoctorPage({ params, searchParams }: PageProps<"/d
   }
 
   const { doctor, figures } = detail;
-  const barState: FilterState = { range: filterState.range, filter: { ...withoutDoctors, doctorIds: [doctor.staffId] } };
   const monthColumns: DataTableColumn<TrendPoint>[] = [
     {
       key: "month",
@@ -112,7 +113,7 @@ export default async function DoctorPage({ params, searchParams }: PageProps<"/d
   ];
 
   return (
-    <PageShell title={doctor.name} description="Revenue, AOV per customer, invoices and basket size for the selected period, by month and branch." filter={barState}>
+    <PageShell title={doctor.name} description="Revenue, AOV per customer, invoices and basket size for the selected period, by month and branch." filter={filterState}>
       {doctor.source === "alias_only" || !doctor.active ? (
         <p className="flex flex-wrap gap-2">
           {doctor.source === "alias_only" ? (
@@ -128,7 +129,7 @@ export default async function DoctorPage({ params, searchParams }: PageProps<"/d
         </p>
       ) : null}
 
-      <PendingLineItemsNote filter={barState.filter} pending={detail.pendingLineItems} />
+      <PendingLineItemsNote filter={filter} pending={detail.pendingLineItems} doctorsOnly />
 
       <section aria-label="Key figures" className="@container">
         <div className="grid grid-cols-2 gap-3 @xl:grid-cols-3 @4xl:grid-cols-6">

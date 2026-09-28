@@ -724,6 +724,7 @@ getDoctorDetail(sql, staffId, filter, { now? }): Promise<DoctorDetail>
   // | { status: "ok", doctor, period, totalRevenue, figures: StaffFigures (= their getDoctorRanking row), branches: BranchFigures[],
   //     months, monthly: TrendPoint[], pendingLineItems }   — the filter's own doctorIds are ignored (the view is for staffId)
 TREND_MEASURES, availableTrendMeasures()     // revenue, aovPerCustomer (+ surgeryRevenue, consultRevenue once item groups exist)
+listTrendDoctors(sql): Promise<TrendDoctor[]> // every doctor, colour-slot order: active Kreloses-listed first, then the rest, by name
 ITEM_GROUP_MEASURES_AVAILABLE                // false until #9's surgery/consult flags are on revenueFacts
 ```
 
@@ -812,11 +813,14 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
 - Trends (`/trends`, #10): a line chart of each doctor's monthly figure (toggleable lines; clicking a
   line or point opens the doctor), the measure switch (`?measure=aov`, page-specific; surgery and
   consult once item groups exist), a branch switch (writes the global `?branch=`), the monthly
-  table and the year-on-year table (whole years; ignores the date range, keeps branch/doctor).
+  table and the year-on-year table (whole years; ignores the date range, keeps branch/doctor; its
+  CSV is named after the years it covers).
 - Doctor detail (`/doctors/<staff id>`, #10): `getDoctorDetail` → KPIs (the ranking's own figures),
   monthly trend and branch split. An unknown id is a 404; a staff member of another kind gets a
   "not a doctor" page. The page is for one doctor: the global doctor filter does not narrow it, and
-  picking a single other doctor in the filter bar redirects to that doctor's page.
+  picking a single other doctor in the filter bar redirects to that doctor's page. The filter bar
+  gets the URL's own `parseFilter` state — never a filter with the page's doctor added — so date or
+  branch changes, nav links and "Back to the doctor ranking" never carry `doctor=<this doctor>`.
 - UI components: shadcn/ui (`npx shadcn@latest add <component>` → `src/components/ui/`), Tailwind
   utilities, `cn()` from `@/lib/utils`, icons from `lucide-react`.
 
@@ -869,7 +873,12 @@ const columns: DataTableColumn<Row>[] = [
   "open" link per series) when there are several, hollow points for partial periods, clicking a
   line/point goes to its `href` (points are `data-testid="trend-point"` with `data-series`), one
   series = slot 1 with its last value labelled. `formatMonth("2026-09")` → `"Sep 2026"`
-  (`charts/month-label.ts`).
+  (`charts/month-label.ts`). **Exception to "fold into Other":** a line chart per entity draws the
+  series past slot 8 in a neutral colour (`slot: null`) instead of an "Other" line, because an
+  "Other" line would be a sum computed in the component and ratios such as AOV per customer cannot
+  be summed at all. Trends gives the slots to active doctors in the Kreloses staff list first
+  (`listTrendDoctors` order passed as `stableSeriesSlots`'s `compare`), so current doctors get the
+  colours and each keeps theirs whatever the filter shows.
 
 ### MCP server (`src/mcp/`)
 

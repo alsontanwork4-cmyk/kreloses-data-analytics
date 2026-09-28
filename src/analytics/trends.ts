@@ -41,16 +41,18 @@ export type TrendMeasure = "revenue" | "aovPerCustomer" | "surgeryRevenue" | "co
 export interface TrendMeasureInfo {
   measure: TrendMeasure;
   label: string;
+  /** The measure's name inside a sentence ("monthly revenue and AOV per customer per doctor"). */
+  noun: string;
   /** Needs item groups (#9); hidden until `ITEM_GROUP_MEASURES_AVAILABLE`. */
   needsItemGroups: boolean;
 }
 
 /** Every trend measure, in switch order. All are RM amounts. */
 export const TREND_MEASURES: readonly TrendMeasureInfo[] = [
-  { measure: "revenue", label: "Revenue", needsItemGroups: false },
-  { measure: "aovPerCustomer", label: "AOV per customer", needsItemGroups: false },
-  { measure: "surgeryRevenue", label: "Surgery revenue", needsItemGroups: true },
-  { measure: "consultRevenue", label: "Consult revenue", needsItemGroups: true },
+  { measure: "revenue", label: "Revenue", noun: "revenue", needsItemGroups: false },
+  { measure: "aovPerCustomer", label: "AOV per customer", noun: "AOV per customer", needsItemGroups: false },
+  { measure: "surgeryRevenue", label: "Surgery revenue", noun: "surgery revenue", needsItemGroups: true },
+  { measure: "consultRevenue", label: "Consult revenue", noun: "consult revenue", needsItemGroups: true },
 ];
 
 /** The measures that can be shown now (surgery / consult only once item groups exist). */
@@ -225,6 +227,21 @@ export async function getMonthlyTrends(sql: Sql, filter: GlobalFilter, options: 
   return { period, months, doctors };
 }
 
+/**
+ * Every doctor who can have a trend line (kind doctor, with a name on invoice lines — the doctors
+ * `listDoctors` offers), in colour-slot order: active doctors in the Kreloses staff list first, then
+ * the rest (inactive, or known only from invoice lines, e.g. a doctor who left), each group by name.
+ * Pass the ids to `stableSeriesSlots` with this order, so current doctors get the 8 colours and a
+ * doctor keeps their colour whatever the filter shows.
+ */
+export async function listTrendDoctors(sql: Sql): Promise<TrendDoctor[]> {
+  return sql<TrendDoctor[]>`
+    select s.id::text as id, s.full_name as name, s.source, s.active from staff s
+    where s.kind = 'doctor' and exists (select 1 from staff_aliases a where a.staff_id = s.id)
+    order by (s.source = 'kreloses' and s.active) desc, lower(s.full_name), s.id
+  `;
+}
+
 /** A calendar year of the year-on-year table. */
 export interface YearColumn {
   year: number;
@@ -379,7 +396,7 @@ function periodKey(dateFrom: IsoDate, dateTo: IsoDate): string {
   return `${dateFrom}..${dateTo}`;
 }
 
-interface DoctorMember {
+export interface TrendDoctor {
   id: string;
   name: string;
   source: "kreloses" | "alias_only";
@@ -387,10 +404,10 @@ interface DoctorMember {
 }
 
 /** The staff rows for these ids (all of kind doctor: the queries above keep only doctor lines). */
-async function doctorsById(sql: Sql, ids: string[]): Promise<Map<string, DoctorMember>> {
+async function doctorsById(sql: Sql, ids: string[]): Promise<Map<string, TrendDoctor>> {
   const unique = [...new Set(ids)];
   if (unique.length === 0) return new Map();
-  const members = await sql<DoctorMember[]>`
+  const members = await sql<TrendDoctor[]>`
     select id::text as id, full_name as name, source, active from staff where id = any(${unique}::bigint[])
   `;
   return new Map(members.map((member) => [member.id, member]));
