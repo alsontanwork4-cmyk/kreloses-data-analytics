@@ -34,6 +34,8 @@ import { mergeFilterIntoSearchParams, parseFilter, withSearchParams } from "@/fi
 import { formatRinggit, moneyToSen, type Money } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
+import { MixTabs } from "./mix-tabs";
+
 export const metadata: Metadata = { title: "Mix" };
 
 const DEFINITIONS: MetricName[] = ["mixGroup", "serviceMix", "mixShare", "mixComparison", "topItems", "surgeryRevenue", "consultRevenue", "revenue", "pendingLineItems"];
@@ -171,6 +173,7 @@ export default async function MixPage({ searchParams }: PageProps<"/mix">) {
 
   return (
     <PageShell title="Mix" description="Revenue by service group per doctor, compared with the clinic average; top items; surgery and consult revenue." filter={filterState}>
+      <MixTabs current="mix" params={params} />
       {freshness.length === 0 ? (
         <NoSalesYet user={user} filter={filter} what="Service mix" icon={PieChart} />
       ) : (
