@@ -13,9 +13,10 @@ export const PUBLIC_PATHS: readonly string[] = ["/login", "/auth"];
 /**
  * Like `PUBLIC_PATHS`, but exactly these paths and NOT their sub-paths, so a route added under one
  * later stays behind the sign-in gate. Each authenticates itself: `/api/mcp` with its bearer token
- * (`src/mcp/auth.ts`); a future `/api/cron` would use a secret.
+ * (`src/mcp/auth.ts`); `/api/cron/nightly` with Vercel Cron's `Authorization: Bearer <CRON_SECRET>`
+ * (`handleNightlyCron`, `src/sync/cron.ts`).
  */
-export const PUBLIC_EXACT_PATHS: readonly string[] = ["/api/mcp"];
+export const PUBLIC_EXACT_PATHS: readonly string[] = ["/api/mcp", "/api/cron/nightly"];
 
 export function isPublicPath(pathname: string): boolean {
   return (

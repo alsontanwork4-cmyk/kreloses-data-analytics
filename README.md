@@ -70,7 +70,9 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `E2E_MAILPIT_URL`, `E2E_PORT`, `E2E_KRELOSES_PORT` | Local tooling only: e2e overrides |
 | `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
 | `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
-| `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page) |
+| `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page and the cron route). The nightly cron shares 250 s between all connections, each capped at this |
+| `SYNC_NIGHTLY_WINDOW_DAYS` | Optional: how many days back the nightly sync re-reads the Sale List to notice edits, cancellations and refunds (1–366, default 45) |
+| `CRON_SECRET` | Server only, **required for the nightly sync**: at least 16 random characters (`openssl rand -hex 32`). Vercel Cron sends it as `Authorization: Bearer …` to `/api/cron/nightly`; without it (or with a shorter one) the endpoint refuses every request |
 | `CLINIC_NOW` | Tests only: freezes `clinicNow()` (e.g. `2026-09-28T09:00:00+08:00`; the e2e suite sets it). Ignored when `NODE_ENV` or `VERCEL_ENV` is `production` |
 | `MCP_BEARER_TOKEN` | Server only. The secret Claude sends to the MCP server (`openssl rand -base64 32`; at least 32 characters). Unset, blank or shorter → `/api/mcp` refuses every request. It grants read access to ALL clinic data: treat it like a password (see [Connect Claude](#connect-claude-to-the-mcp-server)) |
 
@@ -171,9 +173,10 @@ is untouched. If the invitation email fails the invite still stands and the page
 
 Public routes are listed in `src/auth/paths.ts`: `PUBLIC_PATHS` (with their sub-paths: `/login`,
 `/auth/*`) and `PUBLIC_EXACT_PATHS` (that path only: `/api/mcp`, the MCP server — bearer token,
-`src/mcp/auth.ts`; a route added under it later stays behind the sign-in gate). Anything added there
-(e.g. a future `/api/cron` with a secret; prefer the exact list) is the one exception to "wrap every
-route handler in `withUser`/`withRole`": it must authenticate itself.
+`src/mcp/auth.ts`; `/api/cron/nightly`, the nightly sync (#6) — Vercel Cron's `Authorization: Bearer
+<CRON_SECRET>`, checked constant-time and failing closed by `src/sync/cron.ts`; a route added under
+either later stays behind the sign-in gate). Anything added there (prefer the exact list) is the one
+exception to "wrap every route handler in `withUser`/`withRole`": it must authenticate itself.
 
 Never redirect to a user-supplied path without `safeNextPath()` (`src/auth/paths.ts`): it refuses
 control characters and backslashes (browsers strip tabs/newlines, so `/\t/evil.example` becomes
@@ -282,7 +285,10 @@ spec that syncs.
 The app under test talks to a **fake Kreloses** (`e2e/support/fake-kreloses-server.ts`, the same
 fake the unit tests use, on its own port) via `KRELOSES_BASE_URL_WWW/SEA`, with a throwaway
 `CREDENTIALS_ENCRYPTION_KEY` per run. Its synthetic logins are `SYNTHETIC_ACCOUNTS` in
-`src/kreloses/testing/fake-kreloses.ts` (`north`, `south`, `both`, `oneTimeCode`, `down`, …). A
+`src/kreloses/testing/fake-kreloses.ts` (`north`, `south`, `both`, `oneTimeCode`, `down`,
+`brokenSaleList` — logs in fine, but its Sale List is in an unknown layout, so every sync of it
+fails —, …). The suite's app gets a throwaway `CRON_SECRET` (`E2E_CRON_SECRET`), so a spec can call
+`/api/cron/nightly` as Vercel Cron does (`e2e/nightly.spec.ts`). A
 spec that creates connections must leave the table empty (the shell spec expects empty states); a
 spec that syncs must also empty the synced tables (`clearSyncedData()`). The fake serves the
 synthetic Sale List (`sale-list-rows.json`: Aug–Sep 2026 and Sep–Oct 2025) and every sale's
@@ -486,11 +492,14 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   `detail_fetched_at` (#5: line items need a (re)fetch when null or `< fetched_at`). `raw_header`
   is refreshed on its own when only unparsed fields change (no new `fetched_at`). #5 added
   `raw_detail` (the invoice page's `Sale`/`Totals`/`Transactions`/`RefundInfo`/`CreditNoteInfo`),
-  `header_version` (+1 whenever a parsed header column changes), `lines_header_version` (the
-  version the stored lines were computed for), `lines_current` (**generated**: the two are equal —
-  THE definition of "its line items belong to the header as it is now"), `revenue_base`
-  (**generated**: what its credited lines add up to; twin of `invoiceRevenueBaseSen`) and
-  `line_gap_amount` (net − Σ all line amounts when last read; the gap monitor).
+  `header_version` (+1 whenever a header column that can change line items or revenue changes —
+  status, gross, discounts, net, tax, total, refunds; since #6 NOT payment status / payments alone),
+  `lines_header_version` (the version the stored lines were computed for), `lines_current`
+  (**generated**: the two are equal — THE definition of "its line items belong to the header as it
+  is now"), `revenue_base` (**generated**: what its credited lines' revenue adds up to — net less
+  the refunded part, #6; twin of `invoiceRevenueBaseSen`), `line_gap_amount` (net − Σ all line
+  amounts when last read; the gap monitor) and `detail_missing_count` (#6: invoice page missing this
+  many reads in a row for the current header; at 3 the sync stops trying — "permanently missing").
 - `invoice_lines` (migration `…_line_items_and_doctor_credit.sql`) — the invoice page's `Items[]`
   as read: `invoice_id`, `line_no` (1-based; unique per invoice), `item_name`, `item_type` (55 =
   discount line), `quantity` `numeric(12,4)`, `unit_price`, `amount` (the charged amount, after any
@@ -510,12 +519,15 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
 - `sync_runs.warnings` — `[{code, message}]` (see Sync Engine).
 - `sync_runs` — `connection_id`, `connection_label`, `mode` (`nightly` | `backfill` | `manual`),
   `status` (`running` | `succeeded` | `partial` | `failed`), `date_from` / `date_to`, `started_at`,
-  `finished_at`, `counts` (`{pages, invoicesSeen, inserted, updated, unchanged}`), `checkpoint`
-  (`{nextPage, pageSize}` — saved with every page, kept on partial/failed), `covered_location_ids`
+  `finished_at`, `counts` (`SyncCounts`), `checkpoint` (`{nextPage, pageSize}`, nightly also
+  `{processedAfter, listingDone}` — saved with every page, kept on partial/failed),
+  `resumed_from_run_id` / `chain_started_at` (#6: the run it carried on from, and when that chain's
+  first run started — what "data as of" uses), `covered_location_ids`
   (set when the run read its whole listing — succeeded, or partial only for missing invoice pages; drives "data as of"), `error_code` (`auth_failed` | `layout_changed` |
   `rate_limited` | `transient` | `key_problem` | `interrupted` | `internal`) + `error` (shown to users).
   At most one `running` run per connection (unique partial index).
-- `connection_locks` — the per-connection lease (above).
+- `connection_locks` — the per-connection lease (above; database clock, renewed by every write of a
+  sync, ADR 0009).
 
 ### Credited lines: the revenue model
 
@@ -529,14 +541,23 @@ Every revenue figure is a sum of **credited lines** (spec: Attribution & Rules; 
   if that is zero too, equally), in whole sen by largest remainder, ties to the lower line_no. An
   invoice with no non-discount line gets one "unitemised remainder" row (`invoice_line_id` null, no
   staff). **An invoice's credited lines add up exactly to its revenue base.**
-- **The revenue base** is defined twice, kept equal by a test (`src/sync/lines.test.ts`) and a
-  runtime check in `saveInvoiceLines`: `invoiceRevenueBaseSen()` in TypeScript (what credited lines
-  add up to) and the generated `invoices.revenue_base` in SQL (what pending rows and reconciliations
-  use) — today `net_amount` if active, 0 if cancelled; refunds recorded, not subtracted. Change both
-  together (one migration + one function).
+- **Refunds** (#6, ADR 0008 — an ASSUMPTION until live data shows how Kreloses reports them): the
+  part of an invoice's net that was refunded is `invoiceRefundSen()` = TotalRefunds × net ÷ total
+  (refunds taken as tax-inclusive like Total), half up to the sen, at most the net, 0 when net, total
+  or refunds are not positive (a return sale's refund is the return itself) or the invoice is
+  cancelled. It is spread over the lines like the discounts (by what each charged).
+- **The revenue base** is defined twice, kept equal by a test (`src/sync/lines.test.ts`, every
+  rounding/sign corner through the generated column) and a runtime check in `saveInvoiceLines`:
+  `invoiceRevenueBaseSen()` in TypeScript and the generated `invoices.revenue_base` in SQL (what
+  pending rows and reconciliations use) — `net_amount − refund` if active, 0 if cancelled. Change
+  both together (one migration + one function; the #6 migration shows how, including re-basing
+  existing credited lines by bumping `header_version`).
 - **Stored per invoice read** (`saveInvoiceLines`, `src/sync/lines.ts`, one transaction): the
   lines, the credited lines (`gross_amount`, `line_amount`, `spread_amount`, `credited_amount =
-  line_amount + spread_amount`, `staff_alias_id` — null = "No staff on line"), and on the invoice
+  line_amount + spread_amount` — what the line was charged, its share of the invoice NET, before
+  refunds —, `refund_amount` — its share of the refund —, `revenue_amount = credited_amount −
+  refund_amount` (generated) — what revenue counts —, `staff_alias_id` — null = "No staff on
+  line"), and on the invoice
   `lines_header_version` (the `header_version` the lines were computed for), `detail_fetched_at`,
   `raw_detail` and `line_gap_amount` (net − Σ all line amounts: the gap monitor; ≠ 0 is counted on
   the run as `lineItemGaps`). If the header changed while its page was being read, nothing is
@@ -552,7 +573,9 @@ Every revenue figure is a sum of **credited lines** (spec: Attribution & Rules; 
   `other` | `generic` | `no_staff` | `pending`), applies the branch and doctor filters, keeps only
   active invoices whose `lines_current` is true, and adds ONE `pending` row (its `revenue_base`) per
   active invoice whose lines are missing or stale — so revenue never drops between a header sync
-  and its line sync. Reconciliation (tested per branch and month): Σ credited = Σ `revenue_base`.
+  and its line sync. Its `revenue` is `credited_lines.revenue_amount` (after refunds); its
+  `credited_amount` column is the pre-refund amount (null on pending rows). Reconciliation (tested
+  per branch and month): Σ revenue = Σ `revenue_base`, and Σ credited amount = Σ active net.
 
 **#9 (item groups / mix)**: keep the item → group rules in their own table(s) and resolve them at
 query time, exactly like staff: add a pure matcher in `src/attribution/` (item name/type →
@@ -563,27 +586,27 @@ per-name overrides), and add `mix_group` and the four flags as columns of `reven
 item (group "Line items not synced yet"); the unitemised remainder has none either.
 
 **#6 (nightly / change detection / refunds)**: which invoices get their lines (re)read is decided
-in ONE place, `invoicesNeedingLines()` (`src/sync/lines.ts`: active and `not lines_current`, i.e.
-never read, or the header version moved). To re-read only on line-relevant header changes, bump
-`header_version` in `saveInvoicePage` (`src/sync/store.ts`) only for those columns. Refund handling
-changes `invoiceRevenueBaseSen()` AND `invoices.revenue_base` together — once the live check shows
-how Kreloses represents refunds (`total_refunds`, `raw_detail.RefundInfo` / `CreditNoteInfo`).
-Existing credited lines then need re-deriving: bump `header_version` for the affected invoices (they
-turn pending and the next sync re-reads them), or add a re-credit step that recomputes
-`credited_lines` from stored `invoice_lines`.
+in ONE place, `invoicesNeedingLines()` (`src/sync/lines.ts`): active, `not lines_current` (never
+read, or the header version moved — and `saveInvoicePage` moves it only for line/revenue-relevant
+columns: status, gross, discounts, net, tax, total, refunds), and not permanently missing
+(`detail_missing_count < MAX_PAGE_MISSING_ATTEMPTS`). Refunds are deducted as above; if the live
+check shows Kreloses represents them differently (`raw_detail.RefundInfo` / `CreditNoteInfo`),
+change `invoiceRefundSen()` and `invoices.revenue_base` together and bump `header_version` of the
+invoices whose base changes (the nightly sweep then re-reads them).
 
 **Discounts (#12, `src/analytics/discounts.ts`)**: per SOLD line (a credited item line with
-`gross_amount >= 0`: `soldLine()`), discount = `gross_amount − revenue` (the credited amount: after the line's item discount AND its share of the invoice's
-discount lines/gap, so a multi-doctor invoice's discount is shared by #5's spread rule — nothing
-re-spreads it). Per doctor: discount = Σ gross − Σ charged, rate = discount ÷ gross, an invoice is
+`gross_amount >= 0`: `soldLine()`), discount = `gross_amount − credited_amount` (`revenueFacts`'
+`credited_amount`: what the line was charged after its item discount AND its share of the
+invoice's discount lines/gap, BEFORE refunds — so a multi-doctor invoice's discount is shared by
+#5's spread rule and nothing re-spreads it). Per doctor: discount = Σ gross − Σ charged, rate = discount ÷ gross, an invoice is
 "discounted" for them when THEIR share of its discount is > RM 0.05 (`DISCOUNTED_INVOICE_THRESHOLD`).
 Return lines (gross < 0) are left out of every discount figure in both functions — totals, rate,
 counts, types, difference row — so a return-only invoice is out entirely (orchestrator decision:
 counted, a discounted return showed as a positive "discount" at a negative rate); the rate is null
 when gross ≤ 0. Pending rows and the unitemised remainder (e.g. a sale with only a discount line)
-have no gross and are left out too (`pendingLineItems` says how many are pending). **Refunds are not discounts**: charged is the pre-refund amount — true today because the
-revenue base does not deduct refunds; if #6 ever deducts them, discounts must add the refund share
-back (the refund test in `discounts.test.ts` fails until then). Discount types come from
+have no gross and are left out too (`pendingLineItems` says how many are pending). **Refunds are not discounts**: charged is the pre-refund amount (`credited_amount`); since #6
+deducts refunds from revenue, a doctor's "charged" differs from their Doctors-page revenue by their
+lines' refund shares (and by return lines, which discounts leave out). Discount types come from
 `invoice_lines`: item discounts (`discount_name`, or any line charged ≠ gross; amount = gross −
 amount), discount lines (`item_type = 55`, amount = −`amount`) and one "other difference to the
 invoice net" row (Σ line amount − credited not explained by discount lines; can be negative), so
@@ -598,16 +621,26 @@ proportion the spread gave the selected doctors' lines, rounded per type.
 ```ts
 runSync(deps: SyncDeps, connectionId, mode: "manual" | "nightly" | "backfill", options?): Promise<SyncResult>
   // deps: { sql, login(id) → KrelosesSession, reader?, now?, sleep? }; syncDeps() (@/sync/context) in the app
-  // options: { dateRange? (default: current clinic month), timeBudgetMs? (default 200 s),
-  //            pageSize?, startPage?, resume? (carry on from the latest partial run of the same
-  //            connection + dates), maxRetries? (default 3) }
-  // → { status: "succeeded" | "partial" | "failed", runId, counts, error? } | { status: "busy", heldFor, until } | { status: "not_found" }
+  // options: { dateRange? (default: nightly → nightlyWindow(now, windowDays); else the current clinic month),
+  //            windowDays? (nightly, default 45), timeBudgetMs? (default 200 s), pageSize?, startPage?,
+  //            resume? (carry on from the connection's latest run of the same mode — nightly: any window;
+  //            else exactly these dates — that stopped part-way: time limit, failed or interrupted with a
+  //            checkpoint, chain started < resumeMaxAgeMs (default 6 h) ago; a run that read its whole
+  //            listing is never resumed), sweep? (default: nightly), maxRetries? (default 3) }
+  // → { status: "succeeded" | "partial" | "failed", runId, counts, error?, warnings, stoppedAtTimeLimit?, resumedFromRunId? }
+  //   | { status: "busy", heldFor, until } | { status: "not_found" }
+runNightlySync(deps, { windowDays?, totalBudgetMs? (250 s), maxRunBudgetMs? }): Promise<NightlyConnectionResult[]>
+  // @/sync/nightly: every connection (failed ones included), one after another, resume: true
+getSyncAlerts(sql): Promise<SyncAlert[]>          // @/sync/alerts: the dashboard banner's data
+listPermanentlyMissingInvoices(sql): Promise<{ total, invoices }>   // @/sync/lines: Sync status
 listSyncRuns(sql, { limit? }): Promise<SyncRun[]>   // newest first, for the Sync status page
 ```
 
-A run takes the connection's lease (else `busy`, no run row), marks the connection's stale
+A run takes the connection's lease (else `busy`, no run row; database clock, 4-minute TTL renewed
+inside the transaction of EVERY write — a run whose renewal fails because another run took over
+stops at once without writing anything more: fencing, ADR 0009), marks the connection's stale
 `running` runs `interrupted` (and runs of deleted connections left `running` for over an hour),
-logs in, stores the visible branches (and the connection's login
+with `resume` picks the run to carry on from, logs in, stores the visible branches (and the connection's login
 status) and the staff list (`upsertStaffDirectory`, `src/staff/store.ts`: new staff, renamed staff,
 inactive ones; unmatched line names are matched again), then reads Sale List pages serially (the
 Reader's polite delay). After each page it opens the invoice page of each of the page's invoices
@@ -617,13 +650,26 @@ checkpoint until its line items are done (so carrying on re-reads that page, a n
 then the missing line items). `counts.lineItemsRead` counts invoice pages read.
 
 - **A missing invoice page** (the Reader's `PageMissing`: HTTP 404/410, or a redirect anywhere but the
-  login page) is skipped: `counts.lineItemsFailed` +1, the invoice stays pending at its revenue base
-  and the next run tries it again. A run that read its whole listing but skipped pages ends
-  **`partial`** with `coveredLocationIds` set (so it counts for "data as of"), `checkpoint`
-  `{nextPage: 1}` (Sync now starts over) and an `invoice_pages_missing` warning; `SyncResult` says
-  `stoppedAtTimeLimit: false`. If the first `MISSING_PAGES_TO_FAIL` (3) pages a run tries are all
-  missing, it fails (`layout_changed`: something systematic). A page whose content changed
-  (`LayoutChanged` proper) still fails the run at once.
+  login page) is skipped: `counts.lineItemsFailed` +1, `invoices.detail_missing_count` +1, the
+  invoice stays pending at its revenue base and the next run tries it again — up to
+  `MAX_PAGE_MISSING_ATTEMPTS` (3) reads in a row; then it is "permanently missing" (never tried again
+  until its header changes; listed on Sync status). A run that read its whole listing but skipped
+  pages ends **`partial`** with `coveredLocationIds` set (so it counts for "data as of" and is never
+  resumed), `checkpoint` `{nextPage: 1}` and an `invoice_pages_missing` warning; `SyncResult` says
+  `stoppedAtTimeLimit: false`. If the first `MISSING_PAGES_TO_FAIL` (3) pages a run tries FOR THE
+  FIRST TIME are all missing (pages already missing in earlier runs do not count), it fails
+  (`layout_changed`: something systematic). A page whose content changed (`LayoutChanged` proper)
+  still fails the run at once.
+- **Nightly** (#6): the Sale List of `nightlyWindow` (the last `SYNC_NIGHTLY_WINDOW_DAYS`, default
+  45, up to today; cancelled sales included) → change detection above (an unchanged invoice costs no
+  request; payment-only changes are stored without a re-read) → the **sweep**: active invoices of
+  ANY date still not current (synced before line items, changed outside the window, pending after a
+  missing page, re-based by a migration), newest first, while the budget lasts (a
+  `line_items_left` warning says how many remain; the next night carries on). The checkpoint is
+  DATE-based (`processedAfter`: every sale newer than that instant is done; `listingDone`), since
+  pages of a newest-first list shift as sales are added or deleted: carrying on re-lists only the
+  days up to `processedAfter`. Fixed past ranges (Sync now, #8 backfill) keep `nextPage`. A resumed
+  run records `resumed_from_run_id` / `chain_started_at`; "data as of" for it is the chain's start.
 - **Warnings** (`sync_runs.warnings`, `SyncResult.warnings`, `SyncWarning` in `src/sync/runs.ts`):
   `invoice_pages_missing`, `staff_list_unreadable` (no readable Staff filter in report 14: the run
   carries on, names stay unmatched, nobody is marked inactive). Sync status and the "Sync now"
@@ -641,16 +687,35 @@ connection failed); an expired session gets one fresh login per run; `RateLimite
 are retried with backoff (5 s, 15 s, 45 s, or Retry-After) while the budget allows. Every run ends
 with a `sync_runs` row, failures included (`describeSyncFailure` words the error).
 "Sync now" (Connections page, owner only) runs `manual` for one chosen month (`@/sync/months`)
-with `resume: true`, so syncing a month that stopped at the time limit again carries on from its
-checkpoint.
+with `resume: true`, so syncing a month that stopped at the time limit (or failed part-way) again
+within 6 hours carries on from its checkpoint.
 
-**Extension points.** #5 (line items) is in place (above; `SyncReader` has `listLocations`,
-`listStaff`, `listInvoices`, `getInvoice`). #6 (nightly/cron/resume): call `runSync(…, "nightly", { dateRange, startPage: checkpoint.nextPage })`
-from a cron route (under `PUBLIC_PATHS`, secret-authenticated); the lease already stops overlapping
-runs. #8 (backfill): `mode: "backfill"` over bounded date ranges; `partial` + checkpoint says where
-the chunk stopped. Tests: `createSyncHarness(sql)` / `clearSyncTables(sql)` in
+**Scheduler** (#6): `vercel.json` has one cron, `GET /api/cron/nightly` at `0 19 * * *` UTC = 03:00
+in Kuala Lumpur. On Vercel **Hobby** a cron job may run only once a day and Vercel may start it at
+any time within that hour (±59 min), hence one run per night covering every connection. The route
+(`src/app/api/cron/nightly/route.ts`, `maxDuration = 300`) checks `Authorization: Bearer
+<CRON_SECRET>` (`handleNightlyCron`, `src/sync/cron.ts`: constant-time; no or short secret →
+every request refused with 401) and runs `runNightlySync`: every connection, failed ones included
+(a fixed login recovers by itself; one that still fails stays failed with the new error), one after
+another under its own lease, sharing a 250 s budget (each gets the time left ÷ connections still to
+go, at least 20 s, at most `SYNC_TIME_BUDGET_SECONDS`). To run it by hand:
+`curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/nightly`.
+
+**Failure banner** (#6): `getSyncAlerts(sql)` — a connection whose login fails (`status = failed`)
+or whose latest finished run was a failed nightly — is rendered by the dashboard layout on every
+page for everyone signed in (`<SyncAlertBanner>`, `src/components/sync-alert-banner.tsx`): the
+error in plain words; owners get a link to Connections, managers the message only.
+
+**Extension points.** #5 (line items) and #6 (nightly, cron, resume, sweep, fencing) are in place
+(above; `SyncReader` has `listLocations`, `listStaff`, `listInvoices`, `getInvoice`). #8 (backfill):
+`mode: "backfill"` over bounded date ranges with `resume: true` (page-based checkpoint; pass a
+larger `resumeMaxAgeMs` — past ranges do not go stale) and `sweep: false`; `partial` + checkpoint says
+where the chunk stopped; a more frequent backfill cron can reuse `handleNightlyCron`'s
+authentication. Tests: `createSyncHarness(sql, { requestDelayMs? })` / `clearSyncTables(sql)` /
+`snapshotSyncedData(sql)` (every synced row by natural keys, for "identical state" assertions) in
 `src/sync/test-support.ts` (fake Kreloses, fake clock, recorded sleeps; `h.fake.saleOverviews`
-edits line items; `clearSyncTables` empties staff too).
+edits line items; `clearSyncTables` empties staff too). The lease follows the DATABASE clock: to
+simulate expiry, move `connection_locks.expires_at` into the past.
 
 ### Analytics Service (`src/analytics/`)
 
@@ -665,7 +730,8 @@ getOverviewKpis(sql, filter): Promise<OverviewKpis>
   // Kpi<T> = { value, previousPeriod: { base, change, changePercent }, lastYear: { … } }  (changePercent null when base is 0)
 getDataFreshness(sql, { dateFrom?, dateTo?, branchIds? }?): Promise<{ branchId, branchName, dataAsOf: Date | null }[]>
   // latest run that read the branch's whole listing (succeeded, or partial only for missing invoice
-  // pages) whose dates include least(dateTo, the day it started);
+  // pages) whose dates include least(dateTo, the day it started); a resumed chain counts from its
+  // first run's start (#6);
   // no dateTo = "now" (runs that read the day they ran). An old month never makes today look fresh.
 getDoctorRanking(sql, filter, { splitByBranch? }?): Promise<DoctorRanking>
   // { period, totalRevenue (all revenue in the dates + branches: the share denominator; the doctor filter does not apply),
@@ -699,8 +765,9 @@ METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); MCP res
 
 What counts as revenue — and who it is credited to — is decided in ONE place:
 `revenueFacts(sql, factsScope(filter))` in `facts.ts`: one row per credited line (plus the pending
-rows), columns `sale_date, branch_id, customer_id, invoice_id, revenue, credited_line_id,
-invoice_line_id, staff_alias_id, staff_id, credit_group, gross_amount` (see
+rows), columns `sale_date, branch_id, customer_id, invoice_id, revenue` (after refunds),
+`credited_line_id, invoice_line_id, staff_alias_id, staff_id, credit_group, gross_amount` and
+`credited_amount` (before refunds; #6) (see
 [Credited lines](#credited-lines-the-revenue-model)). Build every new metric on it (`with facts as
 (${revenueFacts(sql, scope)}) …`): `sum(revenue)`, `count(distinct invoice_id)`, `count(distinct
 customer_id)`, `count(invoice_line_id)` (item lines), grouped by `staff_id` / `credit_group` /
@@ -1115,6 +1182,9 @@ When a hosted Supabase project and Vercel are set up:
 - Use the new API keys (`sb_publishable_…`); JWTs signed with asymmetric keys are verified locally
   by `getClaims()`.
 - Set `OWNER_EMAIL`.
+- Set `CRON_SECRET` (`openssl rand -hex 32`) as a sensitive variable: Vercel Cron sends it to the
+  nightly sync (`vercel.json`, once a day at 19:00 UTC = 03:00 KL, ±59 min on Hobby). Without it the
+  nightly endpoint refuses every call and nothing syncs by itself.
 - Set `CREDENTIALS_ENCRYPTION_KEY` (`openssl rand -base64 32`, a fresh one — never reuse a local
   key) as a sensitive, server-only variable. Losing or changing it means re-entering every
   Kreloses password. Never set `KRELOSES_BASE_URL_*` there (the app refuses to start a login with

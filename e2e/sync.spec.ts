@@ -55,12 +55,12 @@ test.describe("Sync now → Sync status → Overview", () => {
     // Overview for September 2026.
     await page.goto("/overview?from=2026-09-01&to=2026-09-30");
     const value = (testId: string, within: Page | Locator = page) => within.getByTestId(testId).getByTestId("kpi-value");
-    await expect(value("kpi-revenue")).toHaveText("RM 5,855.40");
+    await expect(value("kpi-revenue")).toHaveText("RM 5,755.40");
     await expect(value("kpi-invoices")).toHaveText("9");
     await expect(value("kpi-customers")).toHaveText("5");
-    await expect(value("kpi-aov")).toHaveText("RM 1,171.08");
-    await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-vs-previous")).toHaveText("+RM 3,555.40 (+154.6%) vs previous period");
-    await expect(page.getByTestId("kpi-aov").getByTestId("kpi-vs-previous")).toHaveText("+RM 404.41 (+52.7%) vs previous period");
+    await expect(value("kpi-aov")).toHaveText("RM 1,151.08");
+    await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-vs-previous")).toHaveText("+RM 3,455.40 (+150.2%) vs previous period");
+    await expect(page.getByTestId("kpi-aov").getByTestId("kpi-vs-previous")).toHaveText("+RM 384.41 (+50.1%) vs previous period");
     // September 2025 was never synced: nothing to compare with.
     await expect(page.getByTestId("kpi-revenue").getByTestId("kpi-vs-last-year")).toHaveText("No sales in the same period last year");
 
@@ -71,7 +71,7 @@ test.describe("Sync now → Sync status → Overview", () => {
     await expect(value("branch-kpi-revenue", north)).toHaveText("RM 3,980.40");
     await expect(value("branch-kpi-customers", north)).toHaveText("3");
     await expect(value("branch-kpi-aov", north)).toHaveText("RM 1,326.80");
-    await expect(value("branch-kpi-revenue", south)).toHaveText("RM 1,875.00");
+    await expect(value("branch-kpi-revenue", south)).toHaveText("RM 1,775.00");
     await expect(value("branch-kpi-invoices", south)).toHaveText("5");
     await expect(north.getByTestId("branch-data-as-of")).toHaveText(/^Data as of \d{1,2} \w{3} \d{4}, \d{2}:\d{2}$/);
 
@@ -86,7 +86,7 @@ test.describe("Sync now → Sync status → Overview", () => {
     // On a phone, nothing scrolls sideways.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/overview?from=2026-09-01&to=2026-09-30");
-    await expect(value("kpi-revenue")).toHaveText("RM 5,855.40");
+    await expect(value("kpi-revenue")).toHaveText("RM 5,755.40");
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
     await page.goto("/sync");
     await expect(page.getByTestId("sync-run")).toHaveCount(3);
@@ -132,7 +132,7 @@ test.describe("Sync now → Sync status → Overview", () => {
 
       // ...but the manager does see the synced numbers and the run.
       await manager.goto("/overview?from=2026-09-01&to=2026-09-30");
-      await expect(manager.getByTestId("kpi-revenue").getByTestId("kpi-value")).toHaveText("RM 5,855.40");
+      await expect(manager.getByTestId("kpi-revenue").getByTestId("kpi-value")).toHaveText("RM 5,755.40");
       await manager.goto("/sync");
       await expect(manager.getByTestId("sync-run")).toHaveCount(2);
     } finally {

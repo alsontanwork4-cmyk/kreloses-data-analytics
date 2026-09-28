@@ -135,26 +135,49 @@ charged (after any item-level discount), the staff name on it, and a discount na
 _Avoid_: Row, item (an item is what is sold; a line is one occurrence of it on an invoice)
 
 **Credited line**:
-A line item (not a discount line) with the amount it earns: its own amount plus its share of the
-invoice's discount lines and of any difference between the lines and the invoice's net amount,
-shared in proportion to what each line charged (its amount after any item-level discount; lines
-that charged nothing or less take no share; if none charged anything, by quantity × unit price) in
-whole sen. An invoice's credited lines add up exactly to its **revenue base** (the net amount of an
-active invoice; refunds not deducted). Credited to the staff member its staff name is matched to, or to
-**No staff on line** when it names nobody.
+A line item (not a discount line) with what it was charged and what it earns. Its **credited
+amount** is its own amount plus its share of the invoice's discount lines and of any difference
+between the lines and the invoice's net amount, shared in proportion to what each line charged (its
+amount after any item-level discount; lines that charged nothing or less take no share; if none
+charged anything, by quantity × unit price) in whole sen: an invoice's credited amounts add up
+exactly to its net amount. Its **refund share** is its part of the invoice's refund, shared the
+same way. Its **revenue** = credited amount − refund share: an invoice's revenue adds up exactly to
+its **revenue base**. Credited to the staff member its staff name is matched to, or to **No staff on
+line** when it names nobody. (Columns: `credited_lines.credited_amount`, `refund_amount`,
+`revenue_amount`.)
 _Avoid_: Attributed line, allocation
 
+**Refund**:
+Money Kreloses records as given back on an invoice (its TotalRefunds). ASSUMED (pending a check
+against live Kreloses data, docs/adr/0008) to include tax like the invoice total, so the part of it
+that was revenue is refunds × net ÷ total, to the sen, never more than the net. A return sale (a
+negative net) already reduces revenue by itself; its refund is not deducted again. A refund is never
+a discount: discounts compare gross with the credited amount (before refunds).
+_Avoid_: Credit note (Kreloses's own term for one kind of refund document), return (a negative sale)
+
+**Revenue base**:
+What an invoice contributes to revenue: its net amount less the refunded part of it (see Refund)
+for an active invoice, zero for a cancelled one. An invoice's credited lines' revenue adds up
+exactly to it; an invoice whose line items are not synced yet counts it whole.
+
 **Line items not synced yet**:
-An active invoice whose line items have not been read since it was last changed (or whose invoice
-page could not be opened). Until a sync reads them, its whole revenue base is counted in this group,
-so revenue never drops. A doctor filter cannot include it (it is credited to nobody yet); pages say
-how many there are.
+An active invoice whose line items have not been read since it last changed in a way that can change
+them or its revenue (status, gross, discounts, net, tax, total or refunds — not a payment alone), or
+whose invoice page could not be opened. Until a sync reads them, its whole revenue base is counted in
+this group, so revenue never drops. A doctor filter cannot include it (it is credited to nobody yet);
+pages say how many there are.
 _Avoid_: Pending (in the UI), unallocated
 
+**Permanently missing invoice page**:
+An invoice whose page Kreloses would not open (not found, or sent elsewhere) three syncs in a row.
+The sync stops trying (so it neither wastes requests nor fails later syncs) until the invoice is
+edited in Kreloses; it stays "line items not synced yet" and is listed on Sync status.
+
 **Revenue**:
-The net amount (after discounts) of active invoices on clinic days in the period, credited line by
-line (sum of credited lines, plus invoices whose line items are not synced yet). Refunds are not
-deducted; a negative (return) invoice reduces it. For a doctor: the credited lines credited to them.
+The revenue base of active invoices on clinic days in the period — their net amount (after
+discounts) less the refunded part — credited line by line (sum of credited lines' revenue, plus
+invoices whose line items are not synced yet). A negative (return) invoice reduces it. For a doctor:
+the revenue of the lines credited to them.
 _Avoid_: Sales (ambiguous with invoices), turnover, takings
 
 **Invoices (count)**:
@@ -260,14 +283,39 @@ recorded too. Kinds: *Sync now* (manual, one month chosen by the owner), *nightl
 backfill* (later). Outcomes: succeeded; stopped early (hit its time limit; it records where it got
 to); *some invoice pages missing* (read everything else; those sales stay "line items not synced
 yet" and the next sync tries again); or failed (including when the first few invoice pages it tries
-are all missing).
+for the first time are all missing — pages already missing in earlier syncs do not count).
 _Avoid_: Job, import, refresh
+
+**Nightly sync**:
+The sync the app runs by itself once a night (about 03:00 Kuala Lumpur time) for every connection,
+failing ones included (a fixed login recovers by itself). It re-reads the sale list for the
+**nightly window** — the last 45 days up to today, cancelled sales included — and opens the invoice
+pages only of new sales and of sales that changed in a way that can change their line items or
+revenue (so edits, cancellations and refunds are picked up; a sale that was merely paid costs no
+extra request). Then it **sweeps**: reads, newest first and while its time lasts, the line items of
+any older active sales still "not synced yet".
+_Avoid_: Cron job, scheduled import
+
+**Carrying on (a stopped sync)**:
+A sync that stopped part-way — at its time limit, on an error, or because the server died — leaves
+a checkpoint; the next sync of the same kind (nightly; or Sync now of the same month) within a few
+hours carries on from it instead of starting over, and nothing is counted twice. Nightly syncs
+remember "every sale newer than this moment is done" rather than a page number, because pages of a
+newest-first list shift as sales are added or removed. A chain of such runs is only as fresh as its
+first run's start.
+
+**Sync alert**:
+The banner on every page of the dashboard, for everyone signed in, while a connection's login fails
+or its latest finished sync was a nightly one that failed, with the last error in plain words. The
+owner gets a link to Connections. It goes away by itself once a login or a later sync works.
+_Avoid_: Notification, toast
 
 **Data as of**:
 For a branch and the period being looked at, when the latest sync run finished that read that
 branch's whole sale list (succeeded, or only some invoice pages missing) up to the period's last day (or, if the period ends after the run started, up to the
-day the run started). Syncing an older month does not make the current month look fresh. Changes
-made in Kreloses after that time are not in the numbers yet.
+day the run started). A sync that carried on from an earlier one counts from when the first of them
+started. Syncing an older month does not make the current month look fresh. Changes made in
+Kreloses after that time are not in the numbers yet.
 _Avoid_: Last updated, last refreshed
 
 ## Claude (MCP)

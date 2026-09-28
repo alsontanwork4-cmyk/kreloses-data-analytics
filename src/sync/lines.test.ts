@@ -5,7 +5,7 @@ import { invoiceRevenueBaseSen } from "@/attribution";
 import { useTestDatabase } from "@/db/testing";
 import { listInvoices, login } from "@/kreloses";
 import { SYNTHETIC_ACCOUNTS, readFixture } from "@/kreloses/testing/fake-kreloses";
-import { moneyToSen } from "@/lib/money";
+import { moneyToSen, senToMoney } from "@/lib/money";
 import { listStaffAliases, remapAlias, setStaffKind } from "@/staff/store";
 
 import { runSync, type SyncResult } from "./engine";
@@ -265,15 +265,50 @@ describe("Sync Engine: line items and credited lines", () => {
   it("keeps the revenue base defined the same in TypeScript and SQL (invoiceRevenueBaseSen = invoices.revenue_base)", async () => {
     const id = await h.connect(both);
     ran(await runSync(h.deps(), id, "manual", { dateRange: { from: "2025-09-01", to: "2026-09-30" } }));
-    const rows = await db.sql<{ status: "active" | "cancelled"; netAmount: string; totalRefunds: string; revenueBase: string }[]>`
-      select status, net_amount, total_refunds, revenue_base from invoices
-    `;
+    type Row = { status: "active" | "cancelled"; netAmount: string; totalAmount: string; totalRefunds: string; revenueBase: string };
+    const agree = (rows: Row[]) => {
+      for (const row of rows) {
+        const ts = invoiceRevenueBaseSen({
+          status: row.status,
+          netSen: moneyToSen(row.netAmount),
+          totalSen: moneyToSen(row.totalAmount),
+          totalRefundsSen: moneyToSen(row.totalRefunds),
+        });
+        expect(moneyToSen(row.revenueBase), JSON.stringify(row)).toBe(ts);
+      }
+    };
+    const rows = await db.sql<Row[]>`select status, net_amount, total_amount, total_refunds, revenue_base from invoices`;
     expect(rows).toHaveLength(20);
     expect(rows.some((row) => row.status === "cancelled")).toBe(true);
-    expect(rows.some((row) => row.totalRefunds !== "0.00")).toBe(true);
-    for (const row of rows) {
-      const ts = invoiceRevenueBaseSen({ status: row.status, netSen: moneyToSen(row.netAmount), totalRefundsSen: moneyToSen(row.totalRefunds) });
-      expect(moneyToSen(row.revenueBase), JSON.stringify(row)).toBe(ts);
+    expect(rows.some((row) => row.totalRefunds !== "0.00" && row.revenueBase !== row.netAmount)).toBe(true); // 700202
+    agree(rows);
+
+    // Every corner of the refund rule, with awkward rounding (half sen, tax, clamps, signs), through the generated column.
+    let seed = 6;
+    const random = (max: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % max;
+    };
+    const cases: [number, number, number][] = [
+      [5, 10, 1], [4, 10, 1], [110_000, 110_000, 10_000], [100_000, 106_000, 10_600], [10_000, 10_000, 15_000],
+      [10_000, 0, 5_000], [10_000, -10_000, 5_000], [10_000, 10_000, -5_000], [-12_000, -12_000, 12_000], [0, 0, 5_000],
+      [99_999_999_999, 99_999_999_999, 99_999_999_998], [1, 3, 1], [2, 3, 1], [33_333, 100_000, 50_000],
+    ];
+    for (let i = 0; i < 300; i += 1) {
+      const net = random(2_000_000) - 200_000;
+      cases.push([net, net + random(3) * random(20_000) - (random(20) === 0 ? 30_000 : 0), random(3) === 0 ? 0 : random(2_500_000)]);
+    }
+    const [invoice] = await db.sql<{ id: string }[]>`select id::text from invoices where kreloses_sale_id = '700101'`;
+    for (const [netSen, totalSen, refundsSen] of cases) {
+      for (const status of ["active", "cancelled"] as const) {
+        const [row] = await db.sql<Row[]>`
+          update invoices set status = ${status}, net_amount = ${senToMoney(netSen)}, total_amount = ${senToMoney(totalSen)},
+            total_refunds = ${senToMoney(refundsSen)}
+          where id = ${invoice!.id}
+          returning status, net_amount, total_amount, total_refunds, revenue_base
+        `;
+        agree([row!]);
+      }
     }
   });
 
@@ -341,9 +376,9 @@ describe("Sync Engine: line items and credited lines", () => {
         template.Filters = template.Filters.filter((filter) => filter.Name !== "Staff");
         return Response.json(template);
       });
-      // A sale with a new staff name arrives.
+      // A sale is edited in Kreloses (gross and discount changed, net the same) and now names a new staff member.
       (h.fake.saleOverviews["700105"] as { Items: { StaffName: string }[] }).Items[0]!.StaffName = "Dr Echo";
-      h.fake.saleRows.find((row) => row.SaleId === 700105)!.PaymentStatusName = "Paid";
+      Object.assign(h.fake.saleRows.find((row) => row.SaleId === 700105)!, { GrossAmount: "109.90", Discounts: "10.00" });
       h.clock.advance(60_000);
 
       const result = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));

@@ -38,14 +38,16 @@ export async function getDataFreshness(
       b.id::text as branch_id,
       b.name as branch_name,
       (
-        select max(r.finished_at) from sync_runs r
+        -- A run that carried on from an earlier run's checkpoint (#6) is only as fresh as the START
+        -- of the first run of its chain: pages read back then were not read again.
+        select max(coalesce(r.chain_started_at, r.finished_at)) from sync_runs r
         -- Covered = the run read the branch's whole listing: succeeded, or partial only because
         -- some invoice pages were missing (a run stopped at its time limit covers nothing).
         where r.status in ('succeeded', 'partial')
           and b.kreloses_location_id = any(r.covered_location_ids)
           and least(
-            coalesce(${periodEnd}::date, (r.started_at at time zone 'Asia/Kuala_Lumpur')::date),
-            (r.started_at at time zone 'Asia/Kuala_Lumpur')::date
+            coalesce(${periodEnd}::date, (coalesce(r.chain_started_at, r.started_at) at time zone 'Asia/Kuala_Lumpur')::date),
+            (coalesce(r.chain_started_at, r.started_at) at time zone 'Asia/Kuala_Lumpur')::date
           ) between r.date_from and r.date_to
       ) as data_as_of
     from branches b

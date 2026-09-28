@@ -40,6 +40,8 @@ process.env.E2E_MCP_BEARER_TOKEN ||= randomBytes(32).toString("base64");
 // A fixed "now" at the clinic for pages that read `clinicNow()` (the Daily page's "yesterday" is
 // 27 Sep 2026), so e2e/daily.spec.ts never depends on the machine clock or on crossing KL midnight.
 process.env.E2E_CLINIC_NOW ||= "2026-09-28T09:00:00+08:00";
+// A throwaway secret per run for the nightly cron endpoint (e2e/nightly.spec.ts calls it as Vercel Cron would).
+process.env.E2E_CRON_SECRET ||= randomBytes(24).toString("hex");
 
 export default defineConfig({
   testDir: "e2e",
@@ -83,6 +85,7 @@ export default defineConfig({
         CREDENTIALS_ENCRYPTION_KEY: process.env.E2E_CREDENTIALS_ENCRYPTION_KEY,
         MCP_BEARER_TOKEN: process.env.E2E_MCP_BEARER_TOKEN,
         CLINIC_NOW: process.env.E2E_CLINIC_NOW,
+        CRON_SECRET: process.env.E2E_CRON_SECRET,
         // Point the Kreloses Reader at the fake (allowed outside production, loopback only).
         KRELOSES_BASE_URL_WWW: fakeKrelosesUrl,
         KRELOSES_BASE_URL_SEA: fakeKrelosesUrl,

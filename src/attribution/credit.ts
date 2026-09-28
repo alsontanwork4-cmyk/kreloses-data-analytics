@@ -9,20 +9,25 @@
  *    Analytics Service resolves the name through `staff_aliases` at query time, so remapping a name
  *    never changes these amounts (docs/adr/0005).
  * 2. A line starts from its own charged amount (`Amount`, which already has any item-level discount
- *    taken off). Everything between those amounts and the invoice's revenue base — the invoice's
+ *    taken off). Everything between those amounts and the invoice's net amount — the invoice's
  *    discount lines (ItemType 55) and any other gap (rounding, adjustments, tax shown on lines) —
  *    is spread across the non-discount lines in proportion to what each line CHARGED (its Amount;
  *    docs/adr/0006 — the spec's "gross" was changed deliberately), with a largest-remainder
- *    allocation in whole sen, ties to the lower line number.
- * 3. So the credited lines of an invoice add up EXACTLY to its revenue base, to the sen.
+ *    allocation in whole sen, ties to the lower line number. That is the line's **credited amount**
+ *    (before refunds): the credited amounts of an invoice add up EXACTLY to its net amount.
+ * 3. A refund (`invoiceRefundSen`, #6 — an assumption pending live data, docs/adr/0008) is taken off
+ *    the lines the same way, in proportion to what each line charged: the line's **refund share**.
+ *    Its **revenue** = credited amount − refund share, and the revenue of an invoice's lines adds up
+ *    EXACTLY to its revenue base (`invoiceRevenueBaseSen`), to the sen. Revenue metrics sum revenue;
+ *    the discount metric uses gross − credited amount, so a refund is never counted as a discount.
  *
  * Edge cases (each unit-tested in credit.test.ts):
  * - Lines that charged ≤ 0 (free lines, returns) take no share while any line charged more than
  *   zero. If no line did: by |gross| (quantity × unit price); if that is zero everywhere: equally.
  * - No non-discount line at all (only discount lines, or no lines): ONE "unitemised remainder"
- *   (`lineNo: null`, no staff) carries the whole base — even a zero base, so every invoice keeps
- *   at least one credited line and still counts as an invoice.
- * - A cancelled invoice has a base of zero, so its lines are credited zero.
+ *   (`lineNo: null`, no staff) carries the whole net and refund — even a zero one, so every invoice
+ *   keeps at least one credited line and still counts as an invoice.
+ * - A cancelled invoice has a net and a revenue base of zero, so its lines are credited zero.
  */
 
 /** Kreloses's ItemType of a discount line. Other types (1 product, 4 service, …) are credited. */
@@ -33,7 +38,9 @@ export interface AttributionInvoice {
   status: "active" | "cancelled";
   /** Kreloses's NetAmount (after discounts, before tax). */
   netSen: number;
-  /** Kreloses's TotalRefunds (recorded; see `invoiceRevenueBaseSen`). */
+  /** Kreloses's Total (net + tax): refunds are assumed to be tax-inclusive, like it. */
+  totalSen: number;
+  /** Kreloses's TotalRefunds (see `invoiceRefundSen`). */
   totalRefundsSen: number;
 }
 
@@ -61,35 +68,72 @@ export interface CreditedLine {
   grossSen: number;
   /** The line's own charged amount (0 for the remainder). */
   lineAmountSen: number;
-  /** Its share of the invoice's discount lines and gap (negative = discount). */
+  /** Its share of the invoice's discount lines and gap (negative = a discount). */
   spreadSen: number;
-  /** lineAmountSen + spreadSen. */
+  /**
+   * lineAmountSen + spreadSen: the line's share of the invoice's NET amount, before any refund —
+   * what it was finally charged. Gross − this is the line's discount (#12).
+   */
   creditedSen: number;
+  /** Its share of the invoice's refund (`invoiceRefundSen`), spread like the discounts; ≥ 0. */
+  refundSen: number;
+  /** creditedSen − refundSen: what revenue metrics count. An invoice's lines add up to its revenue base. */
+  revenueSen: number;
 }
 
 /**
- * What an invoice's credited lines must add up to — THE one definition, so refund handling can be
- * refined in one place (#6): the net amount of an active invoice; zero for a cancelled one.
+ * How much of an invoice's net amount a refund takes back — THE one place refunds are interpreted
+ * (#6). An ASSUMPTION pending live verification of how Kreloses reports refunds (the Sale List's
+ * TotalRefunds vs the invoice page's RefundInfo / CreditNoteInfo; docs/adr/0008, CONTEXT.md
+ * "Refund"): if the live data says otherwise, only this function and its SQL twin in
+ * `invoices.revenue_base` change.
  *
- * Refunds (`totalRefundsSen`) are recorded but NOT subtracted: how Kreloses represents a refund
- * (the Sale List's TotalRefunds vs the Sale Overview's RefundInfo / CreditNoteInfo, and whether a
- * refund also appears as a separate negative "return" sale) is not verified against live data yet.
- * A negative (return) invoice already reduces revenue through its own negative net amount.
+ * - Kreloses's TotalRefunds is taken to be money given back, tax-inclusive like Total, so the part
+ *   of it that was net is `totalRefunds × net ÷ total`, rounded half up to the sen.
+ * - Never more than the net, never below zero; nothing when the total is zero or negative.
+ * - A return sale (net ≤ 0) already reduces revenue through its own negative net: its refund is the
+ *   money given back for it, not a second reduction.
+ * - Cancelled invoices: 0 (they count nothing anyway).
+ */
+export function invoiceRefundSen(invoice: AttributionInvoice): number {
+  const { status, netSen, totalSen, totalRefundsSen } = invoice;
+  assertSen(netSen, "net amount");
+  assertSen(totalSen, "total");
+  assertSen(totalRefundsSen, "total refunds");
+  if (status !== "active" || netSen <= 0 || totalSen <= 0 || totalRefundsSen <= 0) return 0;
+  // floor((2·R·N + T) / (2·T)) = R·N/T rounded half up (all positive). BigInt: no precision loss.
+  const two = BigInt(2);
+  const share = (two * BigInt(totalRefundsSen) * BigInt(netSen) + BigInt(totalSen)) / (two * BigInt(totalSen));
+  return share >= BigInt(netSen) ? netSen : Number(share);
+}
+
+/**
+ * What an invoice's revenue (the `revenueSen` of its credited lines) adds up to — THE one definition,
+ * mirrored in SQL by the generated `invoices.revenue_base` (a test and a runtime check in
+ * `saveInvoiceLines` keep them equal; change both together): the net amount of an active invoice
+ * less the part of it refunded (`invoiceRefundSen`); zero for a cancelled one. A negative (return)
+ * invoice reduces revenue through its own negative net amount.
  */
 export function invoiceRevenueBaseSen(invoice: AttributionInvoice): number {
+  return netBaseSen(invoice) - invoiceRefundSen(invoice);
+}
+
+/** What the credited amounts (before refunds) add up to: the net of an active invoice, else 0. */
+function netBaseSen(invoice: AttributionInvoice): number {
   return invoice.status === "active" ? invoice.netSen : 0;
 }
 
 /**
  * The credited lines of one invoice: one per non-discount line (in line order), or the single
- * unitemised remainder when there is none. Their `creditedSen` add up to
- * `invoiceRevenueBaseSen(invoice)` exactly. Throws `RangeError` for input that cannot be credited
- * (a non-discount line without quantity/price/amount, duplicate line numbers): the Reader never
- * produces it, so it is a bug, not data to guess about.
+ * unitemised remainder when there is none. Their `creditedSen` add up to the invoice's net (0 when
+ * cancelled) and their `revenueSen` to `invoiceRevenueBaseSen(invoice)`, exactly. Throws
+ * `RangeError` for input that cannot be credited (a non-discount line without quantity/price/amount,
+ * duplicate line numbers): the Reader never produces it, so it is a bug, not data to guess about.
  */
 export function creditInvoice(invoice: AttributionInvoice, lines: readonly AttributionLine[]): CreditedLine[] {
-  const baseSen = invoiceRevenueBaseSen(invoice);
-  assertSen(baseSen, "revenue base");
+  const baseSen = netBaseSen(invoice);
+  assertSen(baseSen, "net amount");
+  const refundSen = invoiceRefundSen(invoice);
   const seen = new Set<number>();
   for (const line of lines) {
     if (!Number.isInteger(line.lineNo) || line.lineNo < 1) throw new RangeError(`bad line number ${line.lineNo}`);
@@ -110,16 +154,20 @@ export function creditInvoice(invoice: AttributionInvoice, lines: readonly Attri
     });
 
   if (credited.length === 0) {
-    return [{ lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: baseSen, creditedSen: baseSen }];
+    return [
+      { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: baseSen, creditedSen: baseSen, refundSen, revenueSen: baseSen - refundSen },
+    ];
   }
 
+  const weights = spreadWeights(credited);
   const poolSen = baseSen - credited.reduce((total, line) => total + line.lineAmountSen, 0);
-  const shares = allocateLargestRemainder(poolSen, spreadWeights(credited));
-  return credited.map((line, index) => ({
-    ...line,
-    spreadSen: shares[index]!,
-    creditedSen: line.lineAmountSen + shares[index]!,
-  }));
+  const shares = allocateLargestRemainder(poolSen, weights);
+  // The refund is spread exactly like the discounts: in proportion to what each line charged.
+  const refunds = allocateLargestRemainder(refundSen, weights);
+  return credited.map((line, index) => {
+    const creditedSen = line.lineAmountSen + shares[index]!;
+    return { ...line, spreadSen: shares[index]!, creditedSen, refundSen: refunds[index]!, revenueSen: creditedSen - refunds[index]! };
+  });
 }
 
 /**

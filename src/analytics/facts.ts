@@ -10,7 +10,8 @@ import type { GlobalFilter } from "@/filters";
  *   branch_id        bigint
  *   customer_id      bigint   null = walk-in (no customer)
  *   invoice_id       bigint
- *   revenue          numeric(12,2)  the credited amount (`credited_lines.credited_amount`)
+ *   revenue          numeric(12,2)  what the line earned: its credited amount less its share of any
+ *                              refund (`credited_lines.revenue_amount`, #6). Sum THIS for revenue.
  *   credited_line_id bigint   null on a pending row (below)
  *   invoice_line_id  bigint   the credited line; null for an invoice's unitemised remainder and on
  *                              pending rows. `count(invoice_line_id)` = item lines.
@@ -20,6 +21,10 @@ import type { GlobalFilter } from "@/filters";
  *   credit_group     text     'doctor' | 'other' | 'generic' (the staff kind NOW) | 'no_staff'
  *                              ("No staff on line") | 'pending' (line items not synced yet)
  *   gross_amount     numeric(12,2)  quantity × unit price of the line; null on pending rows
+ *   credited_amount  numeric(12,2)  what the line was charged after every discount, BEFORE refunds
+ *                              (`credited_lines.credited_amount`: its share of the invoice net); null
+ *                              on pending rows. Discount = gross_amount − credited_amount (#12), so a
+ *                              refund never counts as a discount.
  *
  * An active invoice whose line items are not current (`invoices.lines_current` false: never read,
  * or the header changed since) contributes ONE `pending` row carrying its revenue base
@@ -38,10 +43,10 @@ import type { GlobalFilter } from "@/filters";
 export function revenueFacts(sql: Sql, scope: FactsScope) {
   return sql`
     select
-      i.sale_date, i.branch_id, i.customer_id, i.id as invoice_id, c.credited_amount as revenue,
+      i.sale_date, i.branch_id, i.customer_id, i.id as invoice_id, c.revenue_amount as revenue,
       c.id as credited_line_id, c.invoice_line_id, c.staff_alias_id, a.staff_id,
       case when a.staff_id is null then 'no_staff' else s.kind end as credit_group,
-      c.gross_amount
+      c.gross_amount, c.credited_amount
     from invoices i
     join credited_lines c on c.invoice_id = i.id
     left join staff_aliases a on a.id = c.staff_alias_id
@@ -52,7 +57,7 @@ export function revenueFacts(sql: Sql, scope: FactsScope) {
     union all
     select
       i.sale_date, i.branch_id, i.customer_id, i.id, i.revenue_base,
-      null::bigint, null::bigint, null::bigint, null::bigint, 'pending', null::numeric
+      null::bigint, null::bigint, null::bigint, null::bigint, 'pending', null::numeric, null::numeric
     from invoices i
     where i.status = 'active' and not i.lines_current
       and ${branchCondition(sql, scope.branches, sql`i.branch_id`)}

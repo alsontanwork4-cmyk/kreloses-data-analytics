@@ -65,6 +65,15 @@ export function missingPagesWarning(count: number): SyncWarning {
   };
 }
 
+/** The warning for a nightly run whose time budget ran out before every older sale's line items were read. */
+export function lineItemsLeftWarning(count: number): SyncWarning {
+  const one = count === 1;
+  return {
+    code: "line_items_left",
+    message: `${count} older ${one ? "sale still waits" : "sales still wait"} for ${one ? "its" : "their"} line items (the time limit was reached). ${one ? "It counts" : "They count"} at the revenue base as "line items not synced yet"; the next nightly sync carries on.`,
+  };
+}
+
 /** The warning for a run whose Sale List filter had no readable Staff list. */
 export function staffListWarning(error: LayoutChanged): SyncWarning {
   return {

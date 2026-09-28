@@ -37,8 +37,15 @@ export function isStaffKind(value: unknown): value is StaffKind {
  * marked inactive (never deleted; an empty list marks nobody). Then unmatched names without revenue
  * are matched again and automatic kinds refreshed. One transaction.
  */
-export async function upsertStaffDirectory(sql: Sql, connectionId: string, members: KrelosesStaffMember[]): Promise<void> {
+export async function upsertStaffDirectory(
+  sql: Sql,
+  connectionId: string,
+  members: KrelosesStaffMember[],
+  options: { fence?: (tx: Queryable) => Promise<void> } = {},
+): Promise<void> {
   await sql.begin(async (tx) => {
+    // The Sync Engine renews its connection lease here (and stops if it lost it).
+    await options.fence?.(tx);
     if (members.length > 0) {
       const rows = [...members]
         .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))

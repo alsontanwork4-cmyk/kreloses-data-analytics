@@ -1,5 +1,5 @@
 import { aliasKey, creditInvoice, invoiceRevenueBaseSen, type AttributionLine } from "@/attribution";
-import type { JsonValue, Sql } from "@/db/sql";
+import type { JsonValue, Queryable, Sql } from "@/db/sql";
 import type { KrelosesInvoiceDetail } from "@/kreloses";
 import { moneyToSen, senToMoney } from "@/lib/money";
 import { ensureAliases } from "@/staff/store";
@@ -11,30 +11,111 @@ import { ensureAliases } from "@/staff/store";
  * header they were computed from.
  */
 
+/**
+ * After this many reads in a row that found the invoice's page missing (for the same header
+ * version), the sync stops trying: the invoice is "permanently missing" (listed on Sync status,
+ * still counted at its revenue base as "line items not synced yet") until its header changes.
+ */
+export const MAX_PAGE_MISSING_ATTEMPTS = 3;
+
 /** An invoice whose line items must be (re)read. */
 export interface InvoiceNeedingLines {
   invoiceId: string;
   saleId: string;
   /** The header version the lines will be computed for (see `saveInvoiceLines`). */
   headerVersion: number;
+  /** How many reads in a row already found its page missing (0 = never tried, or it worked). */
+  missingAttempts: number;
+  /** When the sale happened (the sweep's order). */
+  saleAt: Date;
+}
+
+/** Where the sweep carries on: after this invoice in newest-first order. */
+export interface SweepCursor {
+  saleAt: Date;
+  invoiceId: string;
 }
 
 /**
- * THE rule for which invoices need their line items (re)read (#6 refines change detection here):
- * active invoices whose lines are not current — never read, or the header changed since they were
- * (`invoices.lines_current`: `lines_header_version = header_version`, and the version moves only
- * when a parsed header column changes). Cancelled invoices are never read (they credit nothing).
- * Only among `saleIds` (the Sale List page just stored), in the page's order.
+ * Which invoices to consider:
+ * - `saleIds`: the Sale List page just stored (in the page's order) — the change detection of a run;
+ * - `sweep`: any date, newest first, up to `limit`, after `after` — the nightly sweep of invoices
+ *   left behind (synced before line items existed, stale after a header change outside the nightly
+ *   window, or pending after a missing page).
  */
-export async function invoicesNeedingLines(sql: Sql, saleIds: readonly string[]): Promise<InvoiceNeedingLines[]> {
-  if (saleIds.length === 0) return [];
-  const rows = await sql<InvoiceNeedingLines[]>`
-    select i.id::text as invoice_id, i.kreloses_sale_id as sale_id, i.header_version
-    from invoices i
-    where i.kreloses_sale_id = any(${[...saleIds]}::text[]) and i.status = 'active' and not i.lines_current
+export type LinesScope = { saleIds: readonly string[] } | { sweep: { limit: number; after?: SweepCursor } };
+
+/**
+ * THE rule for which invoices need their line items (re)read (#5, refined by #6):
+ *
+ * - active (cancelled invoices are never read: they credit nothing);
+ * - lines not current (`invoices.lines_current`: never read, or the header version moved — and it
+ *   moves only when a column that can change line items or revenue changes: status, gross,
+ *   discounts, net, tax, total, refunds; NOT payment status or payments alone, see
+ *   `saveInvoicePage`). So an unchanged invoice never costs a request;
+ * - not permanently missing (`detail_missing_count` < `MAX_PAGE_MISSING_ATTEMPTS`).
+ */
+export async function invoicesNeedingLines(sql: Sql, scope: LinesScope): Promise<InvoiceNeedingLines[]> {
+  const needsLines = sql`i.status = 'active' and not i.lines_current and i.detail_missing_count < ${MAX_PAGE_MISSING_ATTEMPTS}`;
+  const columns = sql`i.id::text as invoice_id, i.kreloses_sale_id as sale_id, i.header_version, i.detail_missing_count as missing_attempts, i.sale_at`;
+  if ("saleIds" in scope) {
+    if (scope.saleIds.length === 0) return [];
+    const rows = await sql<InvoiceNeedingLines[]>`
+      select ${columns} from invoices i where i.kreloses_sale_id = any(${[...scope.saleIds]}::text[]) and ${needsLines}
+    `;
+    const order = new Map(scope.saleIds.map((id, index) => [id, index]));
+    return rows.sort((a, b) => order.get(a.saleId)! - order.get(b.saleId)!);
+  }
+  const { limit, after } = scope.sweep;
+  return sql<InvoiceNeedingLines[]>`
+    select ${columns} from invoices i
+    where ${needsLines}
+      ${after ? sql`and (i.sale_at, i.id) < (${after.saleAt}, ${after.invoiceId}::bigint)` : sql``}
+    order by i.sale_at desc, i.id desc
+    limit ${limit}
   `;
-  const order = new Map(saleIds.map((id, index) => [id, index]));
-  return rows.sort((a, b) => order.get(a.saleId)! - order.get(b.saleId)!);
+}
+
+/** How many invoices (any date) still need their line items read, by the rule above. */
+export async function countInvoicesNeedingLines(sql: Sql): Promise<number> {
+  const [row] = await sql<{ count: number }[]>`
+    select count(*)::int as count from invoices i
+    where i.status = 'active' and not i.lines_current and i.detail_missing_count < ${MAX_PAGE_MISSING_ATTEMPTS}
+  `;
+  return row!.count;
+}
+
+/** Active invoices the sync has stopped trying to read (`MAX_PAGE_MISSING_ATTEMPTS`), newest first. */
+export interface PermanentlyMissingInvoice {
+  saleNumber: string | null;
+  saleDate: string;
+  branchName: string;
+  attempts: number;
+}
+
+export async function listPermanentlyMissingInvoices(sql: Sql, options: { limit?: number } = {}): Promise<{ total: number; invoices: PermanentlyMissingInvoice[] }> {
+  const rows = await sql<(PermanentlyMissingInvoice & { total: number })[]>`
+    select i.sale_number, i.sale_date, b.name as branch_name, i.detail_missing_count as attempts, count(*) over ()::int as total
+    from invoices i join branches b on b.id = i.branch_id
+    where i.status = 'active' and not i.lines_current and i.detail_missing_count >= ${MAX_PAGE_MISSING_ATTEMPTS}
+    order by i.sale_at desc, i.id desc
+    limit ${options.limit ?? 20}
+  `;
+  return {
+    total: rows[0]?.total ?? 0,
+    invoices: rows.map((row) => ({ saleNumber: row.saleNumber, saleDate: row.saleDate, branchName: row.branchName, attempts: row.attempts })),
+  };
+}
+
+/**
+ * Records that an invoice's page was missing for `headerVersion` (a no-op if the header moved on
+ * meanwhile). Call it inside the run's fenced transaction.
+ */
+export async function recordMissingPage(sql: Queryable, invoiceId: string, headerVersion: number): Promise<void> {
+  await sql`
+    update invoices set detail_missing_count = detail_missing_count + 1
+    where id = ${invoiceId} and header_version = ${headerVersion}
+  `;
 }
 
 export type SaveLinesResult =
@@ -46,25 +127,32 @@ export type SaveLinesResult =
 /**
  * Stores an invoice's line items and derives its credited lines, in one transaction:
  *
+ * 0. `options.fence(tx)` first, if given (the Sync Engine renews its connection lease there and
+ *    throws if it lost it, so nothing is written after another run took over);
  * 1. locks the invoice row; if its `header_version` is no longer `headerVersion` (the version the
  *    page was opened for) nothing is written — the lines might belong to another state of the
  *    invoice; it stays "not synced yet" and the next sync reads it again;
  * 2. upserts `invoice_lines` by (invoice, line_no), deleting lines beyond the new count;
  * 3. makes sure every staff name on the lines has an alias (matching new names);
- * 4. `creditInvoice` (pure) → upserts `credited_lines`, deleting rows no longer produced;
+ * 4. `creditInvoice` (pure) → upserts `credited_lines` (credited amount before refunds, refund
+ *    share; `revenue_amount` is generated from them), deleting rows no longer produced;
  * 5. sets `lines_header_version` (so the lines are current for exactly this header),
- *    `detail_fetched_at`, `raw_detail` and `line_gap_amount`.
+ *    `detail_fetched_at`, `raw_detail`, `line_gap_amount`, and clears `detail_missing_count`.
  *
  * Idempotent: reading the same page again leaves the same rows (ids included).
  */
 export async function saveInvoiceLines(
   sql: Sql,
   values: { invoiceId: string; headerVersion: number; detail: KrelosesInvoiceDetail; fetchedAt: Date },
+  options: { fence?: (tx: Queryable) => Promise<void> } = {},
 ): Promise<SaveLinesResult> {
   const { invoiceId, headerVersion, detail, fetchedAt } = values;
   return sql.begin(async (tx): Promise<SaveLinesResult> => {
-    const [header] = await tx<{ status: "active" | "cancelled"; netAmount: string; totalRefunds: string; revenueBase: string; headerVersion: number }[]>`
-      select status, net_amount, total_refunds, revenue_base, header_version from invoices where id = ${invoiceId} for update
+    await options.fence?.(tx);
+    const [header] = await tx<
+      { status: "active" | "cancelled"; netAmount: string; totalAmount: string; totalRefunds: string; revenueBase: string; headerVersion: number }[]
+    >`
+      select status, net_amount, total_amount, total_refunds, revenue_base, header_version from invoices where id = ${invoiceId} for update
     `;
     if (!header) throw new Error(`invoice ${invoiceId} does not exist`);
     if (header.headerVersion !== headerVersion) return { status: "header_changed" };
@@ -115,7 +203,12 @@ export async function saveInvoiceLines(
       amountSen: line.amountSen,
       staffName: line.staffName,
     }));
-    const invoice = { status: header.status, netSen: moneyToSen(header.netAmount), totalRefundsSen: moneyToSen(header.totalRefunds) };
+    const invoice = {
+      status: header.status,
+      netSen: moneyToSen(header.netAmount),
+      totalSen: moneyToSen(header.totalAmount),
+      totalRefundsSen: moneyToSen(header.totalRefunds),
+    };
     // The revenue base has a TypeScript and an SQL definition (invoices.revenue_base); they must agree.
     if (invoiceRevenueBaseSen(invoice) !== moneyToSen(header.revenueBase)) {
       throw new Error(`invoice ${invoiceId}: invoiceRevenueBaseSen and invoices.revenue_base disagree; change both together`);
@@ -130,6 +223,7 @@ export async function saveInvoiceLines(
       line_amount: senToMoney(row.lineAmountSen),
       spread_amount: senToMoney(row.spreadSen),
       credited_amount: senToMoney(row.creditedSen),
+      refund_amount: senToMoney(row.refundSen),
     }));
     const itemized = rows.filter((row) => row.invoice_line_id !== null);
     const remainder = rows.find((row) => row.invoice_line_id === null);
@@ -142,29 +236,32 @@ export async function saveInvoiceLines(
     `;
     if (itemized.length > 0) {
       await tx`
-        insert into credited_lines as c (invoice_id, invoice_line_id, staff_alias_id, gross_amount, line_amount, spread_amount, credited_amount)
-        select ${invoiceId}::bigint, r.invoice_line_id, r.staff_alias_id, r.gross_amount, r.line_amount, r.spread_amount, r.credited_amount
+        insert into credited_lines as c (invoice_id, invoice_line_id, staff_alias_id, gross_amount, line_amount, spread_amount, credited_amount, refund_amount)
+        select ${invoiceId}::bigint, r.invoice_line_id, r.staff_alias_id, r.gross_amount, r.line_amount, r.spread_amount, r.credited_amount, r.refund_amount
         from jsonb_to_recordset(${tx.json(itemized as unknown as JsonValue)}) as r(
-          invoice_line_id bigint, staff_alias_id bigint, gross_amount numeric, line_amount numeric, spread_amount numeric, credited_amount numeric
+          invoice_line_id bigint, staff_alias_id bigint, gross_amount numeric, line_amount numeric, spread_amount numeric,
+          credited_amount numeric, refund_amount numeric
         )
         on conflict (invoice_line_id) do update set
           staff_alias_id = excluded.staff_alias_id,
           gross_amount = excluded.gross_amount,
           line_amount = excluded.line_amount,
           spread_amount = excluded.spread_amount,
-          credited_amount = excluded.credited_amount
-        where (c.staff_alias_id, c.gross_amount, c.line_amount, c.spread_amount, c.credited_amount)
-          is distinct from (excluded.staff_alias_id, excluded.gross_amount, excluded.line_amount, excluded.spread_amount, excluded.credited_amount)
+          credited_amount = excluded.credited_amount,
+          refund_amount = excluded.refund_amount
+        where (c.staff_alias_id, c.gross_amount, c.line_amount, c.spread_amount, c.credited_amount, c.refund_amount)
+          is distinct from (excluded.staff_alias_id, excluded.gross_amount, excluded.line_amount, excluded.spread_amount, excluded.credited_amount, excluded.refund_amount)
       `;
     }
     if (remainder) {
       await tx`
-        insert into credited_lines as c (invoice_id, invoice_line_id, staff_alias_id, gross_amount, line_amount, spread_amount, credited_amount)
-        values (${invoiceId}, null, null, ${remainder.gross_amount}, ${remainder.line_amount}, ${remainder.spread_amount}, ${remainder.credited_amount})
+        insert into credited_lines as c (invoice_id, invoice_line_id, staff_alias_id, gross_amount, line_amount, spread_amount, credited_amount, refund_amount)
+        values (${invoiceId}, null, null, ${remainder.gross_amount}, ${remainder.line_amount}, ${remainder.spread_amount}, ${remainder.credited_amount}, ${remainder.refund_amount})
         on conflict (invoice_id) where invoice_line_id is null do update set
           spread_amount = excluded.spread_amount,
-          credited_amount = excluded.credited_amount
-        where (c.spread_amount, c.credited_amount) is distinct from (excluded.spread_amount, excluded.credited_amount)
+          credited_amount = excluded.credited_amount,
+          refund_amount = excluded.refund_amount
+        where (c.spread_amount, c.credited_amount, c.refund_amount) is distinct from (excluded.spread_amount, excluded.credited_amount, excluded.refund_amount)
       `;
     }
 
@@ -173,7 +270,8 @@ export async function saveInvoiceLines(
         lines_header_version = ${headerVersion},
         detail_fetched_at = ${fetchedAt},
         raw_detail = ${tx.json(detail.raw as JsonValue)},
-        line_gap_amount = ${senToMoney(gapSen)}
+        line_gap_amount = ${senToMoney(gapSen)},
+        detail_missing_count = 0
       where id = ${invoiceId}
     `;
     return { status: "stored", gapSen };

@@ -102,12 +102,14 @@ describe("Sync Engine", () => {
       dateTo: "2026-09-30",
       startedAt: h.clock.now,
       finishedAt: h.clock.now,
-      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 1 },
+      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 1, lineItemsSwept: 0 },
       checkpoint: null,
       coveredLocationIds: ["1101", "1102"],
       errorCode: null,
       error: null,
       warnings: [],
+      resumedFromRunId: null,
+      chainStartedAt: null,
     });
   });
 
@@ -148,7 +150,7 @@ describe("Sync Engine", () => {
     h.clock.advance(3_600_000);
     const next = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
 
-    expect(next.counts).toEqual({ pages: 1, invoicesSeen: 11, inserted: 0, updated: 2, unchanged: 9, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0 });
+    expect(next.counts).toEqual({ pages: 1, invoicesSeen: 11, inserted: 0, updated: 2, unchanged: 9, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0 });
     const changed = await db.sql`
       select kreloses_sale_id, status, total_refunds, sync_run_id::text, fetched_at from invoices
       where kreloses_sale_id in ('700102', '700202') order by kreloses_sale_id
@@ -331,12 +333,12 @@ describe("Sync Engine", () => {
   describe("one Kreloses session per connection", () => {
     it("refuses to start while another sync or a login test holds the connection", async () => {
       const id = await h.connect(both);
-      await acquireConnectionLease(db.sql, id, { purpose: "sync", ttlMs: 60_000, now: h.clock.now });
+      const held = await acquireConnectionLease(db.sql, id, { purpose: "sync", ttlMs: 60_000 });
       const requests = h.fake.requests.length;
       expect(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER })).toEqual({
         status: "busy",
         heldFor: "sync",
-        until: new Date(h.clock.now.getTime() + 60_000),
+        until: held.status === "acquired" ? held.lease.expiresAt : null,
       });
       expect(h.fake.requests.length).toBe(requests);
       expect(await listSyncRuns(db.sql)).toEqual([]);

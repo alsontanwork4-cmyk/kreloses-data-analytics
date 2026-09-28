@@ -1,4 +1,4 @@
-import type { JsonValue, Queryable, Sql } from "@/db/sql";
+import type { JsonValue, Queryable } from "@/db/sql";
 import type { KrelosesInvoice, KrelosesLocation } from "@/kreloses";
 import { senToMoney } from "@/lib/money";
 
@@ -11,7 +11,7 @@ import { senToMoney } from "@/lib/money";
  */
 
 /** Stores the branches a connection can see (name, and which connection saw it last). */
-export async function upsertBranches(sql: Sql, connectionId: string, locations: KrelosesLocation[]): Promise<void> {
+export async function upsertBranches(sql: Queryable, connectionId: string, locations: KrelosesLocation[]): Promise<void> {
   if (locations.length === 0) return;
   const rows = locations.map((location) => ({ location_id: location.id, name: location.name.trim() }));
   await sql`
@@ -84,6 +84,15 @@ export async function saveInvoicePage(
       excluded.gross_amount, excluded.discount_amount, excluded.net_amount, excluded.tax_amount, excluded.total_amount,
       excluded.payment_status, excluded.total_payments, excluded.total_refunds
     )`;
+  // The header columns that can change an invoice's line items or its revenue base (#6): only these
+  // move `header_version`, so its line items are read again. Payment status / payments alone (an
+  // invoice being paid) are stored but never cost a Sale Overview request.
+  const lineRelevantChange = sql`(
+      i.status, i.gross_amount, i.discount_amount, i.net_amount, i.tax_amount, i.total_amount, i.total_refunds
+    ) is distinct from (
+      excluded.status, excluded.gross_amount, excluded.discount_amount, excluded.net_amount, excluded.tax_amount,
+      excluded.total_amount, excluded.total_refunds
+    )`;
   const written = await sql<{ inserted: boolean; changed: boolean }[]>`
     insert into invoices as i (
       kreloses_sale_id, sale_number, branch_id, customer_id, sale_at, status, status_name,
@@ -117,12 +126,14 @@ export async function saveInvoicePage(
       total_payments = excluded.total_payments,
       total_refunds = excluded.total_refunds,
       raw_header = excluded.raw_header,
-      -- Only a change in the columns above counts as a change: a new header_version (so its line
-      -- items are read again, src/sync/lines.ts); a change in fields the app does not read just
-      -- refreshes raw_header.
+      -- Only a change in the columns above counts as a change (new fetched_at / sync_run_id); a
+      -- change in fields the app does not read just refreshes raw_header. Only a line-relevant
+      -- change moves header_version (so its line items are read again, src/sync/lines.ts) and
+      -- gives a missing invoice page a fresh set of attempts.
       sync_run_id = case when ${changed} then excluded.sync_run_id else i.sync_run_id end,
       fetched_at = case when ${changed} then excluded.fetched_at else i.fetched_at end,
-      header_version = case when ${changed} then i.header_version + 1 else i.header_version end
+      header_version = case when ${lineRelevantChange} then i.header_version + 1 else i.header_version end,
+      detail_missing_count = case when ${lineRelevantChange} then 0 else i.detail_missing_count end
     where ${changed} or i.raw_header is distinct from excluded.raw_header
     returning (xmax = 0) as inserted, sync_run_id = ${values.runId}::bigint as changed
   `;

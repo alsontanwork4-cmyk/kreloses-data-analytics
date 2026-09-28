@@ -216,7 +216,7 @@ describe("Kreloses connections", () => {
   it("never logs in while a sync is using the connection (no second Kreloses session)", async () => {
     const created = await saveConnection(context, { label: "North", email: north.email, password: north.password });
     const id = created.ok ? created.connection.id : "";
-    const sync = await acquireConnectionLease(db.sql, id, { purpose: "sync", ttlMs: 60_000, now: new Date() });
+    const sync = await acquireConnectionLease(db.sql, id, { purpose: "sync", ttlMs: 60_000 });
     expect(sync.status).toBe("acquired");
     const requestsBefore = fake.requests.length;
 

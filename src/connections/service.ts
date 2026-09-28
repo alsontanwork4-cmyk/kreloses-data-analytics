@@ -1,5 +1,5 @@
 import { normaliseEmail } from "@/auth/allow-list";
-import type { Sql } from "@/db/sql";
+import type { Queryable, Sql } from "@/db/sql";
 import { listLocations, login, type KrelosesSession, type ReaderOptions } from "@/kreloses";
 
 import { CredentialsKeyError, decryptSecret, encryptSecret, type Keyring } from "./encryption";
@@ -150,7 +150,7 @@ async function runLoginTest(context: ConnectionsContext, id: string): Promise<Co
   const result = await withConnectionLease(
     context.sql,
     id,
-    { purpose: "login-test", ttlMs: LOGIN_TEST_LEASE_MS, now: () => new Date() },
+    { purpose: "login-test", ttlMs: LOGIN_TEST_LEASE_MS },
     async () => {
       let outcome: TestOutcome;
       try {
@@ -174,7 +174,7 @@ async function runLoginTest(context: ConnectionsContext, id: string): Promise<Co
  * Connections page shows a sync's login failure too). Returns false if the connection is gone.
  */
 export async function recordLoginOutcome(
-  sql: Sql,
+  sql: Queryable,
   id: string,
   outcome: { ok: true; visibleLocations: { id: string; name: string }[] } | { ok: false; error: unknown },
 ): Promise<boolean> {
