@@ -1,8 +1,9 @@
 # Kreloses Data Analytics
 
 A private web app for a two-branch veterinary clinic: a nightly sync of Kreloses (sea.kreloses.com)
-sales into Postgres, a doctor revenue / AOV dashboard, and (later) a read-only MCP server over the
-same data. The full spec is GitHub issue #1; domain terms are in [`CONTEXT.md`](CONTEXT.md).
+sales into Postgres, a doctor revenue / AOV dashboard, and a read-only MCP server over the same
+data ([Connect Claude to the MCP server](#connect-claude-to-the-mcp-server)). The full spec is
+GitHub issue #1; domain terms are in [`CONTEXT.md`](CONTEXT.md).
 
 **Stack:** Next.js 16 (App Router, TypeScript strict) · Tailwind CSS 4 + shadcn/ui · Supabase
 (Postgres + Auth magic links) · `postgres` (postgres.js) for all app data · Vitest · Playwright ·
@@ -70,6 +71,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
 | `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
 | `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page) |
+| `MCP_BEARER_TOKEN` | Server only. The secret Claude sends to the MCP server (`openssl rand -base64 32`; at least 32 characters). Unset, blank or shorter → `/api/mcp` refuses every request. It grants read access to ALL clinic data: treat it like a password (see [Connect Claude](#connect-claude-to-the-mcp-server)) |
 
 The app never needs a Supabase secret key today. If a later feature needs admin Auth calls, use
 `SUPABASE_SECRET_KEY` (server only, never `NEXT_PUBLIC_`).
@@ -101,7 +103,8 @@ src/
   analytics/      Analytics Service — the single source of every metric (Overview KPIs, doctor
                   ranking, freshness)
   lib/            money (exact RM strings ↔ integer sen, display), format (display only)
-  mcp/            Read-only MCP server (later)
+  mcp/            Read-only MCP server (/api/mcp): bearer-token check, stateless Streamable HTTP
+                  handler, tools/ (one file per tool + the registry)
   proxy.ts        Next.js proxy: session refresh + global auth gate
 supabase/
   config.toml     Local stack config (shared; don't change ports/project_id)
@@ -165,10 +168,10 @@ by `/auth/confirm` each time a magic link is opened.
 `signInLinkSenderForInvites()`, which sends through a cookie-less client so the owner's own session
 is untouched. If the invitation email fails the invite still stands and the page says so.
 
-Public routes are listed in `PUBLIC_PATHS` (`src/auth/paths.ts`): today `/login` and `/auth/*`.
-Anything added there (e.g. a future `/api/mcp` with a bearer token, `/api/cron` with a secret) is
-the one exception to "wrap every route handler in `withUser`/`withRole`": it must authenticate
-itself.
+Public routes are listed in `PUBLIC_PATHS` (`src/auth/paths.ts`): today `/login`, `/auth/*` and
+`/api/mcp` (the MCP server: bearer token, `src/mcp/auth.ts`). Anything added there (e.g. a future
+`/api/cron` with a secret) is the one exception to "wrap every route handler in
+`withUser`/`withRole`": it must authenticate itself.
 
 Never redirect to a user-supplied path without `safeNextPath()` (`src/auth/paths.ts`): it refuses
 control characters and backslashes (browsers strip tabs/newlines, so `/\t/evil.example` becomes
@@ -644,7 +647,7 @@ edits line items; `clearSyncTables` empties staff too).
 
 ### Analytics Service (`src/analytics/`)
 
-The single source of every metric; pages and (later) MCP tools only render its results. Every query
+The single source of every metric; pages and MCP tools only render its results. Every query
 takes `(sql, filter: GlobalFilter)`; sums and averages happen in SQL on `numeric`; money comes back
 as exact strings (`"1234.50"`, `Money` in `@/lib/money`), changes are worked out in integer sen.
 
@@ -673,7 +676,18 @@ getDoctorDiscounts(sql, filter): Promise<DoctorDiscounts>   // #12, see "Discoun
   //   pendingLineItems }   DiscountFigures = { gross, charged, discount: Money, discountRatePercent, invoices, discountedInvoices, discountedInvoicesPercent }
 getDiscountTypes(sql, filter): Promise<DiscountTypes>
   // { period, total: Money, types: { key, label, appliedTo: "item" | "invoice" | "both" | "difference", lines | null, invoices, amount, sharePercent }[] }
-METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); #17's MCP answers quote them
+searchSales(sql, filter, { customer?, item?, minRevenue?, maxRevenue?, sort?, page?, pageSize? }?): Promise<SalesSearchResult>
+  // (#17, MCP search_sales) active sales matching every criterion (customer / item: part of the name, any case;
+  // revenue limits inclusive; doctorIds: ≥ 1 line credited to them; a pending sale matches neither doctor nor item),
+  // newest first by default: { period, page, pageSize (≤ SALES_SEARCH_MAX_PAGE_SIZE = 100, default 20), totalMatches,
+  //   totalPages, totalRevenue, sales: { invoiceId, saleNumber, saleDate, branchId, branchName, customerName | null,
+  //   revenue, lineItemsSynced, credits: { staffId | null, name, creditGroup, revenue, lines }[] }[] }
+getConnectionSyncStatus(sql): Promise<ConnectionSyncStatus[]>
+  // (#17) per connection, by label: { connectionId, label, loginStatus, loginError, lastTestedAt, lastRun: { mode,
+  //   outcome: running | succeeded | stopped_at_time_limit | invoice_pages_missing | failed, dateFrom, dateTo,
+  //   startedAt, finishedAt, error, warnings: string[] } | null }   (never the Kreloses email or password)
+listBranches(sql) / listDoctorNames(sql)   // (#17) directory lookups for resolving typed names: { id, name } / { id, name, lineNames }
+METRIC_DEFINITIONS   // plain-language definitions (also in CONTEXT.md); MCP results quote them verbatim
 ```
 
 What counts as revenue — and who it is credited to — is decided in ONE place:
@@ -803,6 +817,106 @@ const columns: DataTableColumn<Row>[] = [
 - `<HorizontalBarChart data={[{ id, label, value, valueLabel }]} title valueName />` is the ranked
   single-series bar chart (Doctors page). Add new chart kinds next to it following the same rules.
 
+### MCP server (`src/mcp/`)
+
+`/api/mcp` (`src/app/api/mcp/route.ts` → `handleMcpRequest`, `src/mcp/handler.ts`) is a **stateless**
+Streamable HTTP MCP server built on the official SDK (`@modelcontextprotocol/sdk`, pinned): every
+POST gets a fresh `McpServer` + `WebStandardStreamableHTTPServerTransport` (no session id, plain
+JSON answers, no SSE), so it runs as an ordinary Vercel function. GET/DELETE → 405. It is in
+`PUBLIC_PATHS` and authenticates itself first (`checkMcpBearerToken`, `src/mcp/auth.ts`):
+`Authorization: Bearer <MCP_BEARER_TOKEN>`, compared in constant time; no/short env token → 503 for
+everything (fail closed); missing/wrong token → 401 + `WWW-Authenticate: Bearer`. Never log the
+token or the `Authorization` header.
+
+**Tools are one file each** in `src/mcp/tools/`, listed once in `MCP_TOOLS` (`tools/index.ts`).
+Today: `doctor_performance` (`getDoctorRanking` + `getPendingLineItems`), `search_sales`
+(`searchSales`), `data_freshness` (`getConnectionSyncStatus`). To add one (#18: `daily_sales`,
+`item_mix`, `retention`, `discounts`):
+
+```ts
+export const dailySalesTool = defineTool({          // src/mcp/tools/daily-sales.ts
+  name: "daily_sales", title: "Daily sales",
+  description: "… ≤ 2,048 characters (Claude Code cuts longer ones) … quote the key METRIC_DEFINITIONS verbatim",
+  input: { ...filterInput, /* tool-specific zod fields */ },   // dates/preset, branches, doctors by id or name
+  output: { covers: filterOutput, daily: dailySchema /* satisfies z.ZodType<YourAnalyticsType> */ },
+  definitions: ["revenue", "aovPerCustomer", …],               // MetricName[]: returned verbatim in every result
+  async run(context, input) {
+    const { filter, covers } = await resolveFilter(context, input);   // throws ToolInputError with a helpful message
+    const daily = await getDailySales(context.sql, filter);          // Analytics Service ONLY — no SQL here
+    return { data: { covers, daily }, summary: "One or two sentences…", freshness: { dateFrom: filter.dateFrom, dateTo: filter.dateTo, branchIds: filter.branchIds } };
+  },
+});
+```
+
+The registry (`tools/registry.ts`) does the rest for every tool alike: read-only annotations;
+strict input (unknown arguments are refused, so a misspelt filter never widens an answer); a
+READ ONLY, REPEATABLE READ transaction around the whole call (one snapshot, any write fails); adds
+`dataFreshness` (per-branch data as of for `freshness`, `src/mcp/tools/freshness.ts`) and
+`definitions` to the structured result; validates it against `output`; puts a text summary + the
+same JSON in `content`; turns `ToolInputError` into its message and anything else into a generic
+error (logged server-side). Shared pieces: `filterInput` / `periodInput` / `branchesInput` /
+`doctorsInput`, `resolveFilter`, `filterOutput` (`tools/filter.ts`); name matching (`tools/names.ts`:
+id, exact name, or every typed word starting a word of the name — ambiguous → an error listing the
+candidates); `money`, `pendingLineItemsOutput` (`tools/schemas.ts`); `clinicTimestamp` (ISO with
+`+08:00`); `describeCoverage` / `plural` (`tools/text.ts`). Tests: `src/mcp/mcp.test.ts` drives the
+real handler with the SDK's client over a synced throwaway database — add each new tool to its
+"lists exactly the read-only tools", "never writes" and "every result states data as of" tests, and
+assert its output equals the Analytics Service function's for the same filter.
+
+## Connect Claude to the MCP server
+
+The app includes a **read-only** MCP server, so Claude can answer questions about the clinic's sales
+("which doctor's AOV dropped last month?", "show me Customer 0001's visits in September") with
+exactly the dashboard's numbers and definitions. It never changes anything, has no raw SQL tool and
+never contacts Kreloses. Tools: `doctor_performance` (the Doctors page: revenue, AOV per customer,
+invoices, items per invoice, share, optionally split by branch), `search_sales` (individual sales by
+date, branch, doctor, customer, item and amount, paged, with each sale's revenue split per staff
+member) and `data_freshness` (data as of per branch, and each Kreloses connection's latest sync).
+Every answer states how fresh the data is per branch, and dates are clinic days (Asia/Kuala_Lumpur).
+
+1. **Create a token** and set it on the server as `MCP_BEARER_TOKEN` (Vercel: Project → Settings →
+   Environment Variables, marked sensitive, Production only; then redeploy):
+
+   ```bash
+   openssl rand -base64 32
+   ```
+
+   Without it (or with one shorter than 32 characters) the endpoint refuses every request.
+2. **The URL** is `https://<your-deployment>/api/mcp` (locally `http://localhost:3000/api/mcp` with
+   `MCP_BEARER_TOKEN` in `.env.local`).
+3. **Claude Code**: add it once (`--scope user` makes it available in every project):
+
+   ```bash
+   read -rs "KRELOSES_MCP_TOKEN?MCP token: "; echo      # zsh; bash: read -rsp "MCP token: " KRELOSES_MCP_TOKEN
+   claude mcp add --transport http kreloses https://<your-deployment>/api/mcp \
+     --header "Authorization: Bearer $KRELOSES_MCP_TOKEN"
+   unset KRELOSES_MCP_TOKEN
+   ```
+
+   Then ask, for example, "Using kreloses, rank the doctors for last month". `claude mcp list`
+   shows whether it connected.
+4. **Claude apps (custom connector)**: add `https://<your-deployment>/api/mcp` as a custom
+   connector where the connector settings let you send an `Authorization: Bearer <token>` header.
+   This server does not implement OAuth, so a connector that only offers OAuth sign-in cannot use
+   it; use Claude Code (or another MCP client that supports custom headers) instead.
+
+**The token grants read access to ALL clinic data** (every sale, customer name and doctor figure):
+treat it like a password. Don't paste it into chats, commit it or share screenshots of it; clients
+store it in their config (Claude Code: `~/.claude.json`). To revoke it, set a new `MCP_BEARER_TOKEN`
+and redeploy: the old one stops working at once; update each client with the new one.
+
+Check it by hand (`tools/list` with the token → the three tools; without it → `401`):
+
+```bash
+curl -s https://<your-deployment>/api/mcp \
+  -H "Authorization: Bearer $KRELOSES_MCP_TOKEN" -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+Answers: `401` = missing or wrong token; `503` = the server has no `MCP_BEARER_TOKEN`; `405` = not a
+POST (the server is stateless: no event stream or sessions).
+
 ## Production (not deployed yet)
 
 When a hosted Supabase project and Vercel are set up:
@@ -820,6 +934,8 @@ When a hosted Supabase project and Vercel are set up:
   key) as a sensitive, server-only variable. Losing or changing it means re-entering every
   Kreloses password. Never set `KRELOSES_BASE_URL_*` there (the app refuses to start a login with
   them in production).
+- Set `MCP_BEARER_TOKEN` (`openssl rand -base64 32`, a fresh one) as a sensitive, server-only
+  variable to turn the MCP server on (see [Connect Claude](#connect-claude-to-the-mcp-server)).
 - **Confirm email must stay ON in hosted Supabase; never `supabase config push` the local
   `config.toml`.** (Locally it is on too.) The app also refuses non-magic-link sessions, but
   confirmation stops password sign-ups from getting a session at all.

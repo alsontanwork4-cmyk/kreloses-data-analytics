@@ -46,6 +46,9 @@ describe("isPublicPath", () => {
     ["/auth/sign-out", true],
     ["/overview", false],
     ["/api/me", false],
+    // The MCP endpoint authenticates itself with a bearer token (src/mcp/auth.ts).
+    ["/api/mcp", true],
+    ["/api/mcpx", false],
     ["/loginx", false],
     ["/authz", false],
   ])("%s → %s", (path, expected) => {

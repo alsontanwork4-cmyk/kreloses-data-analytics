@@ -35,6 +35,8 @@ process.env.E2E_KRELOSES_PORT ||= String(port + 1000);
 const fakeKrelosesUrl = `http://127.0.0.1:${process.env.E2E_KRELOSES_PORT}`;
 // A throwaway key per run for encrypting the (synthetic) Kreloses passwords.
 process.env.E2E_CREDENTIALS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64");
+// A throwaway MCP bearer token per run (e2e/mcp.spec.ts sends it to /api/mcp).
+process.env.E2E_MCP_BEARER_TOKEN ||= randomBytes(32).toString("base64");
 
 export default defineConfig({
   testDir: "e2e",
@@ -76,6 +78,7 @@ export default defineConfig({
         // The owner is seeded from OWNER_EMAIL by the app itself (that path is under test too).
         OWNER_EMAIL: `e2e-owner-${process.env.E2E_RUN_ID}@example.test`,
         CREDENTIALS_ENCRYPTION_KEY: process.env.E2E_CREDENTIALS_ENCRYPTION_KEY,
+        MCP_BEARER_TOKEN: process.env.E2E_MCP_BEARER_TOKEN,
         // Point the Kreloses Reader at the fake (allowed outside production, loopback only).
         KRELOSES_BASE_URL_WWW: fakeKrelosesUrl,
         KRELOSES_BASE_URL_SEA: fakeKrelosesUrl,

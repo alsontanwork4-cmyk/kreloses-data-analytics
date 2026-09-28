@@ -37,4 +37,16 @@ export {
 export { getDataFreshness, type BranchFreshness } from "./freshness";
 export { comparisonPeriods, type DateRange } from "./periods";
 export { METRIC_DEFINITIONS, type MetricName } from "./definitions";
+export {
+  SALES_SEARCH_DEFAULT_PAGE_SIZE,
+  SALES_SEARCH_MAX_PAGE_SIZE,
+  searchSales,
+  type SaleCredit,
+  type SaleSearchRow,
+  type SalesSearchCriteria,
+  type SalesSearchResult,
+  type SalesSearchSort,
+} from "./sales-search";
+export { getConnectionSyncStatus, type ConnectionSyncStatus, type LastSyncRun, type SyncRunOutcome } from "./sync-status";
+export { listBranches, listDoctorNames } from "./lookups";
 export { branchScope, factsScope, revenueFacts, staffScope, type BranchScope, type FactsScope, type StaffScope } from "./facts";

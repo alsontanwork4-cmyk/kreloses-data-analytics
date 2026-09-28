@@ -207,6 +207,13 @@ _Avoid_: Promo, coupon (Kreloses may call them vouchers; the name is shown as wr
 A KPI minus its value in a comparison period; as a percentage, the change ÷ the comparison value,
 to one decimal place, and none when the comparison value is zero.
 
+**Sales search**:
+Finding individual active invoices in the global filter's period, branches and doctors by customer
+name, item name and amount. Each one shows its revenue (net amount) and its credits: that revenue
+split by who each line is credited to. With a doctor filter an invoice is found when at least one
+of its lines is credited to one of those doctors, and it is still shown whole.
+_Avoid_: Transaction search, order lookup
+
 ## Syncing
 
 **Sync run**:
@@ -228,3 +235,17 @@ branch's whole sale list (succeeded, or only some invoice pages missing) up to t
 day the run started). Syncing an older month does not make the current month look fresh. Changes
 made in Kreloses after that time are not in the numbers yet.
 _Avoid_: Last updated, last refreshed
+
+## Claude (MCP)
+
+**MCP server**:
+The read-only connection Claude uses to answer questions about the clinic's sales: a URL on the same
+deployment plus the MCP token. Its tools return exactly the dashboard's numbers, with the same
+definitions, and every answer states the data as of per branch. It never changes data and never
+contacts Kreloses.
+_Avoid_: API, bot, integration
+
+**MCP token**:
+The one secret (`MCP_BEARER_TOKEN`) that opens the MCP server. Whoever holds it can read all clinic
+data the dashboard shows, so it is handled like a password; replacing it locks out the old one.
+_Avoid_: API key, password (the Kreloses password is a different thing)
