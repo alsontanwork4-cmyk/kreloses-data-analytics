@@ -51,7 +51,8 @@ export interface SyncCounts {
   lineItemsSwept: number;
   /**
    * Older invoices (the nightly sweep) whose page came back in a layout the app does not know: skipped
-   * with a warning, still "not synced yet", retried like a missing page. (In the listing that fails the run.)
+   * with a warning, still "not synced yet", retried every night — WITHOUT using up missing-page
+   * attempts (only `lineItemsFailed` does). In the listing that fails the run instead.
    */
   lineItemsUnreadable: number;
 }

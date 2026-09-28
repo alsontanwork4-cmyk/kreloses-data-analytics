@@ -344,7 +344,10 @@ async function execute(run: RunContext): Promise<SyncResult> {
       // are all missing (something systematic, e.g. a new URL); pages already missing in earlier
       // runs do not count, so a few permanently missing pages never fail every sync. In the SWEEP
       // (older sales), neither ever fails the run: one odd old page must not stop every night (and
-      // "data as of"); it is a warning, retried like a missing page, and the listing still counts.
+      // "data as of"); it is a warning and the listing still counts. A page that is not THERE uses
+      // up one of its MAX_PAGE_MISSING_ATTEMPTS; a page the app cannot READ does not (a layout the
+      // app does not know is the app's problem, not the invoice's: once the app is updated, the next
+      // sweep reads it — it must never have become "permanently missing" in between).
       const missing = error instanceof PageMissing;
       const unreadable = swept && !missing && error instanceof LayoutChanged;
       if (!missing && !unreadable) throw error;
@@ -355,7 +358,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
       }
       if (!swept && invoice.missingAttempts === 0) firstTimeMissing += 1;
       await fenced(async (tx) => {
-        await recordMissingPage(tx, invoice.invoiceId, invoice.headerVersion);
+        if (missing) await recordMissingPage(tx, invoice.invoiceId, invoice.headerVersion);
         await recordProgress(tx, runId, counts, checkpoint);
       });
       if (!swept && counts.lineItemsRead === 0 && firstTimeMissing >= MISSING_PAGES_TO_FAIL) throw error;

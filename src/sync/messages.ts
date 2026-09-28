@@ -79,7 +79,7 @@ export function unreadablePagesWarning(count: number, example: LayoutChanged): S
   const one = count === 1;
   return {
     code: "invoice_pages_unreadable",
-    message: `${count} older invoice ${one ? "page" : "pages"} could not be read (${example.message}), so ${one ? "it was" : "they were"} skipped. ${one ? "That sale counts" : "Those sales count"} at the revenue base as "line items not synced yet"; the nightly sync tries again (at most three times). If new sales start showing this too, the app needs an update.`,
+    message: `${count} older invoice ${one ? "page" : "pages"} could not be read (${example.message}), so ${one ? "it was" : "they were"} skipped. ${one ? "That sale counts" : "Those sales count"} at the revenue base as "line items not synced yet"; the nightly sync tries again every night. If it keeps happening, or new sales show it too, the app needs an update.`,
   };
 }
 

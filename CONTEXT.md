@@ -171,7 +171,9 @@ _Avoid_: Pending (in the UI), unallocated
 **Permanently missing invoice page**:
 An invoice whose page Kreloses would not open (not found, or sent elsewhere) three syncs in a row.
 The sync stops trying (so it neither wastes requests nor fails later syncs) until the invoice is
-edited in Kreloses; it stays "line items not synced yet" and is listed on Sync status.
+edited in Kreloses; it stays "line items not synced yet" and is listed on Sync status. A page that
+opens but the app cannot read never becomes permanently missing: that is the app's problem (it needs
+an update), so the nightly sync keeps trying and reads it once the app can.
 
 **Revenue**:
 The revenue base of active invoices on clinic days in the period — their net amount (after
@@ -295,7 +297,8 @@ revenue (so edits, cancellations and refunds are picked up; a sale that was mere
 extra request). Then it **sweeps**: reads, newest first and while its time lasts, the line items of
 any older active sales still "not synced yet" — only of the branches that connection's own login
 can see. An older sale whose page cannot be opened or read is skipped with a warning (it never fails
-the night); only a new or changed sale in the window that cannot be read fails it (Kreloses changed).
+the night; the two are counted apart); only a new or changed sale in the window that cannot be read
+fails it (Kreloses changed).
 _Avoid_: Cron job, scheduled import
 
 **Carrying on (a stopped sync)**:

@@ -87,13 +87,14 @@ function PermanentlyMissing({ total, invoices }: { total: number; invoices: Perm
   return (
     <section aria-labelledby="missing-heading" data-testid="permanently-missing" className="flex flex-col gap-2 rounded-xl border bg-card p-4 text-sm">
       <h2 id="missing-heading" className="text-base font-medium">
-        Invoice pages the sync gave up on
+        Invoice pages Kreloses would not open
       </h2>
       <p className="text-muted-foreground">
-        {formatCount(total)} {total === 1 ? "sale's" : "sales'"} invoice page could not be opened (or, for older sales, read){" "}
+        {formatCount(total)} {total === 1 ? "sale's" : "sales'"} invoice page was not there (not found, or sent elsewhere){" "}
         {MAX_PAGE_MISSING_ATTEMPTS} times in a row, so the sync stopped trying. {total === 1 ? "It counts" : "They count"} at the revenue base (net
         less refunds) as &quot;line items not synced yet&quot; (credited to no doctor). If the sale is edited in Kreloses the sync tries again;
-        otherwise check it in Kreloses.
+        otherwise check it in Kreloses. (Pages that open but the app cannot read are not listed here: they are retried every night and shown
+        on each run below.)
       </p>
       <ul className="flex flex-col gap-1">
         {invoices.map((invoice, index) => (

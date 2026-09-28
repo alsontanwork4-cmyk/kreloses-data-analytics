@@ -12,9 +12,10 @@ import { ensureAliases } from "@/staff/store";
  */
 
 /**
- * After this many reads in a row that found the invoice's page missing (for the same header
- * version), the sync stops trying: the invoice is "permanently missing" (listed on Sync status,
- * still counted at its revenue base as "line items not synced yet") until its header changes.
+ * After this many reads in a row that found the invoice's page missing — not there: HTTP 404/410 or
+ * sent elsewhere (for the same header version) — the sync stops trying: the invoice is "permanently
+ * missing" (listed on Sync status, still counted at its revenue base as "line items not synced yet")
+ * until its header changes. A page that opened but could not be READ never counts here.
  */
 export const MAX_PAGE_MISSING_ATTEMPTS = 3;
 
@@ -118,8 +119,8 @@ export async function listPermanentlyMissingInvoices(sql: Sql, options: { limit?
 }
 
 /**
- * Records that an invoice's page was missing for `headerVersion` (a no-op if the header moved on
- * meanwhile). Call it inside the run's fenced transaction.
+ * Records that an invoice's page was missing (not there) for `headerVersion` (a no-op if the header
+ * moved on meanwhile). Call it inside the run's fenced transaction. Not for unreadable pages.
  */
 export async function recordMissingPage(sql: Queryable, invoiceId: string, headerVersion: number): Promise<void> {
   await sql`

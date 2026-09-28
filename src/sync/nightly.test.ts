@@ -238,13 +238,16 @@ describe("Nightly sync", () => {
       await db.sql`update invoices set header_version = header_version + 1 where kreloses_sale_id = any(${saleIds}::text[])`;
     }
     /** These invoices' pages come back in a layout the Reader does not know (LayoutChanged). */
-    const unreadable = (...saleIds: string[]) =>
+    const unreadable = (...saleIds: string[]) => {
+      let active = true;
       h.fake.intercept((request) => {
         const saleId = /^\/Sale\/Overview\/(\d+)$/.exec(request.url.pathname)?.[1];
-        return saleId && saleIds.includes(saleId)
+        return active && saleId && saleIds.includes(saleId)
           ? new Response(readFixture("sale-overview-changed.html"), { headers: { "Content-Type": "text/html" } })
           : undefined;
       });
+      return () => (active = false); // "the app is fixed" (or Kreloses reverts)
+    };
 
     it("is a warning and skipped, not a failed night: the listing still counts for 'data as of', the rest of the sweep goes on", async () => {
       const id = await h.connect(both);
@@ -265,22 +268,49 @@ describe("Nightly sync", () => {
       expect(await pendingSales()).toEqual([{ krelosesSaleId: "600002" }]);
     });
 
-    it("never fails the night, even when every page it sweeps is unreadable; after three tries it stops asking", async () => {
+    it("never fails the night, even when every page it sweeps is unreadable, and never gives up on them: once the app can read them they are read", async () => {
       const id = await h.connect(both);
       await olderPending(id, ["600002", "600003", "600004"]);
-      unreadable("600002", "600003", "600004");
-      for (let night = 1; night <= 3; night += 1) {
+      const fixed = unreadable("600002", "600003", "600004");
+      // Many nights without new sales after a Kreloses change: a layout the app cannot read is the
+      // app's problem, not the invoice's, so these pages never use up "missing page" attempts.
+      for (let night = 1; night <= MAX_PAGE_MISSING_ATTEMPTS + 2; night += 1) {
         h.clock.advance(24 * 3_600_000);
+        const before = h.fake.requests.length;
         expect(ran(await runSync(h.deps(), id, "nightly")), `night ${night}`).toMatchObject({
           status: "partial",
-          counts: { lineItemsRead: 0, lineItemsUnreadable: 3 },
+          counts: { lineItemsRead: 0, lineItemsUnreadable: 3, lineItemsFailed: 0 },
         });
+        expect(pagesOpened(before), `night ${night}`).toEqual(["600004", "600003", "600002"]); // newest first, every night
       }
+      expect(await db.sql`select kreloses_sale_id, detail_missing_count from invoices where kreloses_sale_id like '60000%' order by 1`).toEqual([
+        { krelosesSaleId: "600001", detailMissingCount: 0 },
+        { krelosesSaleId: "600002", detailMissingCount: 0 },
+        { krelosesSaleId: "600003", detailMissingCount: 0 },
+        { krelosesSaleId: "600004", detailMissingCount: 0 },
+      ]);
+      expect((await listPermanentlyMissingInvoices(db.sql)).total).toBe(0);
+
+      // The app is updated: the next night reads them all.
+      fixed();
       h.clock.advance(24 * 3_600_000);
-      const before = h.fake.requests.length;
-      expect(ran(await runSync(h.deps(), id, "nightly"))).toMatchObject({ status: "succeeded", counts: { lineItemsUnreadable: 0 } });
-      expect(pagesOpened(before)).toEqual([]);
-      expect((await listPermanentlyMissingInvoices(db.sql)).total).toBe(3);
+      expect(ran(await runSync(h.deps(), id, "nightly"))).toMatchObject({ status: "succeeded", counts: { lineItemsSwept: 3, lineItemsUnreadable: 0 } });
+      expect(await pendingSales()).toEqual([]);
+    });
+
+    it("counts pages that could not be READ apart from pages that were not THERE (only the latter use up attempts)", async () => {
+      const id = await h.connect(both);
+      await olderPending(id, ["600002", "600003"]);
+      unreadable("600002");
+      h.fake.intercept((request) => (request.url.pathname === "/Sale/Overview/600003" ? new Response("gone", { status: 404 }) : undefined));
+      h.clock.advance(24 * 3_600_000);
+      const night = ran(await runSync(h.deps(), id, "nightly"));
+      expect(night).toMatchObject({ status: "partial", counts: { lineItemsUnreadable: 1, lineItemsFailed: 1 } });
+      expect(night.warnings.map((warning) => warning.code).sort()).toEqual(["invoice_pages_missing", "invoice_pages_unreadable"]);
+      expect(await db.sql`select kreloses_sale_id, detail_missing_count from invoices where kreloses_sale_id in ('600002', '600003') order by 1`).toEqual([
+        { krelosesSaleId: "600002", detailMissingCount: 0 },
+        { krelosesSaleId: "600003", detailMissingCount: 1 },
+      ]);
     });
 
     it("a page the app cannot read in the nightly WINDOW (a new or changed sale) still fails the run loudly", async () => {

@@ -660,9 +660,11 @@ then the missing line items). `counts.lineItemsRead` counts invoice pages read.
   tries FOR THE FIRST TIME are all missing (pages already missing in earlier runs do not count), it
   fails (`layout_changed`: something systematic). A listing page whose content changed
   (`LayoutChanged` proper) still fails the run at once. In the nightly SWEEP neither ever fails the
-  run: a missing page is counted as above, and an older page the app cannot read (`LayoutChanged`) is
-  skipped (`counts.lineItemsUnreadable`, an `invoice_pages_unreadable` warning, `detail_missing_count`
-  +1 — three strikes like a missing page); the run ends `partial` with its listing covered.
+  run: a missing page is counted as above (it uses up one of its 3 attempts), and an older page that
+  opened but the app cannot READ (`LayoutChanged`) is skipped — counted apart
+  (`counts.lineItemsUnreadable`, an `invoice_pages_unreadable` warning) and NOT using up attempts, so
+  after a Kreloses change old invoices are never marked "permanently missing" and the first sweep
+  after the app is updated reads them; the run ends `partial` with its listing covered.
 - **Time budget**: no Kreloses request starts after the deadline, and no login (the first, or the one
   fresh login after an expired session) starts with less than `MIN_LOGIN_BUDGET_MS` (15 s) left — the
   run stops cleanly as `partial` (stopped at its time limit) instead of running past the function's
