@@ -22,6 +22,13 @@ export const METRIC_DEFINITIONS = {
     "Average items per invoice: the number of credited lines (sold lines; discount lines excluded, return lines included) divided by the number of invoices those lines are on, to two decimals.",
   sharePercent:
     "Share of revenue: revenue divided by ALL revenue in the period and branches (doctors, other staff, generic accounts, no staff and not-yet-synced line items together), as a percentage to one decimal. The doctor filter does not change what it is a share of.",
+  discount:
+    "Discount: gross minus charged. Per credited line, gross is quantity × unit price (rounded to the sen) and charged is what the line was credited with — its amount after any item-level discount plus its share of the invoice's discount lines and of any gap to the invoice's net amount (shared in proportion to what each line charged, as for revenue). So an invoice discount on a sale with several doctors is shared between them the same way, and a doctor's discount is the sum over the lines credited to them. Charged is before any refund: refunds are not discounts. Sales whose line items are not synced yet are not included (their lines are unknown); cancelled sales never count.",
+  discountRate: "Discount rate: discount divided by gross, as a percentage to one decimal; none when gross is zero.",
+  discountedInvoices:
+    "Share of invoices discounted: of the invoices with at least one line credited to the doctor (or group), the percentage (one decimal) on which the doctor's share of the invoice's discount is over RM 0.05 (exactly 5 sen does not count).",
+  discountTypes:
+    "Discount types: every discount name used — item discounts (a discount on one line) and discount lines (a discount on the whole invoice, e.g. \"5% DISCOUNT\") — grouped ignoring case and spaces, with how many lines and invoices used it and the amount it took off (an item discount: the line's gross minus what it charged; a discount line: its amount). Any difference between an invoice's lines and its net amount that no discount line explains is shown as its own row, so the amounts add up to the total discount. With a doctor filter each type shows the part that fell on the selected doctors' lines (an invoice's discount lines are shared in proportion to what each line charged), rounded to the sen per type.",
   otherStaff: "Other staff: staff of kind \"other\" (e.g. nurses, groomers) — credited with their lines' revenue, grouped apart from doctors.",
   genericAccounts:
     "Generic accounts: shared logins of kind \"generic\" (e.g. a branch \"general\" account) — credited with their lines' revenue, grouped apart from doctors.",

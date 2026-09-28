@@ -21,6 +21,19 @@ export {
   type StaffRow,
 } from "./doctors";
 export { getPendingLineItems, type PendingLineItems } from "./pending";
+export {
+  DISCOUNT_TYPE_LABELS,
+  DISCOUNTED_INVOICE_THRESHOLD,
+  getDiscountTypes,
+  getDoctorDiscounts,
+  type DiscountAppliedTo,
+  type DiscountFigures,
+  type DiscountTypeRow,
+  type DiscountTypes,
+  type DoctorDiscounts,
+  type StaffDiscountGroup,
+  type StaffDiscountRow,
+} from "./discounts";
 export { getDataFreshness, type BranchFreshness } from "./freshness";
 export { comparisonPeriods, type DateRange } from "./periods";
 export { METRIC_DEFINITIONS, type MetricName } from "./definitions";
