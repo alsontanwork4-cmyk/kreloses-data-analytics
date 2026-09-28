@@ -1,4 +1,5 @@
 import { RETENTION_DEFINITIONS } from "./retention-definitions";
+import { SURGERY_DEFINITIONS } from "./surgery-definitions";
 import { UPSELL_DEFINITIONS } from "./upsell-definitions";
 
 /**
@@ -79,6 +80,7 @@ export const METRIC_DEFINITIONS = {
     "Working day: a clinic day (Asia/Kuala_Lumpur) in the period with at least one consult or surgery line credited to the doctor, at either branch — a consult at one branch and a surgery at the other on the same day is one working day. The branch filter never removes working days.",
   revenuePerWorkingDay:
     "Revenue per working day: the doctor's revenue in the period (and selected branches) divided by their working days at any branch, rounded to the sen; none without a working day. With a branch filter it is that branch's revenue per day worked anywhere, so the branches' figures add up to the total.",
+  ...SURGERY_DEFINITIONS,
 } as const;
 
 export type MetricName = keyof typeof METRIC_DEFINITIONS;
