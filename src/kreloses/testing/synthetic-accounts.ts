@@ -11,9 +11,11 @@ export interface FakeAccount {
   /**
    * `ok` (default); `one_time_code` (redirects to a code page after the password);
    * `host_only_cookie` (auth cookie without Domain, so it never reaches sea);
-   * `kreloses_down` (HTTP 503 on the login POST); `rate_limited` (HTTP 429 on the login POST).
+   * `kreloses_down` (HTTP 503 on the login POST); `rate_limited` (HTTP 429 on the login POST);
+   * `sale_list_changed` (logs in and lists its branches fine, but its Sale List answers in a layout
+   * the Reader does not know: every sync fails with LayoutChanged — #6's failure banner).
    */
-  behaviour?: "ok" | "one_time_code" | "host_only_cookie" | "kreloses_down" | "rate_limited";
+  behaviour?: "ok" | "one_time_code" | "host_only_cookie" | "kreloses_down" | "rate_limited" | "sale_list_changed";
 }
 
 export const SYNTHETIC_ACCOUNTS = {
@@ -38,5 +40,11 @@ export const SYNTHETIC_ACCOUNTS = {
     password: "rate-limited-pass",
     locationIds: [],
     behaviour: "rate_limited",
+  },
+  brokenSaleList: {
+    email: "broken.list@clinic.example",
+    password: "broken-list-pass",
+    locationIds: ["1101"],
+    behaviour: "sale_list_changed",
   },
 } as const satisfies Record<string, FakeAccount>;

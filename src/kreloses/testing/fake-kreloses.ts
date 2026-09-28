@@ -214,6 +214,9 @@ export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKrelo
    * Rows come newest first, paged by `RequestingPage` / `PageSize`.
    */
   function saleGet({ request, account, fixture }: FakeRouteContext): Response {
+    if (account!.behaviour === "sale_list_changed") {
+      return new Response(readFixture("sale-get-changed.json"), { headers: { "Content-Type": "application/json; charset=utf-8" } });
+    }
     let body: { request?: Record<string, unknown>; filter?: unknown };
     try {
       body = JSON.parse(request.body ?? "") as typeof body;

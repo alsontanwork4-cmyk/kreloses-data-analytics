@@ -1,0 +1,60 @@
+{
+  "comment": "SYNTHETIC (#6): a sale that appears in Kreloses between two nightly syncs — 1 Oct 2026 11:00 in KL (03:00 UTC), Branch South, a new customer, one consultation by Dr Alpha. The row imitates sale-list-rows.json and the model sale-overviews.json (src/kreloses/__fixtures__/); its Totals equal its row. Used by src/sync/nightly.test.ts.",
+  "row": {
+    "SaleId": 700207,
+    "SaleName": "INV-S-0207",
+    "Location": "Branch South",
+    "LocationId": 1102,
+    "CustomerId": 90009,
+    "CustomerName": "Customer 0009",
+    "SaleDate": "/Date(1790823600000)/",
+    "SaleStatusName": "Active",
+    "GrossAmount": "80.00",
+    "Discounts": "0.00",
+    "NetAmount": "80.00",
+    "TaxAmount": "0.00",
+    "Total": "80.00",
+    "PaymentStatusName": "Unpaid",
+    "TotalPayments": "0.00",
+    "TotalRefunds": "0.00"
+  },
+  "model": {
+    "Sale": {
+      "SaleId": 700207,
+      "SaleName": "INV-S-0207",
+      "SaleDate": "/Date(1790823600000)/",
+      "LocationId": 1102,
+      "Location": "Branch South",
+      "SaleStatusName": "Active",
+      "InvoiceCategory": "Standard",
+      "Notes": null
+    },
+    "Customer": { "CustomerId": 90009, "Name": "Customer 0009", "Phone": "000-000 0009", "Email": null },
+    "Items": [
+      {
+        "SaleItemId": 7002071,
+        "Name": "Consultation",
+        "Quantity": "1",
+        "UnitPrice": "80.00",
+        "Amount": "80.00",
+        "StaffName": "Dr Alpha",
+        "ItemType": 4,
+        "DiscountName": null,
+        "DiscountAmount": "0.00"
+      }
+    ],
+    "Totals": {
+      "GrossAmount": "80.00",
+      "Discounts": "0.00",
+      "NetAmount": "80.00",
+      "TaxAmount": "0.00",
+      "Total": "80.00",
+      "TotalPayments": "0.00",
+      "TotalRefunds": "0.00",
+      "Balance": "80.00"
+    },
+    "Transactions": [],
+    "RefundInfo": null,
+    "CreditNoteInfo": null
+  }
+}

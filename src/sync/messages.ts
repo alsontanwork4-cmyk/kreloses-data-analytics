@@ -65,6 +65,24 @@ export function missingPagesWarning(count: number): SyncWarning {
   };
 }
 
+/** The warning for a nightly run whose time budget ran out before every older sale's line items were read. */
+export function lineItemsLeftWarning(count: number): SyncWarning {
+  const one = count === 1;
+  return {
+    code: "line_items_left",
+    message: `${count} older ${one ? "sale still waits" : "sales still wait"} for ${one ? "its" : "their"} line items (the time limit was reached). ${one ? "It counts" : "They count"} at the revenue base as "line items not synced yet"; the next nightly sync carries on.`,
+  };
+}
+
+/** The warning for a nightly run whose sweep met older invoice pages it could not read. */
+export function unreadablePagesWarning(count: number, example: LayoutChanged): SyncWarning {
+  const one = count === 1;
+  return {
+    code: "invoice_pages_unreadable",
+    message: `${count} older invoice ${one ? "page" : "pages"} could not be read (${example.message}), so ${one ? "it was" : "they were"} skipped. ${one ? "That sale counts" : "Those sales count"} at the revenue base as "line items not synced yet"; the nightly sync tries again every night. If it keeps happening, or new sales show it too, the app needs an update.`,
+  };
+}
+
 /** The warning for a run whose Sale List filter had no readable Staff list. */
 export function staffListWarning(error: LayoutChanged): SyncWarning {
   return {

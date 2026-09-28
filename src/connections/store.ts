@@ -1,4 +1,4 @@
-import type { Sql } from "@/db/sql";
+import type { Queryable, Sql } from "@/db/sql";
 
 import type { ConnectionErrorCode } from "./messages";
 
@@ -36,7 +36,7 @@ export function isConnectionId(value: unknown): value is string {
   return typeof value === "string" && ID.test(value);
 }
 
-function summaryColumns(sql: Sql) {
+function summaryColumns(sql: Queryable) {
   return sql`
     id::text as id, label, kreloses_email as email, status, last_error_code, last_error,
     last_tested_at, visible_locations, created_at, updated_at
@@ -103,7 +103,7 @@ export type TestOutcome =
   | { status: "failed"; code: ConnectionErrorCode; message: string };
 
 /** Stores the result of a login test. Returns the updated summary, or null if the row is gone. */
-export async function recordTestOutcome(sql: Sql, id: string, outcome: TestOutcome): Promise<ConnectionSummary | null> {
+export async function recordTestOutcome(sql: Queryable, id: string, outcome: TestOutcome): Promise<ConnectionSummary | null> {
   if (!isConnectionId(id)) return null;
   const failed = outcome.status === "failed";
   const [row] = await sql<ConnectionSummary[]>`

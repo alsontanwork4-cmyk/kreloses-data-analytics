@@ -60,7 +60,7 @@ export interface SaleSearchRow {
   branchName: string;
   /** Null for a walk-in sale. */
   customerName: string | null;
-  /** The invoice's revenue: its net amount (the sum of its credited lines). */
+  /** The invoice's revenue: its net amount less refunds (its revenue base: the sum of its credited lines' revenue). */
   revenue: Money;
   /** False while its line items are not synced yet: the whole revenue is "Line items not synced yet". */
   lineItemsSynced: boolean;

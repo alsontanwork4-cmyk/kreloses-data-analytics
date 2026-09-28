@@ -12,6 +12,7 @@ export {
   creditInvoice,
   DISCOUNT_ITEM_TYPE,
   grossSen,
+  invoiceRefundSen,
   invoiceRevenueBaseSen,
   type AttributionInvoice,
   type AttributionLine,

@@ -5,6 +5,7 @@ import {
   creditInvoice,
   DISCOUNT_ITEM_TYPE,
   grossSen,
+  invoiceRefundSen,
   invoiceRevenueBaseSen,
   type AttributionInvoice,
   type AttributionLine,
@@ -18,7 +19,8 @@ import {
 const PRODUCT = 1;
 const SERVICE = 4;
 
-const active = (netSen: number, totalRefundsSen = 0): AttributionInvoice => ({ status: "active", netSen, totalRefundsSen });
+/** An active invoice; its Total defaults to its net (no tax). */
+const active = (netSen: number, totalRefundsSen = 0, totalSen = netSen): AttributionInvoice => ({ status: "active", netSen, totalSen, totalRefundsSen });
 
 let nextLineNo = 1;
 function line(values: Partial<AttributionLine> & { amountSen: number | null }): AttributionLine {
@@ -41,21 +43,50 @@ const discountLine = (lineNo: number, amountSen: number): AttributionLine => ({
 });
 
 const sum = (credited: CreditedLine[]) => credited.reduce((total, row) => total + row.creditedSen, 0);
+const sumOf = (credited: CreditedLine[], key: "refundSen" | "revenueSen") => credited.reduce((total, row) => total + row[key], 0);
 const byStaff = (credited: CreditedLine[]) => {
   const totals: Record<string, number> = {};
   for (const row of credited) totals[row.staffName ?? "(no staff)"] = (totals[row.staffName ?? "(no staff)"] ?? 0) + row.creditedSen;
   return totals;
 };
 
-describe("invoiceRevenueBaseSen", () => {
-  it("is the net amount of an active invoice; refunds are recorded but not subtracted (pending live verification)", () => {
+describe("invoiceRefundSen / invoiceRevenueBaseSen (refunds: an ASSUMPTION pending live verification)", () => {
+  it("deducts a refund from an active invoice's revenue base, pro rata of its tax-inclusive total", () => {
+    // 700202: net = total = 1,100.00, refunded 100.00 → 100.00 comes off the net.
+    expect(invoiceRefundSen(active(110_000, 10_000))).toBe(10_000);
+    expect(invoiceRevenueBaseSen(active(110_000, 10_000))).toBe(100_000);
+    // With 6 % tax: net 1,000.00, total 1,060.00, refunded 106.00 (tax included) → 100.00 of net.
+    expect(invoiceRefundSen(active(100_000, 10_600, 106_000))).toBe(10_000);
+    expect(invoiceRevenueBaseSen(active(100_000, 10_600, 106_000))).toBe(90_000);
+    // No refund: the net amount.
     expect(invoiceRevenueBaseSen(active(120_000))).toBe(120_000);
-    expect(invoiceRevenueBaseSen(active(110_000, 10_000))).toBe(110_000);
-    expect(invoiceRevenueBaseSen(active(-12_000, 12_000))).toBe(-12_000);
   });
 
-  it("is zero for a cancelled invoice", () => {
-    expect(invoiceRevenueBaseSen({ status: "cancelled", netSen: 90_000, totalRefundsSen: 0 })).toBe(0);
+  it("rounds the net share of a refund half up to the sen, exactly (no floating point)", () => {
+    expect(invoiceRefundSen(active(5, 1, 10))).toBe(1); // 1 × 5 / 10 = 0.5 sen → 1
+    expect(invoiceRefundSen(active(4, 1, 10))).toBe(0); // 0.4 sen → 0
+    expect(invoiceRefundSen(active(100_000, 1, 106_000))).toBe(1); // 0.943 sen → 1
+    expect(invoiceRefundSen(active(99_999_999_999, 99_999_999_998, 99_999_999_999))).toBe(99_999_999_998);
+  });
+
+  it("never deducts more than the net amount, nor anything when the total is zero or negative", () => {
+    expect(invoiceRevenueBaseSen(active(10_000, 15_000))).toBe(0); // refunded more than the net → 0, never negative
+    expect(invoiceRevenueBaseSen(active(10_000, 5_000, 0))).toBe(10_000); // total 0: no share can be worked out
+    expect(invoiceRevenueBaseSen(active(10_000, 5_000, -10_000))).toBe(10_000);
+    expect(invoiceRevenueBaseSen(active(10_000, -5_000))).toBe(10_000); // a negative refund figure is ignored
+  });
+
+  it("a return (negative net) is already a reduction: its refund is not deducted again", () => {
+    // 700206: a return of (120.00), refunded 120.00.
+    expect(invoiceRefundSen(active(-12_000, 12_000))).toBe(0);
+    expect(invoiceRevenueBaseSen(active(-12_000, 12_000))).toBe(-12_000);
+    expect(invoiceRevenueBaseSen(active(0, 5_000))).toBe(0);
+  });
+
+  it("is zero for a cancelled invoice (refunded or not)", () => {
+    expect(invoiceRevenueBaseSen({ status: "cancelled", netSen: 90_000, totalSen: 90_000, totalRefundsSen: 0 })).toBe(0);
+    expect(invoiceRefundSen({ status: "cancelled", netSen: 7_500, totalSen: 7_500, totalRefundsSen: 7_500 })).toBe(0);
+    expect(invoiceRevenueBaseSen({ status: "cancelled", netSen: 7_500, totalSen: 7_500, totalRefundsSen: 7_500 })).toBe(0);
   });
 });
 
@@ -115,9 +146,9 @@ describe("creditInvoice", () => {
       discountLine(4, -5_000),
     ]);
     expect(credited).toEqual([
-      { lineNo: 1, staffName: "Dr Alpha", grossSen: 15_000, lineAmountSen: 15_000, spreadSen: -600, creditedSen: 14_400 },
-      { lineNo: 2, staffName: "Dr Alpha", grossSen: 90_000, lineAmountSen: 90_000, spreadSen: -3_600, creditedSen: 86_400 },
-      { lineNo: 3, staffName: "Dr Alpha", grossSen: 20_000, lineAmountSen: 20_000, spreadSen: -800, creditedSen: 19_200 },
+      { lineNo: 1, staffName: "Dr Alpha", grossSen: 15_000, lineAmountSen: 15_000, spreadSen: -600, creditedSen: 14_400, refundSen: 0, revenueSen: 14_400 },
+      { lineNo: 2, staffName: "Dr Alpha", grossSen: 90_000, lineAmountSen: 90_000, spreadSen: -3_600, creditedSen: 86_400, refundSen: 0, revenueSen: 86_400 },
+      { lineNo: 3, staffName: "Dr Alpha", grossSen: 20_000, lineAmountSen: 20_000, spreadSen: -800, creditedSen: 19_200, refundSen: 0, revenueSen: 19_200 },
     ]);
     expect(sum(credited)).toBe(120_000);
   });
@@ -161,10 +192,10 @@ describe("creditInvoice", () => {
       discountLine(5, -6_000),
     ]);
     expect(credited).toEqual([
-      { lineNo: 1, staffName: "Dr Bravo", grossSen: 105_000, lineAmountSen: 105_000, spreadSen: -2_669, creditedSen: 102_331 },
-      { lineNo: 2, staffName: "Dr Bravo", grossSen: 120_000, lineAmountSen: 108_000, spreadSen: -2_746, creditedSen: 105_254 },
-      { lineNo: 3, staffName: null, grossSen: 18_000, lineAmountSen: 18_000, spreadSen: -458, creditedSen: 17_542 },
-      { lineNo: 4, staffName: "North General", grossSen: 5_000, lineAmountSen: 5_000, spreadSen: -127, creditedSen: 4_873 },
+      { lineNo: 1, staffName: "Dr Bravo", grossSen: 105_000, lineAmountSen: 105_000, spreadSen: -2_669, creditedSen: 102_331, refundSen: 0, revenueSen: 102_331 },
+      { lineNo: 2, staffName: "Dr Bravo", grossSen: 120_000, lineAmountSen: 108_000, spreadSen: -2_746, creditedSen: 105_254, refundSen: 0, revenueSen: 105_254 },
+      { lineNo: 3, staffName: null, grossSen: 18_000, lineAmountSen: 18_000, spreadSen: -458, creditedSen: 17_542, refundSen: 0, revenueSen: 17_542 },
+      { lineNo: 4, staffName: "North General", grossSen: 5_000, lineAmountSen: 5_000, spreadSen: -127, creditedSen: 4_873, refundSen: 0, revenueSen: 4_873 },
     ]);
     expect(sum(credited)).toBe(230_000);
     expect(byStaff(credited)).toEqual({ "Dr Bravo": 207_585, "(no staff)": 17_542, "North General": 4_873 });
@@ -208,6 +239,54 @@ describe("creditInvoice", () => {
       [1, 2],
       [2, 1],
     ]);
+  });
+
+  describe("refunds", () => {
+    it("keeps each line's pre-refund credited amount and takes the refund off in proportion to what each line charged", () => {
+      // 700202: Dr Bravo 700.00 + 400.00, net 1,100.00, refunded 100.00 → 100.00 by 700 / 400:
+      // 63.6363 / 36.3636 → floors 63.63 / 36.36, the sen left to the larger remainder.
+      const credited = creditInvoice(active(110_000, 10_000), [
+        line({ lineNo: 1, amountSen: 70_000, staffName: "Dr Bravo" }),
+        line({ lineNo: 2, quantity: "2", unitPriceSen: 20_000, amountSen: 40_000, staffName: "Dr Bravo" }),
+      ]);
+      expect(credited).toEqual([
+        { lineNo: 1, staffName: "Dr Bravo", grossSen: 70_000, lineAmountSen: 70_000, spreadSen: 0, creditedSen: 70_000, refundSen: 6_364, revenueSen: 63_636 },
+        { lineNo: 2, staffName: "Dr Bravo", grossSen: 40_000, lineAmountSen: 40_000, spreadSen: 0, creditedSen: 40_000, refundSen: 3_636, revenueSen: 36_364 },
+      ]);
+      expect(sum(credited)).toBe(110_000); // pre-refund: the net
+      expect(sumOf(credited, "revenueSen")).toBe(100_000); // the revenue base
+    });
+
+    it("spreads a refund like the discounts: by what each line charged, never onto free or return lines", () => {
+      // 1,000 charged (Dr A) + 0 (free, Dr B) + (100) return (Dr C), a (90.00) bill discount, net 810.00,
+      // total 858.60 (6 % tax), refunded 85.86 → 81.00 of net, all on Dr A's line.
+      const credited = creditInvoice(active(81_000, 8_586, 85_860), [
+        line({ lineNo: 1, amountSen: 100_000, staffName: "Dr A" }),
+        line({ lineNo: 2, amountSen: 0, unitPriceSen: 5_000, staffName: "Dr B" }),
+        line({ lineNo: 3, quantity: "-1", unitPriceSen: 10_000, amountSen: -10_000, staffName: "Dr C" }),
+        discountLine(4, -9_000),
+      ]);
+      expect(credited.map((row) => [row.staffName, row.creditedSen, row.refundSen, row.revenueSen])).toEqual([
+        ["Dr A", 91_000, 8_100, 82_900],
+        ["Dr B", 0, 0, 0],
+        ["Dr C", -10_000, 0, -10_000],
+      ]);
+      expect(sumOf(credited, "revenueSen")).toBe(invoiceRevenueBaseSen(active(81_000, 8_586, 85_860)));
+    });
+
+    it("an invoice without sold lines carries its refund on the unitemised remainder", () => {
+      expect(creditInvoice(active(5_000, 1_000), [])).toEqual([
+        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 5_000, creditedSen: 5_000, refundSen: 1_000, revenueSen: 4_000 },
+      ]);
+    });
+
+    it("a fully refunded invoice earns nothing, though its lines keep what they were charged", () => {
+      const credited = creditInvoice(active(30_000, 30_000), [line({ lineNo: 1, amountSen: 10_000 }), line({ lineNo: 2, amountSen: 20_000, staffName: "Dr Bravo" })]);
+      expect(credited.map((row) => [row.creditedSen, row.refundSen, row.revenueSen])).toEqual([
+        [10_000, 10_000, 0],
+        [20_000, 20_000, 0],
+      ]);
+    });
   });
 
   describe("edge cases", () => {
@@ -257,7 +336,7 @@ describe("creditInvoice", () => {
       // A whole return: nothing to spread.
       expect(
         creditInvoice(active(-12_000, 12_000), [line({ lineNo: 1, itemType: PRODUCT, quantity: "-1", unitPriceSen: 12_000, amountSen: -12_000, staffName: "Dr Delta" })]),
-      ).toEqual([{ lineNo: 1, staffName: "Dr Delta", grossSen: -12_000, lineAmountSen: -12_000, spreadSen: 0, creditedSen: -12_000 }]);
+      ).toEqual([{ lineNo: 1, staffName: "Dr Delta", grossSen: -12_000, lineAmountSen: -12_000, spreadSen: 0, creditedSen: -12_000, refundSen: 0, revenueSen: -12_000 }]);
       // A sale and a return on one invoice with a (8.00) discount: the discount is on what was charged (the sale).
       const mixed = creditInvoice(active(7_200), [
         line({ lineNo: 1, amountSen: 10_000 }),
@@ -282,20 +361,20 @@ describe("creditInvoice", () => {
 
     it("a gap with no non-discount lines becomes one unitemised remainder credited to no staff", () => {
       expect(creditInvoice(active(5_000), [discountLine(1, -1_000)])).toEqual([
-        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 5_000, creditedSen: 5_000 },
+        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 5_000, creditedSen: 5_000, refundSen: 0, revenueSen: 5_000 },
       ]);
       expect(creditInvoice(active(5_000), [])).toEqual([
-        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 5_000, creditedSen: 5_000 },
+        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 5_000, creditedSen: 5_000, refundSen: 0, revenueSen: 5_000 },
       ]);
       // Even a zero invoice without lines keeps one (zero) credited line, so it still counts as an invoice.
       expect(creditInvoice(active(0), [])).toEqual([
-        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 0, creditedSen: 0 },
+        { lineNo: null, staffName: null, grossSen: 0, lineAmountSen: 0, spreadSen: 0, creditedSen: 0, refundSen: 0, revenueSen: 0 },
       ]);
     });
 
     it("a cancelled invoice credits nothing (its lines are kept at zero)", () => {
-      const credited = creditInvoice({ status: "cancelled", netSen: 90_000, totalRefundsSen: 0 }, [line({ lineNo: 1, amountSen: 90_000 })]);
-      expect(credited).toEqual([{ lineNo: 1, staffName: "Dr Alpha", grossSen: 90_000, lineAmountSen: 90_000, spreadSen: -90_000, creditedSen: 0 }]);
+      const credited = creditInvoice({ status: "cancelled", netSen: 90_000, totalSen: 90_000, totalRefundsSen: 0 }, [line({ lineNo: 1, amountSen: 90_000 })]);
+      expect(credited).toEqual([{ lineNo: 1, staffName: "Dr Alpha", grossSen: 90_000, lineAmountSen: 90_000, spreadSen: -90_000, creditedSen: 0, refundSen: 0, revenueSen: 0 }]);
     });
 
     it("refuses lines it cannot credit (a caller bug, not data to guess about)", () => {
@@ -304,7 +383,7 @@ describe("creditInvoice", () => {
     });
   });
 
-  it("always sums to the revenue base exactly, whatever the lines (deterministic pseudo-random invoices)", () => {
+  it("always sums to the net (credited) and the revenue base (revenue) exactly, whatever the lines and refunds (deterministic pseudo-random invoices)", () => {
     let seed = 20260928;
     const random = (max: number) => {
       seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
@@ -324,9 +403,18 @@ describe("creditInvoice", () => {
         lines.push({ lineNo, itemType: SERVICE, quantity, unitPriceSen, amountSen, staffName: random(3) === 0 ? null : `Dr ${random(4)}` });
       }
       const netSen = random(1_000_000) - 100_000;
-      const credited = creditInvoice(active(netSen), lines);
+      const totalSen = netSen + random(3) * random(10_000);
+      const refundsSen = random(2) === 0 ? 0 : random(Math.max(Math.abs(totalSen), 1) * 2);
+      const invoiceValues = active(netSen, refundsSen, totalSen);
+      const credited = creditInvoice(invoiceValues, lines);
       expect(sum(credited), `invoice ${invoice}`).toBe(netSen);
-      for (const row of credited) expect(row.creditedSen).toBe(row.lineAmountSen + row.spreadSen);
+      expect(sumOf(credited, "revenueSen"), `invoice ${invoice}`).toBe(invoiceRevenueBaseSen(invoiceValues));
+      expect(sumOf(credited, "refundSen"), `invoice ${invoice}`).toBe(invoiceRefundSen(invoiceValues));
+      for (const row of credited) {
+        expect(row.creditedSen).toBe(row.lineAmountSen + row.spreadSen);
+        expect(row.revenueSen).toBe(row.creditedSen - row.refundSen);
+        expect(row.refundSen).toBeGreaterThanOrEqual(0);
+      }
       expect(credited.length).toBeGreaterThan(0);
     }
   });

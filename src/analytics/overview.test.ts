@@ -12,14 +12,15 @@ import { getDataFreshness, getOverviewKpis } from "./index";
  * through the real Reader from the fake Kreloses into a throwaway database; the Analytics Service
  * must then return exactly these HAND-COMPUTED figures.
  *
- * Active sales, September 2026 (KL days), net amounts:
+ * Active sales, September 2026 (KL days), revenue bases (net less the refunded part, #6):
  *   North: 700101 C1 1,200.00 (1 Sep 00:30 KL = 31 Aug 16:30 UTC) · 700102 C2 380.50 · 700104 C3 2,300.00
  *          · 700105 C2 99.90 (30 Sep 23:59 KL)                      → 3,980.40 · 4 invoices · 3 customers
- *   South: 700201 C4 600.00 · 700202 C5 1,100.00 · 700203 C1 250.00 · 700205 walk-in 45.00
- *          · 700206 C4 (120.00) return                              → 1,875.00 · 5 invoices · 3 customers
+ *   South: 700201 C4 600.00 · 700202 C5 1,000.00 (net 1,100.00, 100.00 refunded) · 700203 C1 250.00
+ *          · 700205 walk-in 45.00 · 700206 C4 (120.00) return (its refund is the return itself)
+ *                                                                   → 1,775.00 · 5 invoices · 3 customers
  *   Not counted: 700103 (North, 900.00) and 700204 (South, 75.00) are cancelled.
- *   Total: 5,855.40 · 9 invoices · 5 customers (C1 bought at both branches; the walk-in is nobody)
- *   AOV per customer = revenue ÷ distinct customers: 1,171.08 · North 1,326.80 · South 625.00
+ *   Total: 5,755.40 · 9 invoices · 5 customers (C1 bought at both branches; the walk-in is nobody)
+ *   AOV per customer = revenue ÷ distinct customers: 1,151.08 · North 1,326.80 · South 591.67 (591.666…)
  *
  * Previous period (same 30 days immediately before: 2 Aug – 31 Aug 2026):
  *   North: 700090 C1 500.00 (31 Aug 23:50 KL) · 700091 C7 1,000.00  → 1,500.00 · 2 · 2 · AOV 750.00
@@ -71,9 +72,9 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
 
     expect(kpis.total).toEqual({
       revenue: {
-        value: "5855.40",
-        previousPeriod: { base: "2300.00", change: "3555.40", changePercent: 154.6 },
-        lastYear: { base: "13100.00", change: "-7244.60", changePercent: -55.3 },
+        value: "5755.40",
+        previousPeriod: { base: "2300.00", change: "3455.40", changePercent: 150.2 },
+        lastYear: { base: "13100.00", change: "-7344.60", changePercent: -56.1 },
       },
       invoices: {
         value: 9,
@@ -86,9 +87,9 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
         lastYear: { base: 2, change: 3, changePercent: 150 },
       },
       aovPerCustomer: {
-        value: "1171.08",
-        previousPeriod: { base: "766.67", change: "404.41", changePercent: 52.7 },
-        lastYear: { base: "6550.00", change: "-5378.92", changePercent: -82.1 },
+        value: "1151.08",
+        previousPeriod: { base: "766.67", change: "384.41", changePercent: 50.1 },
+        lastYear: { base: "6550.00", change: "-5398.92", changePercent: -82.4 },
       },
     });
 
@@ -122,9 +123,9 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
       branchId: branchId.south,
       branchName: "Branch South",
       revenue: {
-        value: "1875.00",
-        previousPeriod: { base: "800.00", change: "1075.00", changePercent: 134.4 },
-        lastYear: { base: "754.40", change: "1120.60", changePercent: 148.5 },
+        value: "1775.00",
+        previousPeriod: { base: "800.00", change: "975.00", changePercent: 121.9 },
+        lastYear: { base: "754.40", change: "1020.60", changePercent: 135.3 },
       },
       invoices: {
         value: 5,
@@ -137,10 +138,9 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
         lastYear: { base: 1, change: 2, changePercent: 200 },
       },
       aovPerCustomer: {
-        value: "625.00",
-        // −21.875 % rounds half away from zero to −21.9.
-        previousPeriod: { base: "800.00", change: "-175.00", changePercent: -21.9 },
-        lastYear: { base: "754.40", change: "-129.40", changePercent: -17.2 },
+        value: "591.67",
+        previousPeriod: { base: "800.00", change: "-208.33", changePercent: -26 },
+        lastYear: { base: "754.40", change: "-162.73", changePercent: -21.6 },
       },
     });
   });
@@ -156,7 +156,7 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
     expect(kpis.total.customers.value).toBe(3);
 
     const both = await getOverviewKpis(db.sql, { ...SEPTEMBER, branchIds: [branchId.south, branchId.north] });
-    expect(both.total.revenue.value).toBe("5855.40");
+    expect(both.total.revenue.value).toBe("5755.40");
     expect(both.total.customers.value).toBe(5);
 
     for (const unknown of [["999999"], ["not-a-branch"]]) {
@@ -197,12 +197,12 @@ describe("Analytics Service: Overview KPIs (fed by the Sync Engine)", () => {
   it("stays the same after an identical re-sync, and follows a cancellation made in Kreloses", async () => {
     const again = await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2026-09-01", to: "2026-09-30" } });
     expect(again).toMatchObject({ status: "succeeded", counts: { inserted: 0, updated: 0, unchanged: 11 } });
-    expect((await getOverviewKpis(db.sql, SEPTEMBER)).total.revenue.value).toBe("5855.40");
+    expect((await getOverviewKpis(db.sql, SEPTEMBER)).total.revenue.value).toBe("5755.40");
 
     h.fake.saleRows.find((row) => row.SaleId === 700102)!.SaleStatusName = "Cancelled";
     await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2026-09-01", to: "2026-09-30" } });
     const after = await getOverviewKpis(db.sql, SEPTEMBER);
-    expect(after.total.revenue.value).toBe("5474.90"); // 5,855.40 − 380.50
+    expect(after.total.revenue.value).toBe("5374.90"); // 5,755.40 − 380.50
     expect(after.total.invoices.value).toBe(8);
     expect(after.total.customers.value).toBe(5); // C2 still bought 700105
 

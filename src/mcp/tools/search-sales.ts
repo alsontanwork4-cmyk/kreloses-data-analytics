@@ -39,7 +39,7 @@ const salesSearchOutput = z.object({
       branchId: z.string(),
       branchName: z.string(),
       customerName: z.string().nullable().describe("null = walk-in"),
-      revenue: money.describe("The sale's revenue: its net amount"),
+      revenue: money.describe("The sale's revenue: its net amount less refunds"),
       lineItemsSynced: z.boolean(),
       credits: z
         .array(

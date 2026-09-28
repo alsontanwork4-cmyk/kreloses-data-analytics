@@ -19,7 +19,7 @@ import { run } from "./support/run";
  *
  * Doctors' credited revenue (customers):
  *   Aug 2026  Dr Bravo Brown 1,300.00 (N C7 + S C8) · Dr Delta 800.00 (S C4) · Dr Alpha Anderson 500.00 (N C1)
- *   Sep 2026  Dr Bravo Brown 3,352.00 (N 2,155.85 C2 C3 · S 1,196.15 C5 C1) · Dr Alpha Anderson 1,654.35
+ *   Sep 2026  Dr Bravo Brown 3,252.00 (N 2,155.85 C2 C3 · S 1,096.15 C5 C1: 700202's 100.00 refund deducted, #6) · Dr Alpha Anderson 1,654.35
  *             (N 1,500.50 C1 C2 · S 153.85 C1) · Dr Delta 480.00 (S C4)
  *   Sep 2025  Dr Alpha Anderson N 12,345.60 (C1) · Dr Bravo Brown S 654.40 (C5)
  * Every doctor line in September 2026 is on or before the 20th, so 2026's year-to-date figures do not
@@ -64,14 +64,14 @@ test.describe("Trends → doctor detail", () => {
     const table = page.getByTestId("trend-table");
     const months = ["doctor", "m2026-08", "m2026-09", "total"];
     expect(await tableText(table, months)).toEqual([
-      ["Dr Bravo Brown", "RM 1,300.00", "RM 3,352.00", "RM 4,652.00"],
+      ["Dr Bravo Brown", "RM 1,300.00", "RM 3,252.00", "RM 4,552.00"],
       ["Dr Alpha Anderson", "RM 500.00", "RM 1,654.35", "RM 2,154.35"],
       ["Dr Delta Not in staff list", "RM 800.00", "RM 480.00", "RM 1,280.00"],
     ]);
     const csv = await downloadCsv(page, table);
     expect(csv.name).toBe("trends-revenue_2026-08-01_to_2026-09-30.csv");
     expect(csv.text.split("\r\n").slice(1)).toEqual([
-      "Dr Bravo Brown,1300.00,3352.00,4652.00",
+      "Dr Bravo Brown,1300.00,3252.00,4552.00",
       "Dr Alpha Anderson,500.00,1654.35,2154.35",
       "Dr Delta,800.00,480.00,1280.00",
       "",
@@ -79,7 +79,7 @@ test.describe("Trends → doctor detail", () => {
 
     // The chart: one line per doctor, with a summary for screen readers; each line can be hidden.
     const chart = page.getByTestId("trend-chart");
-    await expect(chart.getByRole("img", { name: /^Monthly revenue by doctor, Aug 2026 to Sep 2026: Dr Bravo Brown: Aug 2026 RM 1,300\.00, Sep 2026 RM 3,352\.00; Dr Alpha Anderson: Aug 2026 RM 500\.00, Sep 2026 RM 1,654\.35; Dr Delta: Aug 2026 RM 800\.00, Sep 2026 RM 480\.00$/ })).toBeVisible();
+    await expect(chart.getByRole("img", { name: /^Monthly revenue by doctor, Aug 2026 to Sep 2026: Dr Bravo Brown: Aug 2026 RM 1,300\.00, Sep 2026 RM 3,252\.00; Dr Alpha Anderson: Aug 2026 RM 500\.00, Sep 2026 RM 1,654\.35; Dr Delta: Aug 2026 RM 800\.00, Sep 2026 RM 480\.00$/ })).toBeVisible();
     await expect(chart.locator(".recharts-line")).toHaveCount(3);
     const legend = chart.getByRole("group", { name: "Show or hide lines" });
     await legend.getByRole("button", { name: "Dr Delta" }).click();
@@ -93,7 +93,7 @@ test.describe("Trends → doctor detail", () => {
     await expect(page).toHaveURL(/[?&]measure=aov/);
     await expect(chart.getByText("Monthly AOV per customer by doctor", { exact: true })).toBeVisible();
     expect(await tableText(table, months)).toEqual([
-      ["Dr Bravo Brown", "RM 650.00", "RM 838.00", "RM 775.33"], // whole period: 4,652.00 ÷ 6 customers
+      ["Dr Bravo Brown", "RM 650.00", "RM 813.00", "RM 758.67"], // whole period: 4,552.00 ÷ 6 customers
       ["Dr Alpha Anderson", "RM 500.00", "RM 827.18", "RM 1,077.18"],
       ["Dr Delta Not in staff list", "RM 800.00", "RM 480.00", "RM 1,280.00"],
     ]);
@@ -104,7 +104,7 @@ test.describe("Trends → doctor detail", () => {
     await expect(page).toHaveURL(/[?&]measure=aov/);
     await expect(page.getByRole("region", { name: "Filters" }).getByRole("combobox", { name: "Branch" })).toHaveValue(/\d+/);
     expect(await tableText(table, months)).toEqual([
-      ["Dr Bravo Brown", "RM 300.00", "RM 598.08", "RM 498.72"],
+      ["Dr Bravo Brown", "RM 300.00", "RM 548.08", "RM 465.38"],
       ["Dr Delta Not in staff list", "RM 800.00", "RM 480.00", "RM 1,280.00"],
       ["Dr Alpha Anderson", "—", "RM 153.85", "RM 153.85"],
     ]);
@@ -116,9 +116,9 @@ test.describe("Trends → doctor detail", () => {
       ["Dr Alpha Anderson", "All branches", "RM 12,345.60", "RM 2,154.35", "−82.5%"], // −10,191.25 ÷ 12,345.60
       ["Dr Alpha Anderson", "Branch North", "RM 12,345.60", "RM 2,000.50", "−83.8%"],
       ["Dr Alpha Anderson", "Branch South", "RM 0.00", "RM 153.85", "—"],
-      ["Dr Bravo Brown", "All branches", "RM 654.40", "RM 4,652.00", "+610.9%"],
+      ["Dr Bravo Brown", "All branches", "RM 654.40", "RM 4,552.00", "+595.6%"],
       ["Dr Bravo Brown", "Branch North", "RM 0.00", "RM 3,155.85", "—"],
-      ["Dr Bravo Brown", "Branch South", "RM 654.40", "RM 1,496.15", "+128.6%"],
+      ["Dr Bravo Brown", "Branch South", "RM 654.40", "RM 1,396.15", "+113.3%"],
       ["Dr Delta Not in staff list", "Branch South", "RM 0.00", "RM 1,280.00", "—"],
     ]);
 
@@ -133,7 +133,7 @@ test.describe("Trends → doctor detail", () => {
     await expect(stat("doctor-aov")).toHaveText("RM 1,077.18");
     await expect(stat("doctor-invoices")).toHaveText("4");
     await expect(stat("doctor-items")).toHaveText("2.00");
-    await expect(stat("doctor-share")).toHaveText("25.5%"); // of all revenue in Aug–Sep 2026: 8,455.40
+    await expect(stat("doctor-share")).toHaveText("25.8%"); // of all revenue in Aug–Sep 2026: 8,355.40
     await expect(stat("doctor-customers")).toHaveText("2");
     expect(await tableText(page.getByTestId("doctor-months"), ["revenue", "aov", "invoices", "customers"])).toEqual([
       ["RM 500.00", "RM 500.00", "1", "1"],
@@ -169,7 +169,7 @@ test.describe("Trends → doctor detail", () => {
     // The filter bar's doctor selector opens another doctor's page.
     await page.getByRole("region", { name: "Filters" }).getByRole("combobox", { name: "Doctor" }).selectOption({ label: "Dr Bravo Brown" });
     await expect(page.getByRole("heading", { level: 1, name: "Dr Bravo Brown" })).toBeVisible();
-    await expect(stat("doctor-revenue")).toHaveText("RM 4,652.00");
+    await expect(stat("doctor-revenue")).toHaveText("RM 4,552.00");
 
     // From the Doctors ranking too; an alias-only doctor is flagged.
     await page.goto(`/doctors?${AUG_SEP}`);

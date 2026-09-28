@@ -30,7 +30,8 @@ import { getDoctorDetail, getDoctorRanking, getMonthlyTrends, getYearOnYear, lis
  *   2026-08  Dr Alpha N C1 500.00 (700090: 31 Aug 23:50 KL) · Dr Bravo N C7 1,000.00 (700091, 15 Aug)
  *            · Dr Bravo S C8 300.00 (700093, 1 Aug) · Dr Delta S C4 800.00 (700092, 20 Aug)
  *   2026-09  (doctors.test.ts) Dr Alpha N 1,500.50 (C1 700101 at 1 Sep 00:30 KL = 31 Aug 16:30 UTC; C2)
- *            + S 153.85 (C1) · Dr Bravo N 2,155.85 (C2 C3) + S 1,196.15 (C5 C1) · Dr Delta S 480.00 (C4)
+ *            + S 153.85 (C1) · Dr Bravo N 2,155.85 (C2 C3) + S 1,096.15 (C5 C1; 700202's 100.00 refund
+ *            deducted, #6) · Dr Delta S 480.00 (C4)
  *            · non-doctors: Charlie Chen (other) 45.00, generic accounts, no staff — never in a doctor series
  *   2026-10  Dr Bravo   N C3   150.00 (800103: 1 Oct 2026 00:30 KL = 30 Sep 16:30 UTC)
  * AOV per customer = revenue ÷ distinct customers with a line credited to the doctor, rounded half up to the sen.
@@ -118,7 +119,7 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       //                                  2025-09     10        11      12        2026-01   02      03       04      05      06      07      08         09         10
       expect(series(trends.doctors, "revenue")).toEqual({
         "Dr Alpha Anderson": ["12345.60", "999.00", "0.00", "655.40", "300.00", "0.00", "90.00", "0.00", "0.00", "0.00", "0.00", "500.00", "1654.35", "0.00"],
-        "Dr Bravo Brown": ["654.40", "0.00", "0.00", "0.00", "0.00", "0.00", "180.00", "0.00", "0.00", "0.00", "0.00", "1300.00", "3352.00", "150.00"],
+        "Dr Bravo Brown": ["654.40", "0.00", "0.00", "0.00", "0.00", "0.00", "180.00", "0.00", "0.00", "0.00", "0.00", "1300.00", "3252.00", "150.00"],
         "Dr Delta": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "800.00", "480.00", "0.00"],
       });
       // KL month boundaries: 700101 (1 Sep 00:30 KL, still 31 Aug in UTC) is September's, so Dr Alpha's
@@ -138,7 +139,7 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       // Totals over the whole range (AOV counted over the range: a customer seen in two months counts once).
       expect(Object.fromEntries(trends.doctors.map((doctor) => [doctor.name, doctor.total]))).toEqual({
         "Dr Alpha Anderson": { revenue: "16544.35", invoices: 9, customers: 4, aovPerCustomer: "4136.09", surgeryRevenue: null, consultRevenue: null },
-        "Dr Bravo Brown": { revenue: "5636.40", invoices: 9, customers: 7, aovPerCustomer: "805.20", surgeryRevenue: null, consultRevenue: null },
+        "Dr Bravo Brown": { revenue: "5536.40", invoices: 9, customers: 7, aovPerCustomer: "790.91", surgeryRevenue: null, consultRevenue: null },
         "Dr Delta": { revenue: "1280.00", invoices: 3, customers: 1, aovPerCustomer: "1280.00", surgeryRevenue: null, consultRevenue: null },
       });
     });
@@ -149,7 +150,7 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
         // 2026-09: 1,654.35 ÷ 2 (C1 at both branches counts once) = 827.175 → 827.18
         "Dr Alpha Anderson": ["12345.60", "999.00", null, "655.40", "300.00", null, "90.00", null, null, null, null, "500.00", "827.18", null],
         // 2026-08: 1,300.00 ÷ 2 (C7 North, C8 South)
-        "Dr Bravo Brown": ["654.40", null, null, null, null, null, "180.00", null, null, null, null, "650.00", "838.00", "150.00"],
+        "Dr Bravo Brown": ["654.40", null, null, null, null, null, "180.00", null, null, null, null, "650.00", "813.00", "150.00"],
         "Dr Delta": [null, null, null, null, null, null, null, null, null, null, null, "800.00", "480.00", null],
       });
     });
@@ -157,17 +158,17 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
     it("honours the branch filter (AOV counted within the branch) and ranks by the branch's revenue", async () => {
       const south = await getMonthlyTrends(db.sql, { ...LONG, branchIds: [branch.south] }, { now: NOW });
       expect(south.doctors.map((doctor) => [doctor.name, doctor.total.revenue])).toEqual([
-        ["Dr Bravo Brown", "2330.55"],
+        ["Dr Bravo Brown", "2230.55"],
         ["Dr Delta", "1280.00"],
         ["Dr Alpha Anderson", "243.85"],
       ]);
       expect(series(south.doctors, "revenue")).toEqual({
-        "Dr Bravo Brown": ["654.40", "0.00", "0.00", "0.00", "0.00", "0.00", "180.00", "0.00", "0.00", "0.00", "0.00", "300.00", "1196.15", "0.00"],
+        "Dr Bravo Brown": ["654.40", "0.00", "0.00", "0.00", "0.00", "0.00", "180.00", "0.00", "0.00", "0.00", "0.00", "300.00", "1096.15", "0.00"],
         "Dr Delta": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "800.00", "480.00", "0.00"],
         "Dr Alpha Anderson": ["0.00", "0.00", "0.00", "0.00", "0.00", "0.00", "90.00", "0.00", "0.00", "0.00", "0.00", "0.00", "153.85", "0.00"],
       });
-      // 1,196.15 ÷ 2 (C5, C1) = 598.075 → 598.08
-      expect(south.doctors[0]!.points[12]).toEqual({ month: "2026-09", revenue: "1196.15", invoices: 2, customers: 2, aovPerCustomer: "598.08", surgeryRevenue: null, consultRevenue: null });
+      // 1,096.15 ÷ 2 (C5, C1) = 548.075 → 548.08
+      expect(south.doctors[0]!.points[12]).toEqual({ month: "2026-09", revenue: "1096.15", invoices: 2, customers: 2, aovPerCustomer: "548.08", surgeryRevenue: null, consultRevenue: null });
 
       const north = await getMonthlyTrends(db.sql, { ...LONG, branchIds: [branch.north] }, { now: NOW });
       expect(north.doctors.map((doctor) => [doctor.name, doctor.total.revenue])).toEqual([
@@ -193,7 +194,7 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
         { month: "2026-09", dateFrom: "2026-09-01", dateTo: "2026-09-30", partial: false, partialReason: null },
       ]);
       expect(series(cut.doctors, "revenue")).toEqual({
-        "Dr Bravo Brown": ["1000.00", "3352.00"],
+        "Dr Bravo Brown": ["1000.00", "3252.00"],
         "Dr Alpha Anderson": ["500.00", "1654.35"],
         "Dr Delta": ["800.00", "480.00"],
       });
@@ -203,7 +204,7 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       const current = await getMonthlyTrends(db.sql, { dateFrom: "2026-09-01", dateTo: "2026-12-31" }, { now: new Date("2026-09-28T04:00:00Z") });
       expect(current.months).toEqual([{ month: "2026-09", dateFrom: "2026-09-01", dateTo: "2026-09-30", partial: true, partialReason: "current_month" }]);
       expect(current.doctors.map((doctor) => [doctor.name, doctor.points.map((point) => point.revenue)])).toEqual([
-        ["Dr Bravo Brown", ["3352.00"]],
+        ["Dr Bravo Brown", ["3252.00"]],
         ["Dr Alpha Anderson", ["1654.35"]],
         ["Dr Delta", ["480.00"]],
       ]);
@@ -280,9 +281,9 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
         {
           doctor: "Dr Bravo Brown",
           branch: null,
-          // 2026: N 1,000.00 + 2,155.85 + 150.00 (800103 on 1 Oct = today) · S 180.00 + 300.00 + 1,196.15; 7 customers
-          years: [cell(2024, "400.00", 1, 1, "400.00"), cell(2025, "1454.40", 2, 2, "727.20"), cell(2026, "4982.00", 8, 7, "711.71")],
-          changes: [[null, null], [263.6, 81.8], [242.5, -2.1]],
+          // 2026: N 1,000.00 + 2,155.85 + 150.00 (800103 on 1 Oct = today) · S 180.00 + 300.00 + 1,096.15; 7 customers
+          years: [cell(2024, "400.00", 1, 1, "400.00"), cell(2025, "1454.40", 2, 2, "727.20"), cell(2026, "4882.00", 8, 7, "697.43")],
+          changes: [[null, null], [263.6, 81.8], [235.7, -4.1]],
         },
         {
           doctor: "Dr Bravo Brown",
@@ -293,8 +294,8 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
         {
           doctor: "Dr Bravo Brown",
           branch: "Branch South",
-          years: [cell(2024, "400.00", 1, 1, "400.00"), cell(2025, "654.40", 1, 1, "654.40"), cell(2026, "1676.15", 4, 4, "419.04")],
-          changes: [[null, null], [63.6, 63.6], [156.1, -36]],
+          years: [cell(2024, "400.00", 1, 1, "400.00"), cell(2025, "654.40", 1, 1, "654.40"), cell(2026, "1576.15", 4, 4, "394.04")],
+          changes: [[null, null], [63.6, 63.6], [140.9, -39.8]],
         },
         // Dr Delta only ever worked at South: no "both branches" row.
         {
@@ -339,8 +340,8 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       const yoy = await getYearOnYear(db.sql, { branchIds: [branch.south] }, { now: new Date("2026-09-28T04:00:00Z") });
       expect(yoy.years.at(-1)).toEqual({ year: 2026, dateFrom: "2026-01-01", dateTo: "2026-09-28", partial: true, comparedWith: { dateFrom: "2025-01-01", dateTo: "2025-09-28" } });
       const bravo = yoy.rows.find((row) => row.name === "Dr Bravo Brown")!;
-      // 2026 to 28 Sep at South: 180.00 + 300.00 + 1,196.15 (nothing after the 28th) vs 654.40 (21 Sep 2025).
-      expect(bravo.years.at(-1)).toMatchObject({ revenue: "1676.15", base: { revenue: "654.40" }, revenueChangePercent: 156.1 });
+      // 2026 to 28 Sep at South: 180.00 + 300.00 + 1,096.15 (nothing after the 28th) vs 654.40 (21 Sep 2025).
+      expect(bravo.years.at(-1)).toMatchObject({ revenue: "1576.15", base: { revenue: "654.40" }, revenueChangePercent: 140.9 });
     });
 
     it("has no years and no rows before anything is synced for the branches", async () => {
@@ -356,9 +357,9 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
       expect(detail.status).toBe("ok");
       if (detail.status !== "ok") return;
       expect(detail.doctor).toEqual({ staffId: staff["Dr Alpha Anderson"], name: "Dr Alpha Anderson", source: "kreloses", active: true });
-      // 500.00 + 1,654.35 · invoices 700090 700101 700102 700203 · customers C1 C2 · 8 lines ÷ 4 · share of 8,455.40 (all Aug + Sep revenue)
-      expect(detail.figures).toEqual({ revenue: "2154.35", invoices: 4, customers: 2, aovPerCustomer: "1077.18", itemsPerInvoice: 2, sharePercent: 25.5 });
-      expect(detail.totalRevenue).toBe("8455.40");
+      // 500.00 + 1,654.35 · invoices 700090 700101 700102 700203 · customers C1 C2 · 8 lines ÷ 4 · share of 8,355.40 (all Aug + Sep revenue)
+      expect(detail.figures).toEqual({ revenue: "2154.35", invoices: 4, customers: 2, aovPerCustomer: "1077.18", itemsPerInvoice: 2, sharePercent: 25.8 });
+      expect(detail.totalRevenue).toBe("8355.40");
       const ranked = (await getDoctorRanking(db.sql, AUG_SEP, { splitByBranch: true })).doctors.find((doctor) => doctor.name === "Dr Alpha Anderson")!;
       expect(detail.figures).toEqual({
         revenue: ranked.revenue,
@@ -425,12 +426,12 @@ describe("Analytics Service: monthly trends, year on year and doctor detail (fed
     const september = { dateFrom: "2026-09-01", dateTo: "2026-09-30" };
     const trends = await getMonthlyTrends(db.sql, september, { now: NOW });
     expect(trends.doctors.map((doctor) => [doctor.name, doctor.points[0]!.revenue])).toEqual([
-      ["Dr Bravo Brown", "3352.00"],
+      ["Dr Bravo Brown", "3252.00"],
       ["Dr Alpha Anderson", "1654.35"],
       ["Dr Delta", "480.00"],
     ]);
     const detail = await getDoctorDetail(db.sql, staff["Dr Bravo Brown"]!, september, { now: NOW });
-    expect(detail).toMatchObject({ status: "ok", figures: { revenue: "3352.00" }, pendingLineItems: { invoices: 1, revenue: "150.00" } });
+    expect(detail).toMatchObject({ status: "ok", figures: { revenue: "3252.00" }, pendingLineItems: { invoices: 1, revenue: "150.00" } });
     const yoy = await getYearOnYear(db.sql, { branchIds: [branch.north] }, { now: NOW });
     expect(yoy.rows.find((row) => row.name === "Dr Bravo Brown")!.years.at(-1)!.revenue).toBe("3305.85");
   });

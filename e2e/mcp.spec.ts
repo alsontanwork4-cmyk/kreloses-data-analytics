@@ -76,7 +76,7 @@ test.describe("MCP server for Claude", () => {
       totalRevenue: string;
       doctors: { name: string; revenue: string; sharePercent: number; aovPerCustomer: string; invoices: number; itemsPerInvoice: number; customers: number }[];
     };
-    expect(ranking.totalRevenue).toBe("5855.40");
+    expect(ranking.totalRevenue).toBe("5755.40");
     await page.goto(`/doctors?from=${SEPTEMBER.dateFrom}&to=${SEPTEMBER.dateTo}`);
     const table = page.getByTestId("doctor-ranking");
     const [download] = await Promise.all([page.waitForEvent("download"), table.getByRole("button", { name: "Export CSV" }).click()]);

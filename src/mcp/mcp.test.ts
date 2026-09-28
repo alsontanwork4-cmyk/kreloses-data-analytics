@@ -247,12 +247,12 @@ describe("MCP server (Streamable HTTP, in process)", () => {
       const result = await call(client, "doctor_performance", { ...SEPTEMBER, doctors: ["dr. alpha"] });
       const data = result.structuredContent as Structured & { ranking: DoctorRanking };
       expect(data.covers).toEqual({ ...SEPTEMBER, branches: "all", doctors: [{ id: staff["Dr Alpha Anderson"], name: "Dr Alpha Anderson" }] });
-      expect(data.ranking.totalRevenue).toBe("5855.40");
+      expect(data.ranking.totalRevenue).toBe("5755.40");
       expect(data.ranking.doctors.map((doctor) => [doctor.name, doctor.revenue, doctor.aovPerCustomer, doctor.invoices, doctor.itemsPerInvoice, doctor.sharePercent])).toEqual([
-        ["Dr Alpha Anderson", "1654.35", "827.18", 3, 2, 28.3],
+        ["Dr Alpha Anderson", "1654.35", "827.18", 3, 2, 28.7],
       ]);
       expect((result.content as { text: string }[])[0]!.text).toMatch(
-        /^Doctor ranking for 1 Sep 2026 – 30 Sep 2026, all branches, doctor Dr Alpha Anderson: 1 doctor with revenue; highest Dr Alpha Anderson RM 1,654\.35 \(28\.3% of all revenue\)\. All revenue in the period: RM 5,855\.40\.\nData as of/,
+        /^Doctor ranking for 1 Sep 2026 – 30 Sep 2026, all branches, doctor Dr Alpha Anderson: 1 doctor with revenue; highest Dr Alpha Anderson RM 1,654\.35 \(28\.7% of all revenue\)\. All revenue in the period: RM 5,755\.40\.\nData as of/,
       );
     });
 
@@ -293,11 +293,11 @@ describe("MCP server (Streamable HTTP, in process)", () => {
       const client = await connect();
       const result = await call(client, "search_sales", { ...SEPTEMBER, pageSize: 4 });
       const data = result.structuredContent as Structured & { search: { totalMatches: number; totalPages: number; sales: { saleNumber: string }[] } };
-      expect(data.search).toMatchObject({ totalMatches: 9, totalPages: 3, totalRevenue: "5855.40" });
+      expect(data.search).toMatchObject({ totalMatches: 9, totalPages: 3, totalRevenue: "5755.40" });
       expect(data.search.sales.map((sale) => sale.saleNumber)).toEqual(["INV-N-0105", "INV-S-0205", "INV-N-0104", "INV-S-0203"]);
       expect(data.criteria).toEqual({ customer: null, item: null, minAmount: null, maxAmount: null, sort: "newest" });
       expect((result.content as { text: string }[])[0]!.text).toMatch(
-        /^Found 9 sales \(RM 5,855\.40 in total\) for 1 Sep 2026 – 30 Sep 2026, all branches; showing 1–4, newest first \(page 1 of 3\)\. Ask for page 2 for more\.\n/,
+        /^Found 9 sales \(RM 5,755\.40 in total\) for 1 Sep 2026 – 30 Sep 2026, all branches; showing 1–4, newest first \(page 1 of 3\)\. Ask for page 2 for more\.\n/,
       );
 
       const bigSpenders = await call(client, "search_sales", { ...SEPTEMBER, customer: "0001", minAmount: 1000 });
@@ -361,9 +361,12 @@ describe("MCP server (Streamable HTTP, in process)", () => {
 
   describe("sales whose line items are not synced yet", () => {
     it("are counted, and the answer says doctor and item figures cannot include them yet", async () => {
-      // 700104 (2,300.00, Dr Bravo Brown's biggest sale) changes in Kreloses and its page cannot be read.
+      // 700104 (2,300.00, Dr Bravo Brown's biggest sale) is edited in Kreloses (gross and discount
+      // changed, net the same: a line-relevant change — a payment alone would not need its lines again,
+      // #6) and its page cannot be read.
       const row = h.fake.saleRows.find((candidate) => candidate.SaleId === 700104)!;
-      row.TotalPayments = "2,438.00";
+      row.GrossAmount = "2,490.00";
+      row.Discounts = "190.00";
       h.clock.advance(3_600_000);
       h.fake.intercept((request) => (request.url.pathname === "/Sale/Overview/700104" ? new Response("down", { status: 503 }) : undefined));
       const connectionId = (await db.sql<{ id: string }[]>`select id::text from connections`)[0]!.id;

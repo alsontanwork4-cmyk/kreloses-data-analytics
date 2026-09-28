@@ -37,7 +37,7 @@ import { getDiscountTypes, getDoctorDiscounts, getDoctorRanking, type DiscountFi
  *             · no staff 180 → 175.42 (4.58) · North General 0.5 × 100 → 48.73 (1.27)          "RM60 VOUCHER" (60.00)
  *   700105 N  Charlie 45 · no staff 54.90                                                      no discount
  *   700201 S  Dr Delta 90 → 84.37 (5.63) · 2 × 275 → 515.63 (34.37)                           "RM40 OFF" -40.00
- *   700202 S  Dr Bravo 700 + 2 × 200 = 1,100 → 1,100 (a 100.00 refund is recorded: NOT a discount)
+ *   700202 S  Dr Bravo 700 + 2 × 200 = 1,100 → 1,100 charged (its 100.00 refund comes off revenue, #6: NOT a discount)
  *   700203 S  Dr Bravo 100 → 96.15 (3.85) · Dr. Alpha 160 → 153.85 (6.15)          lines 260 vs net 250: 10.00 difference
  *   700205 S  South General 45 (walk-in) · 700206 S Dr Delta return (1) × 120 → (120.00): a return, left out
  *
@@ -238,14 +238,19 @@ describe("Analytics Service: discounts (fed by the Sync Engine, line items inclu
     expect(discounts.pendingLineItems).toEqual({ invoices: 0, revenue: "0.00" });
   });
 
-  it("charged is the revenue credited (the Doctors page's figure) except for returns, which are left out", async () => {
+  it("charged is what was credited BEFORE refunds: the Doctors page's revenue plus the doctor's refund shares, returns left out", async () => {
     for (const period of [SEPTEMBER, JULY]) {
       const [discounts, ranking] = await Promise.all([getDoctorDiscounts(db.sql, period), getDoctorRanking(db.sql, period)]);
       const charged = Object.fromEntries(discounts.doctors.map((row) => [row.staffId, row.charged]));
       const revenue = Object.fromEntries(ranking.doctors.map((row) => [row.staffId, row.revenue]));
-      // Dr Delta's September revenue (480.00) includes his (120.00) return; his discount figures do not.
-      if (period === SEPTEMBER) expect([revenue[staff["Dr Delta"]!], charged[staff["Dr Delta"]!]]).toEqual(["480.00", "600.00"]);
-      else expect(charged).toEqual(revenue);
+      if (period === SEPTEMBER) {
+        const doctor = (name: string) => [revenue[staff[name]!], charged[staff[name]!]];
+        // Dr Bravo: 700202's 100.00 refund comes off his revenue (#6), never off what he charged.
+        expect(doctor("Dr Bravo Brown")).toEqual(["3252.00", "3352.00"]);
+        expect(doctor("Dr Alpha Anderson")).toEqual(["1654.35", "1654.35"]);
+        // Dr Delta's revenue (480.00) includes his (120.00) return; his discount figures do not.
+        expect(doctor("Dr Delta")).toEqual(["480.00", "600.00"]);
+      } else expect(charged).toEqual(revenue); // no refunds or returns in July
     }
   });
 

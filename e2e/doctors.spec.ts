@@ -55,22 +55,22 @@ test.describe("Line items → Doctors page", () => {
     // The ranking: doctors only, highest revenue first.
     await page.goto(`/doctors?${SEPTEMBER}`);
     await expect(page.getByRole("heading", { level: 1, name: "Doctors" })).toBeVisible();
-    await expect(page.getByTestId("total-revenue")).toHaveText("All revenue in this period: RM 5,855.40");
+    await expect(page.getByTestId("total-revenue")).toHaveText("All revenue in this period: RM 5,755.40");
     const columns = ["doctor", "revenue", "share", "aov", "invoices", "items", "customers"];
     await expect(rows(ranking(page))).toHaveCount(3);
     expect(await tableText(ranking(page), columns)).toEqual([
-      ["Dr Bravo Brown", "RM 3,352.00", "57.2%", "RM 838.00", "4", "1.50", "4"],
-      ["Dr Alpha Anderson", "RM 1,654.35", "28.3%", "RM 827.18", "3", "2.00", "2"],
-      ["Dr Delta Not in staff list", "RM 480.00", "8.2%", "RM 480.00", "2", "1.50", "1"],
+      ["Dr Bravo Brown", "RM 3,252.00", "56.5%", "RM 813.00", "4", "1.50", "4"],
+      ["Dr Alpha Anderson", "RM 1,654.35", "28.7%", "RM 827.18", "3", "2.00", "2"],
+      ["Dr Delta Not in staff list", "RM 480.00", "8.3%", "RM 480.00", "2", "1.50", "1"],
     ]);
-    await expect(page.getByRole("img", { name: /^Revenue by doctor: Dr Bravo Brown RM 3,352\.00; Dr Alpha Anderson RM 1,654\.35; Dr Delta RM 480\.00$/ })).toBeVisible();
+    await expect(page.getByRole("img", { name: /^Revenue by doctor: Dr Bravo Brown RM 3,252\.00; Dr Alpha Anderson RM 1,654\.35; Dr Delta RM 480\.00$/ })).toBeVisible();
     await expect(page.getByTestId("doctor-revenue-chart").locator(".recharts-bar-rectangle")).toHaveCount(3);
     // Non-doctors are grouped apart, never ranked.
     expect(await tableText(page.getByTestId("staff-groups"), ["credited-to", "group", "revenue", "share"])).toEqual([
       ["Charlie Chen", "Other staff", "RM 45.00", "0.8%"],
       ["Branch North General", "Generic account", "RM 48.73", "0.8%"],
       ["Branch South General", "Generic account", "RM 45.00", "0.8%"],
-      ["No staff on line", "—", "RM 230.32", "3.9%"],
+      ["No staff on line", "—", "RM 230.32", "4.0%"],
     ]);
 
     // The CSV has exactly the numbers on screen, as plain decimals.
@@ -78,9 +78,9 @@ test.describe("Line items → Doctors page", () => {
     expect(csv.name).toBe("doctors_2026-09-01_to_2026-09-30.csv");
     expect(csv.text).toBe(
       "﻿Doctor,Revenue (RM),Share of revenue (%),AOV per customer (RM),Invoices,Items per invoice,Customers\r\n" +
-        "Dr Bravo Brown,3352.00,57.2,838.00,4,1.50,4\r\n" +
-        "Dr Alpha Anderson,1654.35,28.3,827.18,3,2.00,2\r\n" +
-        "Dr Delta,480.00,8.2,480.00,2,1.50,1\r\n",
+        "Dr Bravo Brown,3252.00,56.5,813.00,4,1.50,4\r\n" +
+        "Dr Alpha Anderson,1654.35,28.7,827.18,3,2.00,2\r\n" +
+        "Dr Delta,480.00,8.3,480.00,2,1.50,1\r\n",
     );
 
     // Split by branch: AOV per customer counted per branch.
@@ -89,7 +89,7 @@ test.describe("Line items → Doctors page", () => {
     await expect(rows(ranking(page))).toHaveCount(5);
     expect(await tableText(ranking(page), ["doctor", "branch", "revenue", "aov"])).toEqual([
       ["Dr Bravo Brown", "Branch North", "RM 2,155.85", "RM 1,077.93"],
-      ["Dr Bravo Brown", "Branch South", "RM 1,196.15", "RM 598.08"],
+      ["Dr Bravo Brown", "Branch South", "RM 1,096.15", "RM 548.08"],
       ["Dr Alpha Anderson", "Branch North", "RM 1,500.50", "RM 750.25"],
       ["Dr Alpha Anderson", "Branch South", "RM 153.85", "RM 153.85"],
       ["Dr Delta Not in staff list", "Branch South", "RM 480.00", "RM 480.00"],
@@ -98,11 +98,11 @@ test.describe("Line items → Doctors page", () => {
     expect(split.name).toBe("doctors-by-branch_2026-09-01_to_2026-09-30.csv");
     expect(split.text.split("\r\n")).toEqual([
       "﻿Doctor,Branch,Revenue (RM),Share of revenue (%),AOV per customer (RM),Invoices,Items per invoice,Customers",
-      "Dr Bravo Brown,Branch North,2155.85,36.8,1077.93,2,1.50,2",
-      "Dr Bravo Brown,Branch South,1196.15,20.4,598.08,2,1.50,2",
-      "Dr Alpha Anderson,Branch North,1500.50,25.6,750.25,2,2.50,2",
-      "Dr Alpha Anderson,Branch South,153.85,2.6,153.85,1,1.00,1",
-      "Dr Delta,Branch South,480.00,8.2,480.00,2,1.50,1",
+      "Dr Bravo Brown,Branch North,2155.85,37.5,1077.93,2,1.50,2",
+      "Dr Bravo Brown,Branch South,1096.15,19.0,548.08,2,1.50,2",
+      "Dr Alpha Anderson,Branch North,1500.50,26.1,750.25,2,2.50,2",
+      "Dr Alpha Anderson,Branch South,153.85,2.7,153.85,1,1.00,1",
+      "Dr Delta,Branch South,480.00,8.3,480.00,2,1.50,1",
       "",
     ]);
 
@@ -145,7 +145,7 @@ test.describe("Line items → Doctors page", () => {
     // The Doctors page follows at once (no sync in between).
     await page.goto(`/doctors?${SEPTEMBER}`);
     expect(await tableText(ranking(page), ["doctor", "revenue", "invoices", "customers", "aov"])).toEqual([
-      ["Dr Bravo Brown", "RM 3,832.00", "6", "5", "RM 766.40"],
+      ["Dr Bravo Brown", "RM 3,732.00", "6", "5", "RM 746.40"],
       ["Dr Alpha Anderson", "RM 1,654.35", "3", "2", "RM 827.18"],
       ["Charlie Chen", "RM 45.00", "1", "1", "RM 45.00"],
     ]);

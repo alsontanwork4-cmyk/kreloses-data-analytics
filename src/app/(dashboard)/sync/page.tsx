@@ -8,10 +8,12 @@ import { EmptyState } from "@/components/empty-state";
 import { PageShell } from "@/components/shell/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { getDb } from "@/db/client";
-import { formatClinicDateTime, formatDateRange } from "@/filters";
+import { formatClinicDateTime, formatDateRange, formatIsoDate } from "@/filters";
 import { formatCount, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { listSyncRuns, type SyncMode, type SyncRun, type SyncRunStatus } from "@/sync";
+import { listPermanentlyMissingInvoices, MAX_PAGE_MISSING_ATTEMPTS, type PermanentlyMissingInvoice } from "@/sync/lines";
+import { nightlyWindowDays } from "@/sync/nightly";
 
 export const metadata: Metadata = { title: "Sync status" };
 
@@ -28,17 +30,21 @@ const MODE: Record<SyncMode, string> = { manual: "Sync now", nightly: "Nightly",
 export default async function SyncStatusPage() {
   await requireUser();
   const sql = getDb();
-  const [runs, freshness] = await Promise.all([listSyncRuns(sql, { limit: 50 }), getDataFreshness(sql)]);
+  const [runs, freshness, missing] = await Promise.all([listSyncRuns(sql, { limit: 50 }), getDataFreshness(sql), listPermanentlyMissingInvoices(sql)]);
 
   return (
-    <PageShell title="Sync status" description="Sync runs, and how fresh each branch's data is.">
+    <PageShell
+      title="Sync status"
+      description={`Sync runs, and how fresh each branch's data is. Every night (at about 03:00, Kuala Lumpur time) each connection re-reads the last ${nightlyWindowDays()} days of sales and opens only new or changed invoices.`}
+    >
       {freshness.length > 0 ? (
         <section aria-labelledby="freshness-heading" className="flex flex-col gap-2">
           <h2 id="freshness-heading" className="text-base font-medium">
             Data as of
           </h2>
           <p className="text-xs text-muted-foreground">
-            When the latest successful sync that read up to the day it ran finished (a sync of an older month does not count).
+            When the latest successful sync that read up to the day it ran finished (a sync of an older month does not count; a
+            sync that carried on from an earlier one counts from when that one started).
           </p>
           <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {freshness.map((branch) => (
@@ -52,6 +58,8 @@ export default async function SyncStatusPage() {
           </ul>
         </section>
       ) : null}
+
+      {missing.total > 0 ? <PermanentlyMissing total={missing.total} invoices={missing.invoices} /> : null}
 
       {runs.length === 0 ? (
         <EmptyState icon={RefreshCw} title="No sync runs yet">
@@ -75,10 +83,35 @@ export default async function SyncStatusPage() {
   );
 }
 
+function PermanentlyMissing({ total, invoices }: { total: number; invoices: PermanentlyMissingInvoice[] }) {
+  return (
+    <section aria-labelledby="missing-heading" data-testid="permanently-missing" className="flex flex-col gap-2 rounded-xl border bg-card p-4 text-sm">
+      <h2 id="missing-heading" className="text-base font-medium">
+        Invoice pages Kreloses would not open
+      </h2>
+      <p className="text-muted-foreground">
+        {formatCount(total)} {total === 1 ? "sale's" : "sales'"} invoice page was not there (not found, or sent elsewhere){" "}
+        {MAX_PAGE_MISSING_ATTEMPTS} times in a row, so the sync stopped trying. {total === 1 ? "It counts" : "They count"} at the revenue base (net
+        less refunds) as &quot;line items not synced yet&quot; (credited to no doctor). If the sale is edited in Kreloses the sync tries again;
+        otherwise check it in Kreloses. (Pages that open but the app cannot read are not listed here: they are retried every night and shown
+        on each run below.)
+      </p>
+      <ul className="flex flex-col gap-1">
+        {invoices.map((invoice, index) => (
+          <li key={`${invoice.saleNumber}-${index}`}>
+            {invoice.saleNumber ?? "(no number)"} · {formatIsoDate(invoice.saleDate)} · {invoice.branchName}
+          </li>
+        ))}
+        {total > invoices.length ? <li className="text-muted-foreground">…and {formatCount(total - invoices.length)} more</li> : null}
+      </ul>
+    </section>
+  );
+}
+
 function RunCard({ run }: { run: SyncRun }) {
+  const readWholeListing = run.coveredLocationIds.length > 0;
   // A partial run that read the whole listing only lacks some invoice pages (see its warning).
-  const status =
-    run.status === "partial" && run.coveredLocationIds.length > 0 ? { ...STATUS.partial, label: "Some invoice pages missing" } : STATUS[run.status];
+  const status = run.status === "partial" && readWholeListing ? { ...STATUS.partial, label: "Some invoice pages missing" } : STATUS[run.status];
   const { counts } = run;
   return (
     <article data-testid="sync-run" aria-label={`${run.connectionLabel} sync`} className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-sm">
@@ -92,13 +125,17 @@ function RunCard({ run }: { run: SyncRun }) {
         </Badge>
       </div>
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
-        <Item label="Kind">{MODE[run.mode]}</Item>
+        <Item label="Kind" testId="sync-run-mode">
+          {MODE[run.mode]}
+        </Item>
         <Item label="Sales dated">{formatDateRange(run.dateFrom, run.dateTo)}</Item>
         <Item label="Started">{formatClinicDateTime(run.startedAt)}</Item>
-        <Item label="Duration">{run.finishedAt ? formatDuration(run.finishedAt.getTime() - run.startedAt.getTime()) : "Still running"}</Item>
+        <Item label="Duration" testId="sync-run-duration">
+          {run.finishedAt ? formatDuration(run.finishedAt.getTime() - run.startedAt.getTime()) : "Still running"}
+        </Item>
         <Item label="Invoices read" testId="sync-run-seen">
           {formatCount(counts.invoicesSeen)}
-          <span className="text-muted-foreground"> ({formatCount(counts.pages)} {counts.pages === 1 ? "page" : "pages"})</span>
+          <span className="text-muted-foreground"> ({formatCount(counts.pages)} list {counts.pages === 1 ? "page" : "pages"})</span>
         </Item>
         <Item label="New" testId="sync-run-inserted">
           {formatCount(counts.inserted)}
@@ -111,18 +148,32 @@ function RunCard({ run }: { run: SyncRun }) {
         </Item>
         <Item label="Line items read" testId="sync-run-line-items">
           {formatCount(counts.lineItemsRead)} {counts.lineItemsRead === 1 ? "invoice" : "invoices"}
+          {counts.lineItemsSwept > 0 ? <span className="text-muted-foreground"> ({formatCount(counts.lineItemsSwept)} older)</span> : null}
         </Item>
         <Item label="Invoice pages missing" testId="sync-run-line-items-failed">
           {formatCount(counts.lineItemsFailed)}
+          {counts.lineItemsUnreadable > 0 ? (
+            <span className="text-muted-foreground" data-testid="sync-run-line-items-unreadable">
+              {" "}
+              (+{formatCount(counts.lineItemsUnreadable)} older unreadable)
+            </span>
+          ) : null}
         </Item>
         <Item label="Lines ≠ invoice net" testId="sync-run-line-gaps">
           {formatCount(counts.lineItemGaps)} {counts.lineItemGaps === 1 ? "invoice" : "invoices"}
         </Item>
       </dl>
-      {run.status === "partial" && run.checkpoint && run.coveredLocationIds.length === 0 ? (
+      {run.chainStartedAt ? (
+        <p className="text-muted-foreground" data-testid="sync-run-resumed">
+          Carried on from where an earlier run stopped; its data counts as of {formatClinicDateTime(run.chainStartedAt)}, when the first of
+          those runs started.
+        </p>
+      ) : null}
+      {run.status === "partial" && run.checkpoint && !readWholeListing ? (
         <p className="text-muted-foreground">
-          Stopped at its time limit at page {run.checkpoint.nextPage}; the next sync of these dates carries on from there (line items
-          still missing are read then).
+          Stopped at its time limit
+          {run.mode === "nightly" ? "" : ` at page ${run.checkpoint.nextPage}`}; the next {run.mode === "nightly" ? "nightly sync" : "sync of these dates"}{" "}
+          within a few hours carries on from there (line items still missing are read then).
         </p>
       ) : null}
       {counts.lineItemGaps > 0 ? (
