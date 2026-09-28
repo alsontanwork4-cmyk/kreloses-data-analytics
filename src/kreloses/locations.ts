@@ -1,5 +1,8 @@
 import { LayoutChanged } from "./errors";
+import { describeJsonShape, firstArray, firstIdentifier, firstString, isRecord } from "./json";
 import type { KrelosesSession } from "./session";
+
+export { describeJsonShape } from "./json";
 
 /** A Kreloses location (one clinic branch) that a login can see. */
 export interface KrelosesLocation {
@@ -69,55 +72,4 @@ export function parseLocations(payload: unknown): KrelosesLocation[] {
   // A working login always sees at least one location; none means the filter is not what we think.
   if (locations.length === 0) return fail("the Location filter lists no locations");
   return locations;
-}
-
-const SCHEMA_KEY = /^[A-Za-z_$][A-Za-z0-9_$]{0,40}$/;
-const MAX_SCHEMA_KEYS = 20;
-
-/**
- * The structure of a JSON value — keys and value types, never the values — for error reports
- * and the live diagnostic (which the owner pastes into a public issue). Arrays show their first
- * element and their length. An object is shown key by key only if it looks like a schema
- * (identifier-like keys, at most 20); anything else is a dictionary whose keys may be data —
- * staff, customer or branch names, emails, ids — and is shown as `{<n keys>: <shape of first value>}`.
- */
-export function describeJsonShape(value: unknown, depth = 0): string {
-  if (depth > 8) return "…";
-  if (value === null) return "null";
-  if (Array.isArray(value)) {
-    return value.length === 0 ? "[]" : `[${describeJsonShape(value[0], depth + 1)}] (${value.length})`;
-  }
-  if (isRecord(value)) {
-    const entries = Object.entries(value);
-    if (entries.length > MAX_SCHEMA_KEYS || entries.some(([key]) => !SCHEMA_KEY.test(key))) {
-      const first = entries[0];
-      const count = `<${entries.length} ${entries.length === 1 ? "key" : "keys"}>`;
-      return `{${count}${first ? `: ${describeJsonShape(first[1], depth + 1)}` : ""}}`;
-    }
-    return `{${entries.map(([key, inner]) => `${key}: ${describeJsonShape(inner, depth + 1)}`).join(", ")}}`;
-  }
-  return typeof value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function firstArray(record: Record<string, unknown>, keys: string[]): unknown[] | null {
-  for (const key of keys) if (Array.isArray(record[key])) return record[key] as unknown[];
-  return null;
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) if (typeof record[key] === "string") return record[key] as string;
-  return null;
-}
-
-function firstIdentifier(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string") return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return null;
 }

@@ -77,10 +77,31 @@ describe("live login diagnostic (redacted)", () => {
     const report = formatLoginDiagnostic(await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport } }));
     expect(report).toContain("Visible locations: 1");
     expect(report).toContain("Totals: {<3 keys>: number}");
-    expect(report).toContain("Customers: {<30 keys>: {Visits: number}}");
+    // A single-key object could be `{"Ong": 1}` as easily as `{"Visits": 1}`, so it is collapsed too.
+    expect(report).toContain("Customers: {<30 keys>: {<1 key>: number}}");
     for (const secret of ["Dr Real Person", "Nurse Someone", "owner@clinic.example", "Customer0", "Customer29"]) {
       expect(report).not.toContain(secret);
     }
+  });
+
+  it("collapses objects whose values all share one shape, even when their keys look like identifiers", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.url.pathname === "/Report/GetFilter"
+        ? Response.json({
+            Filters: [{ Name: "Location", Options: [{ Value: "1101", Text: "Branch North" }] }],
+            // Single-word names used as dictionary keys look exactly like schema keys.
+            Staff: { Ong: 1 },
+            Doctors: { Tan: { Visits: 3, Active: true }, Lim: { Visits: 1, Active: false } },
+            Nested: { Ong: { Tan: 5 } },
+          })
+        : undefined,
+    );
+    const report = formatLoginDiagnostic(await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport } }));
+    expect(report).toContain("Staff: {<1 key>: number}");
+    expect(report).toContain("Doctors: {<2 keys>: {Visits: number, Active: boolean}}");
+    expect(report).toContain("Nested: {<1 key>: {<1 key>: number}}");
+    for (const name of ["Ong", "Tan", "Lim"]) expect(report).not.toContain(name);
   });
 
   it("does not leak names through the shape when GetFilter's layout changed", async () => {
