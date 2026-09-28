@@ -22,8 +22,10 @@ lines carry that name — and so every figure — is still resolved at query tim
 The table is derived and kept current by its only writer, `src/items/store.ts`: a rule or
 assignment change and the recompute of every name happen in one transaction (so history follows the
 change the moment it commits); the transaction that stores an invoice's lines classifies names it
-has not seen; each sync run first catches up any name stored without a row (e.g. lines synced
-before this table existed). Writers take one transaction-level advisory lock before reading the
+has not seen; each sync run first recomputes every name under the current rules, writing only what
+changed — which catches names stored without a row (e.g. lines synced before this table existed) and
+rule changes made outside the app, such as a migration adjusting seed rules (SQL cannot run the
+matcher, so such a change shows from the next sync). Writers take one transaction-level advisory lock before reading the
 rules, so a sync cannot commit a classification computed from rules a concurrent change has just
 replaced (a transaction-level lock also works through Supabase's transaction pooler, unlike the
 session lock ADR 0004 rejects). A name that has no row anyway counts as `unmapped` in

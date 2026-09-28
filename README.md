@@ -734,9 +734,9 @@ shared fixture set: `syntheticSales([{ saleId, branch: "north" | "south", at: "2
 customer, status?, page?, lines: [{ name, amount, staff, itemType?, quantity?, unitPrice? }] }])` →
 `{ rows, overviews }` (`src/kreloses/testing/synthetic-sales.ts`; a line is one unit at `amount` unless
 it gives `quantity` + `unitPrice`) → `createSyncHarness(sql, { fake: { saleList: { rows }, saleOverviews: overviews } })`.
-#9: every run (manual, nightly and its sweep) first classifies item names stored without a
-service-mix classification (`classifyUnclassifiedItems`, in `runSync`), and `saveInvoiceLines`
-classifies new item names in its transaction (`classifyItemNames`) — see
+#9: every run (manual, nightly and its sweep) first recomputes every item name's service-mix
+classification under the current rules (`reclassifyAllItems`, in `runSync`; writes only what
+changed), and `saveInvoiceLines` classifies new item names in its transaction (`classifyItemNames`) — see
 [Item groups](#item-groups-and-service-mix-srcitems-9).
 
 ### Analytics Service (`src/analytics/`)
@@ -984,23 +984,32 @@ procedure ⇒ surgery. Unmapped / no-item / pending rows have every flag false.
   assignment change (`addItemRule`, `deleteItemRule`, `assignItem`, `clearItemAssignment`) recomputes
   every known name in the same transaction, so every figure over all history follows at commit;
   `saveInvoiceLines` calls `classifyItemNames(tx, names)` for new names; `runSync` first runs
-  `classifyUnclassifiedItems(sql)` (catch-up). Writers take
+  `reclassifyAllItems(sql)`: every name recomputed under the rules as they are now, writing only rows
+  that change (names stored without a row, and rule changes made outside the app). **A migration that
+  adjusts seed rules** (plain SQL: it cannot run the matcher) changes only `source = 'seed'` rules,
+  by their exact match type + text, never by id, adds rules with `on conflict (match_type, pattern)
+  do nothing`, leaves `item_assignments` alone, and does not touch `item_classifications`: the change
+  shows from the next sync run (e.g. `…_item_group_seed_refinements.sql`, tested in
+  `src/items/seed-refinements-migration.test.ts`). Writers take
   `pg_advisory_xact_lock(hashtext('item_classifications'))`. A name with no row counts as
   `unmapped` in `revenueFacts` (its revenue is never lost). Anything else that inserts
   `invoice_lines` (e.g. a #6 re-credit step) should call `classifyItemNames` in its transaction too.
 - **Seed rules**: from the spec's Surgery / Consult definitions plus conservative common vet names
-  for the other groups. Priorities: 99 leave unmapped (`%cancel%`; removing stitches / sutures /
-  a drain, cast, bandage, splint or tick) · 98 consult (`%consult%`: "Spay consult", "Vaccination &
+  for the other groups. Priorities: 99 leave unmapped (`%cancel%`; removing the stitches / sutures /
+  a drain, cast, bandage, splint or tick itself — "Stitch removal", "Removal of cast", but not
+  "Castration - cryptorchid (testicle removal)" or "Mass removal with stitching") · 98 consult (`%consult%`: "Spay consult", "Vaccination &
   consultation"; the TCVM exam) · 96 exceptions (post-op wording only — surgery follow-up / recheck /
-  review, post-op check / visit / review, spay / neuter check, wound check, check-up → Consult, so
+  review, post-op check / visit / review, the spay / neuter check itself (`spay check%`, `%spay
+  recheck%`, … — "Spay + pre-op check" stays the operation), wound check, check-up → Consult, so
   "Follow-up X-ray" stays Diagnostics and "Follow up vaccination" a vaccine; pre-anaesthetic and
   heartworm tests → Diagnostics; heartworm treatment → Hospital & treatment; a scaling under
   anaesthesia → Preventive dental scaling, NOT a surgery line; drops / anaesthetic creams →
   Medicines; flea comb and the vaccine card / certificate / book / record as a phrase → Retail &
   other ("Vaccination - Rabies (with certificate)" stays a vaccine); the surgical pack /
-  consumables itself (`surgery pack%`, not "Surgery - Spay package") → Surgery but not an
-  operation) · 95 a generic `%review%` → leave unmapped · 92 operations named by what is removed
-  (mass, tumour, lump, foreign body) · 91 operations (the SURGERY service, `surgery %`, named procedures; C-section anchored as a word) ·
+  consumables itself (`surgery pack` alone or followed by a space or "/", not "Surgery package" or
+  "Surgery - Spay package") → Surgery but not an operation) · 95 a generic `%review%` → leave
+  unmapped · 94 flushing a foreign body → Hospital & treatment · 93 a foreign body in an eye or ear
+  → leave unmapped · 92 operations named by what is removed (mass, tumour, lump, foreign body) · 91 operations (the SURGERY service, `surgery %`, named procedures; C-section anchored as a word) ·
   90 sedation / anaesthesia (surgery, not an operation — "Sedation for X-ray" too, per the spec) ·
   80 preventive · 60 diagnostics, rehab & TCVM · 50 hospital & treatment · 40 medicines · 30 retail;
   owner rules default to 100. Every probe name is pinned in `src/items/store.test.ts`. The owner's

@@ -26,8 +26,10 @@ import type { JsonValue, Queryable, Sql } from "@/db/sql";
  * - every rule / assignment change: the change and a recompute of EVERY known name happen in one
  *   transaction, so all history follows the change the moment it commits (spec story 26);
  * - the Sync Engine: `classifyItemNames` inside the transaction that stores an invoice's lines
- *   (new names only), and `classifyUnclassifiedItems` once per run (a catch-up for names stored
- *   any other way, e.g. before this table existed).
+ *   (new names only), and `reclassifyAllItems` once per run: every name recomputed under the rules
+ *   as they are now, writing only what changed. That catches names stored any other way (e.g.
+ *   before this table existed) and rule changes made outside the app — a migration that adjusts
+ *   seed rules is plain SQL and cannot run the matcher, so its change shows from the next sync run.
  *
  * Writers take one advisory transaction lock (`LOCK_KEY`) before reading the rules, so a sync that
  * classifies a new name can never commit a classification computed from rules that a concurrent
@@ -95,9 +97,12 @@ export async function loadItemClassifier(sql: Queryable): Promise<(name: string)
   return createItemClassifier(rules, assignments);
 }
 
-/** Writes classifications for `names`: `replace` = recompute existing rows; otherwise new names only. */
-async function writeClassifications(sql: Queryable, names: readonly string[], mode: "replace" | "insert_missing"): Promise<void> {
-  if (names.length === 0) return;
+/**
+ * Writes classifications for `names`: `replace` = recompute existing rows; otherwise new names only.
+ * Returns how many rows it inserted or changed.
+ */
+async function writeClassifications(sql: Queryable, names: readonly string[], mode: "replace" | "insert_missing"): Promise<number> {
+  if (names.length === 0) return 0;
   const classify = await loadItemClassifier(sql);
   const rows = names.map((name) => {
     const match = classify(name);
@@ -127,9 +132,9 @@ async function writeClassifications(sql: Queryable, names: readonly string[], mo
     order by r.item_name
   `;
   if (mode === "insert_missing") {
-    await sql`${insert} on conflict (item_name) do nothing`;
+    return (await sql`${insert} on conflict (item_name) do nothing`).count;
   } else {
-    await sql`
+    const written = await sql`
       ${insert}
       on conflict (item_name) do update set
         item_key = excluded.item_key,
@@ -145,6 +150,7 @@ async function writeClassifications(sql: Queryable, names: readonly string[], mo
         is distinct from (excluded.item_key, excluded.mix_group, excluded.is_surgery, excluded.is_consult, excluded.is_vaccine,
           excluded.is_dental_scaling, excluded.is_procedure, excluded.source, excluded.rule_id)
     `;
+    return written.count;
   }
 }
 
@@ -171,34 +177,26 @@ export async function classifyItemNames(tx: Queryable, names: readonly string[])
 }
 
 /**
- * Classifies every sold-line item name that has no classification yet (one transaction); returns
- * how many it added. The Sync Engine runs it once per run.
+ * Recomputes every item name (sold lines and existing rows) under the rules and assignments as they
+ * are now, in one transaction, writing only rows that change; returns how many it wrote. The Sync
+ * Engine runs it once per run, so names stored without a classification and rule changes made
+ * outside the app (a seed-rule migration) take effect at the next sync.
  */
-export async function classifyUnclassifiedItems(sql: Sql): Promise<number> {
+export async function reclassifyAllItems(sql: Sql): Promise<number> {
   return sql.begin(async (tx) => {
     await lock(tx);
-    const names = await tx<{ itemName: string }[]>`
-      select distinct l.item_name from invoice_lines l
-      where l.item_type <> ${DISCOUNT_ITEM_TYPE}
-        and not exists (select 1 from item_classifications k where k.item_name = l.item_name)
-    `;
-    await writeClassifications(
-      tx,
-      names.map((row) => row.itemName),
-      "insert_missing",
-    );
-    return names.length;
+    return reclassifyAll(tx);
   });
 }
 
-/** Recomputes every known name under the current rules and assignments. Call inside the change's transaction. */
-async function reclassifyAll(tx: Queryable): Promise<void> {
+/** Recomputes every known name under the current rules and assignments. Call inside the change's transaction (holding the lock). */
+async function reclassifyAll(tx: Queryable): Promise<number> {
   const names = await tx<{ itemName: string }[]>`
     select item_name from item_classifications
     union
     select distinct item_name from invoice_lines where item_type <> ${DISCOUNT_ITEM_TYPE}
   `;
-  await writeClassifications(
+  return writeClassifications(
     tx,
     names.map((row) => row.itemName),
     "replace",
