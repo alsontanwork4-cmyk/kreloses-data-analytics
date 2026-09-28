@@ -118,9 +118,11 @@ test.describe("access control", () => {
     await expect(nav.getByRole("link", { name: "Connections" })).toHaveCount(0);
     await expect(nav.getByRole("link", { name: "Settings" })).toHaveCount(0);
 
-    await page.goto("/connections");
-    await expect(page).toHaveURL("/forbidden");
-    await expect(page.getByText("Only the clinic owner can open that page")).toBeVisible();
+    for (const path of ["/connections", "/settings", "/settings/users"]) {
+      await page.goto(path);
+      await expect(page, path).toHaveURL("/forbidden");
+      await expect(page.getByText("Only the clinic owner can open that page")).toBeVisible();
+    }
   });
 
   test("someone removed from the allow-list loses access on their next page view", async ({ page }) => {

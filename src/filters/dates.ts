@@ -83,3 +83,18 @@ export function formatDateRange(dateFrom: IsoDate, dateTo: IsoDate): string {
     ? formatIsoDate(dateFrom)
     : `${formatIsoDate(dateFrom)} – ${formatIsoDate(dateTo)}`;
 }
+
+const clinicTimeFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: CLINIC_TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** An instant (e.g. a `timestamptz`) as clinic-local `'28 Sep 2026, 09:05'` (24-hour). */
+export function formatClinicDateTime(instant: Date): string {
+  const parts = Object.fromEntries(
+    clinicTimeFormat.formatToParts(instant).map((part) => [part.type, part.value]),
+  );
+  return `${formatIsoDate(clinicToday(instant))}, ${parts.hour}:${parts.minute}`;
+}

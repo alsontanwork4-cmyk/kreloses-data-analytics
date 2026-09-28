@@ -1,9 +1,10 @@
 "use server";
 
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 
 import { lookupAccess } from "@/auth/access";
-import { normaliseEmail } from "@/auth/allow-list";
+import { isValidEmail, normaliseEmail } from "@/auth/allow-list";
+import { requestOrigin, sendSignInLink } from "@/auth/magic-link";
 import { NEXT_PATH_COOKIE } from "@/auth/next-path-cookie";
 import { LOGIN_ERROR_MESSAGES, safeNextPath } from "@/auth/paths";
 import { createSupabaseServerClient } from "@/auth/supabase";
@@ -12,8 +13,6 @@ export type MagicLinkState =
   | { status: "idle" }
   | { status: "sent"; email: string }
   | { status: "error"; message: string; email: string };
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Sends a magic link, but only to allow-listed emails: anyone else is refused before Supabase is
@@ -24,7 +23,7 @@ export async function requestMagicLink(
   formData: FormData,
 ): Promise<MagicLinkState> {
   const email = normaliseEmail(String(formData.get("email") ?? ""));
-  if (!EMAIL.test(email)) {
+  if (!isValidEmail(email)) {
     return { status: "error", email, message: "Enter a valid email address." };
   }
 
@@ -33,19 +32,11 @@ export async function requestMagicLink(
     return { status: "error", email, message: LOGIN_ERROR_MESSAGES["not-invited"] };
   }
 
-  const requestHeaders = await headers();
-  const origin =
-    requestHeaders.get("origin") ??
-    `${requestHeaders.get("x-forwarded-proto") ?? "http"}://${requestHeaders.get("host")}`;
-
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    // The email template appends ?token_hash=…&type=email to this URL (see supabase/templates).
-    options: { emailRedirectTo: `${origin}/auth/confirm`, shouldCreateUser: true },
-  });
-  if (error) {
-    return { status: "error", email, message: `Could not send the sign-in link: ${error.message}` };
+  // The cookie-bound client, so the PKCE fallback (`?code=`) keeps its verifier in this browser.
+  const origin = await requestOrigin();
+  const sent = await sendSignInLink(await createSupabaseServerClient(), email, origin);
+  if (!sent.ok) {
+    return { status: "error", email, message: `Could not send the sign-in link: ${sent.message}` };
   }
 
   const next = safeNextPath(formData.get("next"));

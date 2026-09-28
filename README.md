@@ -32,7 +32,7 @@ npm run dev -- --port 3000                     # parallel worktrees: 3000 + issu
 
 Sign in: open <http://localhost:3000>, enter `OWNER_EMAIL`, then open the local mail catcher
 (Mailpit) at <http://127.0.0.1:54324> and click the link. Any other email is refused unless it is
-on the allow-list (`app_users`).
+on the allow-list (`app_users`); invite managers from Settings → Users.
 
 Re-run `npm run db:create-dev -- kx_dev_you` after pulling new migrations (idempotent), or add
 `--reset` to start from an empty database. `npm run db:drop-dev -- kx_dev_you` removes it.
@@ -79,10 +79,12 @@ src/
     (dashboard)/  Signed-in pages; each calls requireUser()/requireRole()
     login/, auth/ Public sign-in flow (magic link request, /auth/confirm, /auth/sign-out)
     api/          Route handlers; each wrapped in withUser()/withRole()
-  auth/           Allow-list, roles, session helpers, the proxy gate
+  auth/           Allow-list (+ inviting/removing managers), roles, session helpers, sign-in
+                  emails, the proxy gate
   db/             DB client (getDb), connection options, migration runner, test harness
   filters/        The shared global filter (URL <-> {dateFrom, dateTo, branchIds?, doctorIds?})
-  components/     shell/ (app shell, nav config, PageShell), filter-bar/, empty-state, ui/ (shadcn)
+  components/     shell/ (app shell, nav config, PageShell), settings/ (tabs, SettingsSection),
+                  filter-bar/, empty-state, ui/ (shadcn)
   kreloses/       Kreloses Reader — the ONLY code that knows Kreloses exists (later)
   sync/           Sync Engine (later)
   attribution/    Attribution & Rules — pure functions (later)
@@ -131,8 +133,25 @@ Enforcement happens twice:
 
 `user` is `{ email, role }` (`AppUser` in `@/auth/roles`); `hasRole(user, "owner")` checks a role
 (owners pass every check). Allow-list data functions (`findAppUser`, `addAppUser`,
-`removeAppUser`, `upsertOwner`, `checkAccess`) live in `@/auth/allow-list` and take a `sql`
-connection so they can be tested against a throwaway database.
+`removeAppUser`, `upsertOwner`, `checkAccess`, `listAllowList`, `recordSignIn`, plus
+`normaliseEmail` / `isValidEmail`) live in `@/auth/allow-list` and take a `sql` connection so they
+can be tested against a throwaway database.
+
+**Managing the allow-list** (Settings → Users, owner only) goes through `@/auth/managers`:
+`inviteManager({ sql, actor, sendSignInLink }, email)` and
+`removeManager({ sql, actor, ownerEmail }, email)`. `actor` is the caller's `Access`; both refuse
+anyone but an owner themselves (`{ status: "forbidden" }`), so they are safe even if a caller's
+own guard is missing. Rules: an invite only ever adds a **manager** (an email already on the list
+is left alone, so owners are never demoted); only managers can be removed — never yourself, the
+`OWNER_EMAIL` owner or any other owner. A removed manager is refused on their next request (the
+proxy re-checks the allow-list, ADR 0002); their Supabase session is not revoked, it just stops
+working. `app_users.invited_by` records the inviting owner and `app_users.last_sign_in_at` is set
+by `/auth/confirm` each time a magic link is opened.
+
+**Sign-in emails** have one code path: `sendSignInLink(supabase, email, origin)` in
+`@/auth/magic-link`. The login page passes its cookie-bound client; an invite uses
+`signInLinkSenderForInvites()`, which sends through a cookie-less client so the owner's own session
+is untouched. If the invitation email fails the invite still stands and the page says so.
 
 Public routes are listed in `PUBLIC_PATHS` (`src/auth/paths.ts`): today `/login` and `/auth/*`.
 Anything added there (e.g. a future `/api/mcp` with a bearer token, `/api/cron` with a secret) is
@@ -231,7 +250,9 @@ Each run is self-contained and parallel-safe: its own database (`kx_e2e_…`, cr
 setup, dropped in teardown), its own `next dev` on a port derived from the worktree path (override
 with `E2E_PORT`) building into `.next-e2e/` (so it doesn't disturb your dev server), and unique
 synthetic emails. It signs in through the real magic-link flow by reading the email from Mailpit
-(`e2e/support/mailpit.ts`, `signIn(page, email)` in `e2e/support/auth.ts`). The owner is
+(`e2e/support/mailpit.ts`, `signIn(page, email)` in `e2e/support/auth.ts`; it retries when
+Supabase rate-limits links to the same address, 1s locally, and only accepts an email that arrived
+after its own request). The owner is
 `run.ownerEmail` (seeded by the app from `OWNER_EMAIL`), a manager `run.managerEmail`; use
 `withRunDatabase(sql => …)` to put data into the run's database. Nav-driven tests read
 `NAV_ITEMS`, so new pages are covered automatically; extend the suite for your ticket's flow.
@@ -272,6 +293,18 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   with, so labels and data never disagree). Pass `filterState.filter` to the Analytics Service.
   Empty states: `<EmptyState>` and `<NoSalesYet user filter what>` in `src/components/empty-state.tsx`.
 - Nav links keep the current filter params, so the date range and branch survive page switches.
+- **Settings is a hub**: `src/app/(dashboard)/settings/layout.tsx` renders the "Settings" `h1` and
+  a tab per settings page from `SETTINGS_NAV_ITEMS` (also in `nav-config.ts`: `href`, `label`,
+  optional minimum `role`); `/settings` redirects to the first tab the user's role may see
+  (`/forbidden` if none), and the sidebar's Settings link goes straight there (the `landing`
+  option on its `NAV_ITEMS` entry), so clicks don't redirect. To add a settings page (#5 doctors, #9 items — their slots are reserved
+  as comments in the list): create `src/app/(dashboard)/settings/<name>/page.tsx` that calls
+  `requireRole(...)` and returns `<SettingsSection title description>…</SettingsSection>`
+  (`@/components/settings/settings-section`, an `h2` — don't render another `PageShell`), then
+  replace your slot's comment with its entry. The tabs and the e2e suite (`e2e/users.spec.ts`
+  visits every tab) pick it up.
+- Timestamps for display: `formatClinicDateTime(date)` (`@/filters`) → `'28 Sep 2026, 09:05'` in
+  the clinic's time zone.
 - Mobile first (the owner checks numbers on a phone): the shell switches to a top bar + slide-in
   menu below `md`, and the e2e suite asserts no horizontal scrolling at phone width.
 - UI components: shadcn/ui (`npx shadcn@latest add <component>` → `src/components/ui/`), Tailwind

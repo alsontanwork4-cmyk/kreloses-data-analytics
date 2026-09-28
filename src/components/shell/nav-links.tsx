@@ -7,7 +7,7 @@ import { hasRole, type Role } from "@/auth/roles";
 import { filterSearchParamsOnly, withSearchParams } from "@/filters";
 import { cn } from "@/lib/utils";
 
-import { NAV_ITEMS, NAV_SECTIONS, type NavSection } from "./nav-config";
+import { NAV_ITEMS, NAV_SECTIONS, navLinkHref, type NavSection } from "./nav-config";
 
 /**
  * Sidebar / mobile-menu links. Links keep the current global filter, so switching pages keeps
@@ -30,12 +30,13 @@ export function NavLinks({ role, onNavigate }: { role: Role; onNavigate?: () => 
           <ul className="flex flex-col gap-0.5">
             {items
               .filter((item) => item.section === section)
-              .map(({ href, label, icon: Icon }) => {
+              .map((item) => {
+                const { href, label, icon: Icon } = item;
                 const active = pathname === href || pathname.startsWith(`${href}/`);
                 return (
                   <li key={href}>
                     <Link
-                      href={withSearchParams(href, filterParams)}
+                      href={withSearchParams(navLinkHref(item, role), filterParams)}
                       onClick={onNavigate}
                       aria-current={active ? "page" : undefined}
                       className={cn(

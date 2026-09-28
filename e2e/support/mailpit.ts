@@ -21,11 +21,24 @@ export async function countEmailsTo(email: string): Promise<number> {
   return (await search(email)).length;
 }
 
-/** Waits for a message to `email` received after `since`, and returns its sign-in link. */
-export async function waitForMagicLink(email: string, since: Date, timeoutMs = 20_000): Promise<string> {
+/** Ids of the messages already sent to `email` (pass to `waitForMagicLink` as `ignoreIds`). */
+export async function emailIdsTo(email: string): Promise<Set<string>> {
+  return new Set((await search(email)).map((message) => message.ID));
+}
+
+/**
+ * Waits for a message to `email` received after `since` (and not in `ignoreIds`, which rules out
+ * an older link that arrived just before `since`), and returns its sign-in link.
+ */
+export async function waitForMagicLink(
+  email: string,
+  since: Date,
+  { ignoreIds, timeoutMs = 20_000 }: { ignoreIds?: ReadonlySet<string>; timeoutMs?: number } = {},
+): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const fresh = (await search(email))
+      .filter((message) => !ignoreIds?.has(message.ID))
       .filter((message) => new Date(message.Created).getTime() >= since.getTime() - 1000)
       .sort((a, b) => b.Created.localeCompare(a.Created));
     if (fresh[0]) {

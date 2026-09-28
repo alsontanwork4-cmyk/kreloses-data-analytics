@@ -11,13 +11,14 @@ test.describe("dashboard shell", () => {
     await signIn(page, run.ownerEmail);
   });
 
-  test("every nav page renders the shell and an empty state", async ({ page }) => {
+  test("every nav page renders in the shell; analytics pages show an empty state", async ({ page }) => {
     const nav = page.getByRole("navigation", { name: "Main" });
     for (const item of NAV_ITEMS) {
       await nav.getByRole("link", { name: item.label, exact: true }).click();
-      await expect(page).toHaveURL(item.href);
+      // A section such as Settings may open one of its sub-pages.
+      await expect(page).toHaveURL((url) => url.pathname === item.href || url.pathname.startsWith(`${item.href}/`));
       await expect(page.getByRole("heading", { level: 1, name: item.label })).toBeVisible();
-      await expect(page.getByTestId("empty-state")).toBeVisible();
+      if (item.section === "analytics") await expect(page.getByTestId("empty-state")).toBeVisible();
       await expect(nav.getByRole("link", { name: item.label, exact: true })).toHaveAttribute(
         "aria-current",
         "page",
