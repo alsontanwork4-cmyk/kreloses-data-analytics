@@ -106,7 +106,7 @@ test.describe("Line items → Doctors page", () => {
       "",
     ]);
 
-    // A doctor opens their detail page (a placeholder until #10), keeping the filter.
+    // A doctor opens their detail page (e2e/trends.spec.ts checks its figures), keeping the filter.
     await ranking(page).getByRole("link", { name: "Dr Alpha Anderson" }).first().click();
     await expect(page).toHaveURL(/\/doctors\/\d+\?from=2026-09-01&to=2026-09-30$/);
     await expect(page.getByRole("heading", { level: 1, name: "Dr Alpha Anderson" })).toBeVisible();

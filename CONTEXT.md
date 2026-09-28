@@ -203,6 +203,24 @@ invoice's net by, with no discount line saying why, shows as the **other differe
 net** (it can be negative), so the types add up to the total discount.
 _Avoid_: Promo, coupon (Kreloses may call them vouchers; the name is shown as written)
 
+**Monthly trend**:
+A doctor's figure (revenue or AOV per customer; surgery and consult revenue once items are grouped)
+for each clinic calendar month the date range overlaps, up to the current month. AOV per customer in
+a month counts that month's customers only.
+
+**Partial month**:
+A month whose figures do not cover all of it: the current month (so far), or a month the date range
+starts or ends inside.
+
+**Year on year**:
+A doctor's revenue and AOV per customer per calendar year, per branch, from the first year with
+sales to the current one, whatever the date range. Each whole year is compared with the previous
+year; the current year (1 January to today) with the same dates last year, never with a whole year.
+
+**Doctor detail**:
+One doctor's page: their ranking figures for the global filter, their monthly trend and their
+branch split. Only doctors have one; other staff and generic accounts do not.
+
 **Change**:
 A KPI minus its value in a comparison period; as a percentage, the change ÷ the comparison value,
 to one decimal place, and none when the comparison value is zero.

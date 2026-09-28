@@ -705,6 +705,45 @@ split); items per invoice = their item lines ÷ their invoices; share = revenue 
 `comparisonPeriods()` (previous = same length immediately before; last year = same dates, 29 Feb →
 28 Feb). The Seam 1 test (`overview.test.ts`) documents the hand-computed fixture totals.
 
+#### Trends and doctor detail (#10, `src/analytics/trends.ts`, `doctor-detail.ts`)
+
+```ts
+getMonthlyTrends(sql, filter, { now? }): Promise<MonthlyTrends>
+  // { period, months: TrendMonth[], doctors: DoctorTrend[] (kind doctor with credited lines in the range; by total revenue desc, then name) }
+  // TrendMonth = { month: "YYYY-MM", dateFrom, dateTo (the month's days in the range), partial, partialReason: "current_month" | "cut_by_range" | null }
+  // DoctorTrend = { staffId, name, source, active, total: TrendFigures (whole range), points: (TrendFigures & { month })[] (one per month, zeros filled) }
+  // TrendFigures = { revenue, invoices, customers, aovPerCustomer: Money | null, surgeryRevenue: Money | null, consultRevenue: Money | null }
+trendMonths(period, today): TrendMonth[]     // the months a range overlaps, up to the current month (later ones are dropped)
+getYearOnYear(sql, filter, { now? }): Promise<YearOnYear>
+  // { years: YearColumn[] (first year with a sale in the branches → current year; the DATE RANGE IS IGNORED),
+  //   rows: YearOnYearRow[] (doctors by name; an all-branches row (branchId null) when they have revenue at 2+ branches, then each branch) }
+  // YearColumn = { year, dateFrom, dateTo, partial (current year: 1 Jan → today), comparedWith: previous whole year | same dates last year (partial) | null (first) }
+  // YearOnYearCell = { year, revenue, invoices, customers, aovPerCustomer, base: YearFigures | null, revenueChangePercent, aovChangePercent }
+getDoctorDetail(sql, staffId, filter, { now? }): Promise<DoctorDetail>
+  // { status: "not_found" } | { status: "not_a_doctor", staff: { staffId, name, kind } }
+  // | { status: "ok", doctor, period, totalRevenue, figures: StaffFigures (= their getDoctorRanking row), branches: BranchFigures[],
+  //     months, monthly: TrendPoint[], pendingLineItems }   — the filter's own doctorIds are ignored (the view is for staffId)
+TREND_MEASURES, availableTrendMeasures()     // revenue, aovPerCustomer (+ surgeryRevenue, consultRevenue once item groups exist)
+ITEM_GROUP_MEASURES_AVAILABLE                // false until #9's surgery/consult flags are on revenueFacts
+```
+
+- Months are clinic (KL) calendar months of `sale_date`: a sale at 00:30 KL on the 1st is the new
+  month's. A month is **partial** when it is the current month (and the range reaches today) or the
+  range cuts it; months after the current one are not listed. AOV per customer in a month = the
+  doctor's revenue that month ÷ their distinct customers that month.
+- Only doctors get series/rows. Pending sales ("line items not synced yet") are credited to nobody,
+  so they are in no series: the Trends page always shows `<PendingLineItemsNote doctorsOnly>`.
+- Year on year: each whole year against the previous one; the current year (1 Jan → today) against
+  the same dates last year (`addYears`, so 29 Feb → 28 Feb), never against a whole year.
+- **Wiring surgery / consult (#9):** set `ITEM_GROUP_MEASURES_AVAILABLE = true` in `trends.ts` and
+  check the flag column names in `itemGroupRevenue()` (`f.surgery`, `f.consult`) against #9's
+  `revenueFacts`. The Trends page's measure switch (`?measure=surgery|consult`) and the figures
+  (`surgeryRevenue` / `consultRevenue`, otherwise null) follow; add a test with hand-computed
+  surgery/consult months.
+- Seam 1 test: `trends.test.ts` adds its own synthetic sales (`src/analytics/__fixtures__/trend-sales.json`:
+  2024 → early 2026, sales at 23:30 KL on 31 Dec and 00:30 KL on the 1st) to the shared fixtures in
+  its own fake Kreloses, and documents every hand-computed month and year.
+
 ### Global filter
 
 The one filter every dashboard page and Analytics Service query takes lives in `@/filters`
@@ -763,13 +802,21 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
   menu below `md`, and the e2e suite asserts no horizontal scrolling at phone width.
 - Doctors (`/doctors`, #5): the ranking (`?split=branch` for the per-branch view — a page-specific
   param the filter bar keeps), a bar chart of revenue by doctor, the "not in the ranking" groups, and
-  each doctor linked to `/doctors/<staff id>` (a placeholder with the filter bar; #10 builds it).
+  each doctor linked to `/doctors/<staff id>` (the doctor detail page, below).
   Discounts (`/discounts`, #12): totals (discount, rate, invoices discounted), a bar chart of
   discount by doctor, the per-doctor table, the "not in the ranking" groups and the discount types
   (each a `<DataTable>` with CSV); sales with line items not synced yet are named in a note.
   Settings → Doctors (`/settings/doctors`, owner only): every name on lines with its match and
   revenue for the URL's period, a form to credit it to another staff member, and each staff
   member's kind; changes revalidate the whole dashboard.
+- Trends (`/trends`, #10): a line chart of each doctor's monthly figure (toggleable lines; clicking a
+  line or point opens the doctor), the measure switch (`?measure=aov`, page-specific; surgery and
+  consult once item groups exist), a branch switch (writes the global `?branch=`), the monthly
+  table and the year-on-year table (whole years; ignores the date range, keeps branch/doctor).
+- Doctor detail (`/doctors/<staff id>`, #10): `getDoctorDetail` → KPIs (the ranking's own figures),
+  monthly trend and branch split. An unknown id is a 404; a staff member of another kind gets a
+  "not a doctor" page. The page is for one doctor: the global doctor filter does not narrow it, and
+  picking a single other doctor in the filter bar redirects to that doctor's page.
 - UI components: shadcn/ui (`npx shadcn@latest add <component>` → `src/components/ui/`), Tailwind
   utilities, `cn()` from `@/lib/utils`, icons from `lucide-react`.
 
@@ -817,6 +864,12 @@ const columns: DataTableColumn<Row>[] = [
   dual axes. Height follows the rows; width the container (phone-friendly).
 - `<HorizontalBarChart data={[{ id, label, value, valueLabel }]} title valueName />` is the ranked
   single-series bar chart (Doctors page). Add new chart kinds next to it following the same rules.
+- `<LineTrendChart periods={[{ key, label, partial }]} series={[{ id, label, slot, href?, values, valueLabels }]} title valueName />`
+  (#10) is the over-time line chart: one line per series with a legend of toggle buttons (and an
+  "open" link per series) when there are several, hollow points for partial periods, clicking a
+  line/point goes to its `href` (points are `data-testid="trend-point"` with `data-series`), one
+  series = slot 1 with its last value labelled. `formatMonth("2026-09")` → `"Sep 2026"`
+  (`charts/month-label.ts`).
 
 ### MCP server (`src/mcp/`)
 
