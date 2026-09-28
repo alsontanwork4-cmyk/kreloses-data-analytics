@@ -24,6 +24,84 @@ import type { SyntheticSale } from "../../kreloses/testing/synthetic-sales";
  *   820019 18 Sep  S C13  Consultation (Charlie) 50 · Ultrasound (Charlie) 150   other staff: no doctor's consult
  *   820020 22 Sep  N C14  Surgery - Neuter (Alpha) 400 · Antibiotic tablets (Alpha) 30, product   no consult
  */
+/**
+ * SYNTHETIC edge cases of the attach-rate rules (July 2026, all Dr Alpha's), synced on their own by
+ * `src/analytics/upsell.test.ts` ("the documented rules"). "Mystery widget", "Zeta session" and
+ * "Doctor visit" match no seeded item rule (unmapped).
+ *
+ *   830001  6 Jul  N C21  Consultation 0.00 (FREE) · X-ray 100                          a free consult is a consult
+ *   830002  7 Jul  N C22  Consultation returned −1 × 80.00 · Antibiotic tablets 100, product   a returned consult is not
+ *   830003  8 Jul  N C23  Consultation 100 · Antibiotic tablets 50, product · 5% DISCOUNT (150.00)
+ *                         → both lines credited 0.00; the product still charged 50 on its own line
+ *   830004  9 Jul  S C24  Consultation 80 · Mystery widget 20, product · Zeta session 30, service   unmapped add-ons
+ *   830005 10 Jul  S C25  Doctor visit 60 · Blood test 90                               an unmapped "consult" is no consult
+ *   830006 13 Jul  N C26  Consultation 80 · Mystery widget 0.00, product                  a free unmapped add-on
+ */
+export const UPSELL_EDGE_CASES: readonly SyntheticSale[] = [
+  {
+    saleId: 830001,
+    branch: "north",
+    customer: 21,
+    at: "2026-07-06 10:00",
+    lines: [
+      { name: "Consultation", staff: "Dr Alpha", amount: "0.00" },
+      { name: "X-ray", staff: "Dr Alpha", amount: "100.00" },
+    ],
+  },
+  {
+    saleId: 830002,
+    branch: "north",
+    customer: 22,
+    at: "2026-07-07 10:00",
+    lines: [
+      { name: "Consultation", staff: "Dr Alpha", quantity: -1, unitPrice: "80.00", amount: "-80.00" },
+      { name: "Antibiotic tablets", staff: "Dr Alpha", amount: "100.00", itemType: 1 },
+    ],
+  },
+  {
+    saleId: 830003,
+    branch: "north",
+    customer: 23,
+    at: "2026-07-08 10:00",
+    lines: [
+      { name: "Consultation", staff: "Dr Alpha", amount: "100.00" },
+      { name: "Antibiotic tablets", staff: "Dr Alpha", amount: "50.00", itemType: 1 },
+      { name: "5% DISCOUNT", staff: null, amount: "-150.00", itemType: 55 },
+    ],
+  },
+  {
+    saleId: 830004,
+    branch: "south",
+    customer: 24,
+    at: "2026-07-09 10:00",
+    lines: [
+      { name: "Consultation", staff: "Dr Alpha", amount: "80.00" },
+      { name: "Mystery widget", staff: "Dr Alpha", amount: "20.00", itemType: 1 },
+      { name: "Zeta session", staff: "Dr Alpha", amount: "30.00" },
+    ],
+  },
+  {
+    saleId: 830005,
+    branch: "south",
+    customer: 25,
+    at: "2026-07-10 10:00",
+    lines: [
+      { name: "Doctor visit", staff: "Dr Alpha", amount: "60.00" },
+      { name: "Blood test", staff: "Dr Alpha", amount: "90.00" },
+    ],
+  },
+  {
+    saleId: 830006,
+    branch: "north",
+    customer: 26,
+    at: "2026-07-13 10:00",
+    lines: [
+      { name: "Consultation", staff: "Dr Alpha", amount: "80.00" },
+      { name: "Mystery widget", staff: "Dr Alpha", amount: "0.00", itemType: 1 },
+    ],
+  },
+];
+
 export const UPSELL_SCENARIO: readonly SyntheticSale[] = [
   {
     saleId: 820001,

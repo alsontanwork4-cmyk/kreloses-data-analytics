@@ -1,13 +1,14 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { useTestDatabase } from "@/db/testing";
+import { assignItem } from "@/items/store";
 import { SYNTHETIC_ACCOUNTS } from "@/kreloses/testing/fake-kreloses";
 import { syntheticSales } from "@/kreloses/testing/synthetic-sales";
 import { runSync } from "@/sync/engine";
 import { createSyncHarness, type SyncHarness } from "@/sync/test-support";
 
 import { getConsultAttachRates, getDoctorRanking, getItemsPerInvoiceTrend, METRIC_DEFINITIONS, UPSELL_METRICS, type AttachFigures, type AttachRateSet } from "./index";
-import { UPSELL_SCENARIO } from "./testing/upsell-scenario";
+import { UPSELL_EDGE_CASES, UPSELL_SCENARIO } from "./testing/upsell-scenario";
 
 /**
  * Seam 1 for the Upsell page (#14): the Sync Engine reads the hand-built sales of
@@ -241,7 +242,74 @@ describe("Analytics Service: consult attach rates and items per invoice over tim
   it("defines every upsell metric once, for the page and for Claude", () => {
     for (const name of UPSELL_METRICS) expect(METRIC_DEFINITIONS[name]).toMatch(/\w/);
     expect(METRIC_DEFINITIONS.attachRate).toMatch(/charged more than zero/i);
+    // The item-mapping rules Claude quotes: unmapped items count by type, never as diagnostics or as a consult.
+    expect(METRIC_DEFINITIONS.attachRate).toMatch(/unmapped item[^.]*never[^.]*diagnostics/i);
+    expect(METRIC_DEFINITIONS.consultInvoice).toMatch(/unmapped item[^.]*never[^.]*consult/i);
+    expect(METRIC_DEFINITIONS.attachRate).toMatch(/Settings → Items/);
     expect(METRIC_DEFINITIONS.consultInvoice).toMatch(/not synced yet/i);
+  });
+});
+
+/**
+ * The documented rules on their own sales (`UPSELL_EDGE_CASES`, July 2026, all Dr Alpha's):
+ *   consult invoices: 830001 (a FREE consult), 830003, 830004, 830006 = 4
+ *     not: 830002 (its only consult line is a return), 830005 (an unmapped item is never a consult line)
+ *   830001  X-ray                               diagnostics + second service
+ *   830003  Antibiotic tablets, credited 0.00   product: its own line charged 50.00 (the discount line took the credit)
+ *   830004  Mystery widget / Zeta session       unmapped: product and second service by ItemType, never diagnostics
+ *   830006  Mystery widget 0.00                 free → nothing
+ *   → diagnostics 1 (25.0) · products 2 (50.0) · second service 2 (50.0) · any 3 (75.0); own lines the same.
+ * Once the owner maps "Doctor visit" as a consult (Settings → Items), 830005 is a consult invoice with a
+ * Blood test: 5 consult invoices · diagnostics 2 (40.0) · products 2 (40.0) · second service 3 (60.0) · any 4 (80.0).
+ */
+describe("Analytics Service: the attach-rate rules (free and returned consults, discounted and unmapped add-ons)", () => {
+  const db = useTestDatabase();
+  const JULY = { dateFrom: "2026-07-01", dateTo: "2026-07-31" };
+
+  beforeAll(async () => {
+    const sales = syntheticSales(UPSELL_EDGE_CASES);
+    const h = createSyncHarness(db.sql, { fake: { saleList: { rows: sales.rows }, saleOverviews: sales.overviews } });
+    const connectionId = await h.connect(both, "Both branches");
+    expect(await runSync(h.deps(), connectionId, "manual", { dateRange: { from: "2026-07-01", to: "2026-07-31" } })).toMatchObject({
+      status: "succeeded",
+      counts: { invoicesSeen: 6, lineItemsRead: 6 },
+    });
+  });
+
+  it("the fixture is what the rules are about: a product credited 0.00 by an invoice discount, and unmapped items", async () => {
+    const credited = await db.sql<{ itemName: string; amount: string; creditedAmount: string }[]>`
+      select l.item_name, l.amount::text as amount, c.credited_amount::text as credited_amount
+      from credited_lines c join invoice_lines l on l.id = c.invoice_line_id join invoices i on i.id = c.invoice_id
+      where i.kreloses_sale_id = '830003' order by l.line_no
+    `;
+    expect(credited).toEqual([
+      { itemName: "Consultation", amount: "100.00", creditedAmount: "0.00" },
+      { itemName: "Antibiotic tablets", amount: "50.00", creditedAmount: "0.00" },
+    ]);
+    const unmapped = await db.sql<{ itemName: string; mixGroup: string; isConsult: boolean }[]>`
+      select item_name, mix_group, is_consult from item_classifications
+      where item_name in ('Mystery widget', 'Zeta session', 'Doctor visit') order by item_name
+    `;
+    expect(unmapped).toEqual([
+      { itemName: "Doctor visit", mixGroup: "unmapped", isConsult: false },
+      { itemName: "Mystery widget", mixGroup: "unmapped", isConsult: false },
+      { itemName: "Zeta session", mixGroup: "unmapped", isConsult: false },
+    ]);
+  });
+
+  it("a free consult makes a consult invoice, a returned one does not; a discounted-to-zero add-on counts; unmapped items count by ItemType, never as diagnostics", async () => {
+    const rates = await getConsultAttachRates(db.sql, JULY);
+    expect(rates.doctors.map((doctor) => [doctor.name, compact(doctor)])).toEqual([
+      ["Dr Alpha Anderson", { consults: 4, whole: [[1, 25], [2, 50], [2, 50], [3, 75]], own: [[1, 25], [2, 50], [2, 50], [3, 75]] }],
+    ]);
+  });
+
+  it("rates follow the owner's item mapping at once: an item mapped as a consult makes consult invoices", async () => {
+    expect(
+      await assignItem(db.sql, { itemKey: "Doctor visit", classification: { group: "consult", surgery: false, consult: true, vaccine: false, dentalScaling: false, procedure: false } }),
+    ).toMatchObject({ status: "saved" });
+    const rates = await getConsultAttachRates(db.sql, JULY);
+    expect(rates.doctors.map(compact)).toEqual([{ consults: 5, whole: [[2, 40], [2, 40], [3, 60], [4, 80]], own: [[2, 40], [2, 40], [3, 60], [4, 80]] }]);
   });
 });
 

@@ -345,16 +345,20 @@ anywhere, so the branches' figures add up to the total.
 **Consult invoice**:
 For a doctor, an active invoice in the period with at least one consult line credited to them (sold:
 quantity above zero, so a free consult counts and a returned one does not). An invoice with consult
-lines of two doctors is a consult invoice of each. Sales whose line items are not synced yet cannot
-be classified and are left out (pages say how many).
+lines of two doctors is a consult invoice of each. An unmapped item is never a consult line, whatever
+its name, so it never makes a consult invoice until the owner maps it as a consult (Settings → Items;
+past periods follow at once). Sales whose line items are not synced yet cannot be classified and are
+left out (pages say how many).
 _Avoid_: Consultation (that is the item), visit (see Service visit)
 
 **Add-on**:
 A line on a consult invoice that is not a consult line and charged more than zero (its own amount,
-after any item discount): a free add-on, a returned item or a discount line never counts. Kinds:
-*diagnostics* (an item in the Diagnostics group), *product* (Kreloses item type product) and *second
-service* (a service other than a consult). The kinds overlap: an X-ray service is diagnostics and a
-second service.
+after any item discount): a free add-on, a returned item or a discount line never counts, while one
+whose credited amount an invoice discount took to zero still does. Kinds: *diagnostics* (an item in
+the Diagnostics group), *product* (Kreloses item type product) and *second service* (a service other
+than a consult). The kinds overlap: an X-ray service is diagnostics and a second service. An unmapped
+item counts as a product or second service by its item type but never as diagnostics, so the rates
+move when the owner maps items in Settings → Items.
 _Avoid_: Upsell item, extra
 
 **Attach rate**:

@@ -96,12 +96,15 @@ interface AttachRow {
  *
  * - A **consult invoice** of doctor D: an active sale in the dates and branches whose line items are
  *   synced, with ≥ 1 line credited to D (resolved now: a remap changes it at once) whose item has
- *   the consult flag and whose quantity is above zero (a free consult counts, a returned one not).
+ *   the consult flag and whose quantity is above zero (a free consult counts, a returned one not;
+ *   an unmapped item has no flags, so it is never a consult line).
  * - An **add-on**: another line of that invoice that is NOT a consult line and charged more than
  *   zero (`invoice_lines.amount`, its own amount after any item discount — so a free add-on, a
- *   returned item and a discount line, which is no credited line at all, never count). Diagnostics
- *   = its item is in the Diagnostics group; product = ItemType 1; second service = ItemType 4 (not
- *   a consult). The three overlap (an X-ray service is diagnostics AND a second service).
+ *   returned item and a discount line, which is no credited line at all, never count, while an
+ *   add-on whose CREDITED amount an invoice discount took to 0 still does). Diagnostics = its item
+ *   is in the Diagnostics group; product = ItemType 1; second service = ItemType 4 (not a consult):
+ *   an unmapped item counts by its ItemType, never as diagnostics. The three overlap (an X-ray
+ *   service is diagnostics AND a second service).
  * - **Whole invoice**: add-ons credited to anyone (the visit's basket); **own lines**: only add-ons
  *   credited to D.
  * - Sales whose line items are not synced yet cannot be classified: they are in no figure, and

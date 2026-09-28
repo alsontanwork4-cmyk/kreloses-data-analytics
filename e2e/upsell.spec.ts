@@ -15,8 +15,8 @@ import { run } from "./support/run";
 /**
  * The Upsell page, end to end: the fake Kreloses serves the hand-built upsell scenario
  * (src/analytics/testing/upsell-scenario.ts; every figure below is hand-computed in
- * src/analytics/upsell.test.ts) → "Sync now" for August and September 2026 → /upsell shows each
- * doctor's attach rates on consult invoices (whole invoice, then the doctor's own lines), their chart
+ * src/analytics/upsell.test.ts) → the owner runs "Sync now" for August and September 2026 → a MANAGER
+ * opens /upsell from the nav and sees each doctor's attach rates on consult invoices (whole invoice, then the doctor's own lines), their chart
  * and CSV, the items-per-invoice trend (chart with toggleable lines, table, CSV), follows the branch
  * and doctor filters, and shows empty states for a period without sales.
  *
@@ -57,15 +57,20 @@ test.describe("Upsell page", () => {
     await clearSyncedData();
   });
 
-  test("shows each doctor's consult attach rates and items per invoice over time, with CSVs, filters and empty states", async ({ page }) => {
+  test("a manager sees each doctor's consult attach rates and items per invoice over time, with CSVs, filters and empty states", async ({ page: owner, browser }) => {
     test.setTimeout(240_000);
-    await signIn(page, run.ownerEmail);
-    const card = await addConnection(page, { label: "Both branches", email: both.email, password: both.password });
+    await signIn(owner, run.ownerEmail);
+    const card = await addConnection(owner, { label: "Both branches", email: both.email, password: both.password });
     for (const month of ["August 2026", "September 2026"]) {
       await syncMonth(card, month);
       await expect(card.getByRole("status")).toContainText(`Synced ${month}:`);
     }
 
+    // The Upsell page is for managers too: the rest is a manager's view.
+    const page = await (await browser.newContext()).newPage();
+    await signIn(page, run.managerEmail);
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Upsell" }).click();
+    await expect(page).toHaveURL(/\/upsell$/);
     await page.goto(`/upsell?${RANGE}`);
     await expect(page.getByRole("heading", { level: 1, name: "Upsell" })).toBeVisible();
     // 820015's invoice page is missing: it cannot be classified and is named, not silently dropped.
@@ -170,11 +175,19 @@ test.describe("Upsell page", () => {
     ]);
     expect(await tableText(items, ["doctor", "m2026-08", "m2026-09", "total"])).toEqual([["Dr Bravo Brown", "1.67", "1.33", "1.50"]]);
 
-    // A period without sales: empty states, not empty tables.
+    await expect(attach).toContainText("An invoice with two consulting doctors counts once for each of them");
+
+    // A period without sales: empty states, not empty tables (saying when a doctor filter narrows them).
+    const doctorParam = new URL(page.url()).searchParams.get("doctor")!;
     await page.goto("/upsell?from=2026-07-01&to=2026-07-31");
     await expect(page.getByRole("heading", { name: "No consults in this period" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "No doctor sales in this period" })).toBeVisible();
     await expect(page.getByTestId("attach-rates")).toHaveCount(0);
+    await page.goto(`/upsell?from=2026-07-01&to=2026-07-31&doctor=${doctorParam}`);
+    await expect(page.getByTestId("empty-state").filter({ hasText: "No doctor sales in this period" })).toContainText(
+      "No line was credited to a doctor in 1 Jul 2026 – 31 Jul 2026 for the selected doctors.",
+    );
+    await expect(page.getByTestId("empty-state").filter({ hasText: "No consults in this period" })).toContainText("for the selected doctors.");
 
     // On a phone: nothing scrolls sideways (tables scroll inside themselves).
     await page.setViewportSize({ width: 390, height: 844 });

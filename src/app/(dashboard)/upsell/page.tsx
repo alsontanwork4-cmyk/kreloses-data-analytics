@@ -15,6 +15,7 @@ import {
   type MetricName,
   type TrendMonth,
 } from "@/analytics";
+import { MIX_GROUPS } from "@/attribution";
 import { requireUser } from "@/auth/session";
 import { GroupedBarChart, type GroupedSeries } from "@/components/charts/grouped-bar-chart";
 import { LineTrendChart } from "@/components/charts/line-trend-chart";
@@ -49,13 +50,17 @@ const DEFINITIONS: MetricName[] = [
 type AddOnView = "wholeInvoice" | "ownLines";
 const OWN_LINES_PARAM = "own";
 
-/** The three add-on kinds, in fixed order: the chart's series take slots 1–3 in this order. */
-const ADD_ONS: { key: Exclude<keyof AttachFigures, "anyAddOn">; label: string }[] = [
-  { key: "diagnostics", label: "Diagnostics" },
-  { key: "products", label: "Products" },
-  { key: "secondService", label: "Second service" },
+/**
+ * The three add-on kinds, in fixed order, each with a fixed colour slot: Diagnostics keeps the Mix
+ * page's colour for the Diagnostics group (its `MIX_GROUPS` slot, 3); Products and Second service
+ * take slots 2 and 1, so every pair of neighbouring bars is a validated palette neighbour.
+ */
+const ADD_ONS: { key: Exclude<keyof AttachFigures, "anyAddOn">; label: string; slot: number }[] = [
+  { key: "diagnostics", label: "Diagnostics", slot: MIX_GROUPS.indexOf("diagnostics") + 1 },
+  { key: "products", label: "Products", slot: 2 },
+  { key: "secondService", label: "Second service", slot: 1 },
 ];
-const CHART_SERIES: GroupedSeries[] = ADD_ONS.map((kind, index) => ({ key: kind.key, label: kind.label, color: seriesColor(index + 1) }));
+const CHART_SERIES: GroupedSeries[] = ADD_ONS.map((kind) => ({ key: kind.key, label: kind.label, color: seriesColor(kind.slot) }));
 
 /** A row of the attach-rate table: a doctor, or all doctors together. */
 interface AttachRow extends AttachRateSet {
@@ -229,7 +234,7 @@ export default async function UpsellPage({ searchParams }: PageProps<"/upsell">)
                 </div>
                 <DataTable
                   caption={view === "wholeInvoice" ? "Attach rates on consult invoices" : "Attach rates on consult invoices (doctor's own lines)"}
-                  description="Of each doctor's consult invoices, the share that also had diagnostics, a product or a second (non-consult) service; any add-on is at least one of them. All doctors: every doctor's consult invoices together (the doctor filter does not change it)."
+                  description="Of each doctor's consult invoices, the share that also had diagnostics, a product or a second (non-consult) service; any add-on is at least one of them. An invoice with two consulting doctors counts once for each of them, so all doctors' consult invoices (every doctor's together; the doctor filter does not change it) can be more than the invoices themselves."
                   columns={attachColumns}
                   rows={attachRows}
                   rowKey={(row) => row.key}
@@ -254,7 +259,8 @@ export default async function UpsellPage({ searchParams }: PageProps<"/upsell">)
               <EmptyState icon={ListChecks} title="No doctor sales in this period">
                 <p>
                   No line was credited to a doctor in {period}
-                  {filter.branchIds ? " at the selected branch" : ""}.
+                  {filter.branchIds ? " at the selected branch" : ""}
+                  {filter.doctorIds ? " for the selected doctors" : ""}.
                 </p>
               </EmptyState>
             ) : (

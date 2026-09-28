@@ -979,7 +979,9 @@ itemsPerInvoiceSql(sql)   // (./items-per-invoice.ts) THE items-per-invoice aggr
   and a discount line, which is no credited line at all, never count). Diagnostics = `mix_group =
   'diagnostics'`; product = ItemType 1 (`PRODUCT_ITEM_TYPE`); second service = ItemType 4 (not
   consult). They overlap (an X-ray service is diagnostics AND a second service); "any add-on" is ≥ 1 of
-  the three. **Whole invoice** (the default) counts add-ons credited to anyone on the invoice (the
+  the three. An add-on whose credited amount an invoice discount took to 0 still counts (its own line
+  charged > 0). Unmapped items have no flags and no group: never a consult line, never diagnostics,
+  but a product / second service by ItemType — so the rates move when the owner maps items. **Whole invoice** (the default) counts add-ons credited to anyone on the invoice (the
   visit's basket); **own lines** only those credited to the doctor. Both come back from one query.
 - Pending sales (line items not synced yet) cannot be classified: excluded, and the page shows
   `<PendingLineItemsNote doctorsOnly>` with `pendingLineItems`.
@@ -993,7 +995,9 @@ itemsPerInvoiceSql(sql)   // (./items-per-invoice.ts) THE items-per-invoice aggr
   figure), empty states per section.
 - Tests: `upsell.test.ts` (Seam 1) syncs `testing/upsell-scenario.ts` (hand-built sales, Aug–Sep 2026:
   diagnostics by another doctor, a free product, two consult lines, consult + surgery, a discount line,
-  a returned product, a missing invoice page…) and documents every hand-computed rate;
+  a returned product, a missing invoice page…) and documents every hand-computed rate, plus
+  `UPSELL_EDGE_CASES` (free and returned consults, an add-on credited 0 by a discount line, unmapped
+  items, and an item mapped as a consult afterwards);
   `e2e/upsell.spec.ts` serves the same scenario through the fake and checks the page, CSVs and filters.
   `syntheticSales` lines may now be `itemType: 55` (a discount line: negative amount, no staff).
 
