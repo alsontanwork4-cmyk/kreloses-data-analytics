@@ -41,9 +41,11 @@ export interface SweepCursor {
  * - `saleIds`: the Sale List page just stored (in the page's order) — the change detection of a run;
  * - `sweep`: any date, newest first, up to `limit`, after `after` — the nightly sweep of invoices
  *   left behind (synced before line items existed, stale after a header change outside the nightly
- *   window, or pending after a missing page).
+ *   window, or pending after a missing page) — ONLY of the branches whose Kreloses locations
+ *   (`locationIds`) the connection's login listed in this run: another login cannot open them (a
+ *   403 would read as an expired session, a 404 as a missing page, blaming the wrong connection).
  */
-export type LinesScope = { saleIds: readonly string[] } | { sweep: { limit: number; after?: SweepCursor } };
+export type LinesScope = { saleIds: readonly string[] } | { sweep: { locationIds: readonly string[]; limit: number; after?: SweepCursor } };
 
 /**
  * THE rule for which invoices need their line items (re)read (#5, refined by #6):
@@ -66,21 +68,29 @@ export async function invoicesNeedingLines(sql: Sql, scope: LinesScope): Promise
     const order = new Map(scope.saleIds.map((id, index) => [id, index]));
     return rows.sort((a, b) => order.get(a.saleId)! - order.get(b.saleId)!);
   }
-  const { limit, after } = scope.sweep;
+  const { locationIds, limit, after } = scope.sweep;
+  if (locationIds.length === 0) return [];
   return sql<InvoiceNeedingLines[]>`
     select ${columns} from invoices i
-    where ${needsLines}
+    join branches b on b.id = i.branch_id
+    where ${needsLines} and b.kreloses_location_id = any(${[...locationIds]}::text[])
       ${after ? sql`and (i.sale_at, i.id) < (${after.saleAt}, ${after.invoiceId}::bigint)` : sql``}
     order by i.sale_at desc, i.id desc
     limit ${limit}
   `;
 }
 
-/** How many invoices (any date) still need their line items read, by the rule above. */
-export async function countInvoicesNeedingLines(sql: Sql): Promise<number> {
+/**
+ * How many invoices (any date) of these Kreloses locations' branches still need their line items
+ * read, by the rule above (what a sweep that ran out of time leaves for the next one).
+ */
+export async function countInvoicesNeedingLines(sql: Sql, scope: { locationIds: readonly string[] }): Promise<number> {
+  if (scope.locationIds.length === 0) return 0;
   const [row] = await sql<{ count: number }[]>`
     select count(*)::int as count from invoices i
+    join branches b on b.id = i.branch_id
     where i.status = 'active' and not i.lines_current and i.detail_missing_count < ${MAX_PAGE_MISSING_ATTEMPTS}
+      and b.kreloses_location_id = any(${[...scope.locationIds]}::text[])
   `;
   return row!.count;
 }

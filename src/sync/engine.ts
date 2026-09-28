@@ -343,6 +343,8 @@ async function execute(run: RunContext): Promise<SyncResult> {
 
   try {
     const locations = await client.call((session) => reader.listLocations(session));
+    // The Kreloses locations (branches) this login can see: what it covers, and all its sweep may open.
+    const locationIds = locations.map((location) => location.id);
     await fenced(async (tx) => {
       await recordLoginOutcome(tx, connectionId, { ok: true, visibleLocations: locations });
       await upsertBranches(tx, connectionId, locations);
@@ -409,13 +411,14 @@ async function execute(run: RunContext): Promise<SyncResult> {
     if (sweep) {
       let after: SweepCursor | undefined;
       sweeping: for (;;) {
-        const batch = await invoicesNeedingLines(deps.sql, { sweep: { limit: SWEEP_BATCH, after } });
+        // Only invoices of the branches THIS login listed this run: another login's are not ours to open.
+        const batch = await invoicesNeedingLines(deps.sql, { sweep: { locationIds, limit: SWEEP_BATCH, after } });
         if (batch.length === 0) break;
         for (const invoice of batch) {
           after = { saleAt: invoice.saleAt, invoiceId: invoice.invoiceId };
           if (tried.has(invoice.invoiceId)) continue;
           if (outOfTime()) {
-            warnings.push(lineItemsLeftWarning(await countInvoicesNeedingLines(deps.sql)));
+            warnings.push(lineItemsLeftWarning(await countInvoicesNeedingLines(deps.sql, { locationIds })));
             break sweeping;
           }
           await readLines(invoice, true);
@@ -423,7 +426,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
       }
     }
 
-    const coveredLocationIds = locations.map((location) => location.id);
+    const coveredLocationIds = locationIds;
     if (counts.lineItemsFailed > 0) {
       // The whole listing was read (it counts for "data as of" and is complete: never resumed), but
       // some invoices still need their lines: the next sync retries them.

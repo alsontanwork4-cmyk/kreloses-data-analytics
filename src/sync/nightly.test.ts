@@ -164,6 +164,48 @@ describe("Nightly sync", () => {
       expect(await pendingSales()).toEqual([{ krelosesSaleId: "600003" }]);
     });
 
+    it("only ever opens invoices of the branches the connection's own login can see (never another login's)", async () => {
+      const northId = await h.connect(north, "North");
+      const southId = await h.connect(south, "South");
+      const LAST_AUTUMN = { from: "2025-09-01", to: "2025-10-31" };
+      ran(await runSync(h.deps(), northId, "manual", { dateRange: LAST_AUTUMN })); // 600001, 600004
+      ran(await runSync(h.deps(), southId, "manual", { dateRange: LAST_AUTUMN })); // 600002, 600003
+      ran(await runSync(h.deps(), northId, "nightly"));
+      ran(await runSync(h.deps(), southId, "nightly"));
+      // Older invoices of both branches are left without current line items (as the #6 migration leaves refunded ones).
+      await db.sql`update invoices set header_version = header_version + 1 where kreloses_sale_id in ('600001', '600004', '600002')`;
+      const southSales = (await db.sql<{ saleId: string }[]>`
+        select i.kreloses_sale_id as sale_id from invoices i join branches b on b.id = i.branch_id where b.kreloses_location_id = '1102'
+      `).map((row) => row.saleId);
+
+      // North's nightly runs out of time after one older North invoice: the rest left is North's own one.
+      h.fake.intercept((request) => {
+        if (request.url.pathname === "/Sale/Get" || request.url.pathname.startsWith("/Sale/Overview/")) h.clock.advance(10_000);
+        return undefined;
+      });
+      h.clock.advance(24 * 3_600_000);
+      let before = h.fake.requests.length;
+      const northNight = ran(await runSync(h.deps(), northId, "nightly", { timeBudgetMs: 15_000 }));
+      expect(pagesOpened(before)).toEqual(["600004"]);
+      expect(northNight).toMatchObject({
+        status: "succeeded",
+        counts: { lineItemsSwept: 1 },
+        warnings: [{ code: "line_items_left", message: expect.stringMatching(/^1 older sale still waits/) }],
+      });
+      before = h.fake.requests.length;
+      expect(ran(await runSync(h.deps(), northId, "nightly"))).toMatchObject({ status: "succeeded", counts: { lineItemsSwept: 1 }, warnings: [] });
+      // Neither of North's nights opened a South page (600002 is South's, and older than 600004).
+      expect(pagesOpened(before)).toEqual(["600001"]);
+      expect(await pendingSales()).toEqual([{ krelosesSaleId: "600002" }]);
+      expect(southSales).toContain("600002");
+
+      // South's own nightly reads it.
+      before = h.fake.requests.length;
+      expect(ran(await runSync(h.deps(), southId, "nightly"))).toMatchObject({ status: "succeeded", counts: { lineItemsSwept: 1 } });
+      expect(pagesOpened(before)).toEqual(["600002"]);
+      expect(await pendingSales()).toEqual([]);
+    });
+
     it("stops when the time budget runs out, says how many are left, and the next night carries on", async () => {
       const id = await h.connect(both);
       ran(await runSync(h.deps(), id, "manual", { dateRange: { from: "2025-09-01", to: "2025-10-31" } }));
