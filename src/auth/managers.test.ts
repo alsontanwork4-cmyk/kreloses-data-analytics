@@ -82,6 +82,8 @@ describe("inviting and removing managers", () => {
       ["no domain dot", "someone@localhost"],
       ["spaces inside", "some one@example.test"],
       ["two @", "a@b@example.test"],
+      ["an empty domain label", "name@gmail..com"],
+      ["a trailing dot in the domain", "name@gmail.com."],
       ["a missing value", null],
       ["a non-string value", 42],
       ["an over-long address", `${"a".repeat(250)}@example.test`],

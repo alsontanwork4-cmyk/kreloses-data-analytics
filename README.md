@@ -250,7 +250,9 @@ Each run is self-contained and parallel-safe: its own database (`kx_e2e_…`, cr
 setup, dropped in teardown), its own `next dev` on a port derived from the worktree path (override
 with `E2E_PORT`) building into `.next-e2e/` (so it doesn't disturb your dev server), and unique
 synthetic emails. It signs in through the real magic-link flow by reading the email from Mailpit
-(`e2e/support/mailpit.ts`, `signIn(page, email)` in `e2e/support/auth.ts`). The owner is
+(`e2e/support/mailpit.ts`, `signIn(page, email)` in `e2e/support/auth.ts`; it retries when
+Supabase rate-limits links to the same address, 1s locally, and only accepts an email that arrived
+after its own request). The owner is
 `run.ownerEmail` (seeded by the app from `OWNER_EMAIL`), a manager `run.managerEmail`; use
 `withRunDatabase(sql => …)` to put data into the run's database. Nav-driven tests read
 `NAV_ITEMS`, so new pages are covered automatically; extend the suite for your ticket's flow.
@@ -294,7 +296,8 @@ interface GlobalFilter { dateFrom: IsoDate; dateTo: IsoDate; branchIds?: string[
 - **Settings is a hub**: `src/app/(dashboard)/settings/layout.tsx` renders the "Settings" `h1` and
   a tab per settings page from `SETTINGS_NAV_ITEMS` (also in `nav-config.ts`: `href`, `label`,
   optional minimum `role`); `/settings` redirects to the first tab the user's role may see
-  (`/forbidden` if none). To add a settings page (#5 doctors, #9 items — their slots are reserved
+  (`/forbidden` if none), and the sidebar's Settings link goes straight there (the `landing`
+  option on its `NAV_ITEMS` entry), so clicks don't redirect. To add a settings page (#5 doctors, #9 items — their slots are reserved
   as comments in the list): create `src/app/(dashboard)/settings/<name>/page.tsx` that calls
   `requireRole(...)` and returns `<SettingsSection title description>…</SettingsSection>`
   (`@/components/settings/settings-section`, an `h2` — don't render another `PageShell`), then

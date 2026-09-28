@@ -2,7 +2,28 @@ import { describe, expect, it } from "vitest";
 
 import { useTestDatabase } from "@/db/testing";
 
-import { addAppUser, checkAccess, removeAppUser, upsertOwner } from "./allow-list";
+import { addAppUser, checkAccess, isValidEmail, removeAppUser, upsertOwner } from "./allow-list";
+
+describe("isValidEmail", () => {
+  it.each(["owner@example.test", "first.last+tag@sub.example.co", "a@b.c"])("accepts %s", (email) => {
+    expect(isValidEmail(email)).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["no @", "owner.example.test"],
+    ["no dot in the domain", "owner@localhost"],
+    ["two @", "a@b@example.test"],
+    ["a space", "own er@example.test"],
+    ["an empty domain label", "name@gmail..com"],
+    ["a leading dot in the domain", "name@.gmail.com"],
+    ["a trailing dot in the domain", "name@gmail.com."],
+    ["an empty local part", "@example.test"],
+    ["over 254 characters", `${"a".repeat(250)}@example.test`],
+  ])("rejects %s", (_label, email) => {
+    expect(isValidEmail(email)).toBe(false);
+  });
+});
 
 describe("sign-in allow-list", () => {
   const db = useTestDatabase();

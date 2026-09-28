@@ -15,8 +15,18 @@ const USERS_PATH = "/settings/users";
 const email = (label: string) => `e2e-${label}-${run.runId}-${crypto.randomUUID().slice(0, 8)}@example.test`;
 const lookUp = (address: string) => withRunDatabase((sql) => findAppUser(sql, address));
 
+/** The row whose email IS `address` (not rows that merely mention it, e.g. "Invited by <owner>"). */
 function rowFor(page: Page, address: string) {
-  return page.getByTestId("allow-list-row").filter({ hasText: address });
+  return page.getByTestId("allow-list-row").filter({
+    has: page.getByTestId("allow-list-email").and(page.getByText(address, { exact: true })),
+  });
+}
+
+async function authCookieNames(page: Page): Promise<string[]> {
+  return (await page.context().cookies())
+    .map((cookie) => cookie.name)
+    .filter((name) => name.startsWith("sb-"))
+    .sort();
 }
 
 async function invite(page: Page, address: string) {
@@ -62,14 +72,23 @@ async function replay(page: Page, action: CapturedAction, baseURL: string) {
 }
 
 test.describe("Settings → Users", () => {
-  test("/settings opens the first settings page, and every settings tab renders for the owner", async ({ page }) => {
+  test("the Settings link and /settings open the first settings tab, and every tab renders for the owner", async ({
+    page,
+  }) => {
+    const firstTab = SETTINGS_NAV_ITEMS[0]!.href;
     await signIn(page, run.ownerEmail);
     await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Settings" }).click();
-    await expect(page).toHaveURL(SETTINGS_NAV_ITEMS[0]!.href);
+    await expect(page).toHaveURL(firstTab);
+    await page.goto("/settings");
+    await expect(page).toHaveURL(firstTab);
 
     const tabs = page.getByRole("navigation", { name: "Settings" });
     for (const item of SETTINGS_NAV_ITEMS) {
-      await tabs.getByRole("link", { name: item.label, exact: true }).click();
+      // Only click a tab that is not the current page: re-clicking the current page passes the
+      // checks below at once, leaving its navigation in flight when the test's browser closes.
+      if (new URL(page.url()).pathname !== item.href) {
+        await tabs.getByRole("link", { name: item.label, exact: true }).click();
+      }
       await expect(page).toHaveURL(item.href);
       await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
       await expect(page.getByRole("heading", { level: 2, name: item.label })).toBeVisible();
@@ -86,9 +105,13 @@ test.describe("Settings → Users", () => {
     await page.goto(USERS_PATH);
 
     // Invite (the address is normalised: trimmed by the email field, lower-cased by the server).
+    const ownerCookies = await authCookieNames(page);
     const since = new Date();
     await invite(page, invitee.toUpperCase());
     await expect(page.getByTestId("invite-notice")).toHaveText(`Invited ${invitee}. We emailed them a sign-in link.`);
+    // The invitation is sent without touching the owner's session cookies (no PKCE code-verifier
+    // for the invitee's sign-in, nor any other new Supabase cookie, lands in the owner's browser).
+    expect(await authCookieNames(page)).toEqual(ownerCookies);
     const row = rowFor(page, invitee);
     await expect(row.getByText("manager", { exact: true })).toBeVisible();
     await expect(row).toContainText(`Invited by ${run.ownerEmail}`);

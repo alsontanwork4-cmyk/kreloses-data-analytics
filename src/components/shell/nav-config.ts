@@ -26,6 +26,12 @@ export interface NavItem {
   section: NavSection;
   /** Minimum role to see the entry. Omitted = every signed-in user. The page must still call `requireRole`. */
   role?: Role;
+  /**
+   * Where the link actually goes, when `href` is a section that would only redirect (e.g. Settings →
+   * its first tab). Linking straight there avoids a redirect on every click. `href` still decides
+   * when the entry is highlighted.
+   */
+  landing?: (role: Role) => string | undefined;
 }
 
 export type NavSection = "analytics" | "admin";
@@ -46,8 +52,20 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/daily", label: "Daily", icon: CalendarDays, section: "analytics" },
   { href: "/connections", label: "Connections", icon: Plug, section: "admin", role: "owner" },
   { href: "/sync", label: "Sync status", icon: RefreshCw, section: "admin" },
-  { href: "/settings", label: "Settings", icon: Settings, section: "admin", role: "owner" },
+  {
+    href: "/settings",
+    label: "Settings",
+    icon: Settings,
+    section: "admin",
+    role: "owner",
+    landing: (role) => settingsNavItemsFor(role)[0]?.href,
+  },
 ];
+
+/** The path a nav entry links to for `role`. */
+export function navLinkHref(item: NavItem, role: Role): string {
+  return item.landing?.(role) ?? item.href;
+}
 
 /**
  * The Settings sub-navigation (tabs under the "Settings" heading), in display order. `/settings`

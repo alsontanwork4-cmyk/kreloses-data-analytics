@@ -12,7 +12,9 @@ export function normaliseEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// local@label.label[.label…]: no whitespace or extra @, and no empty domain labels (so no
+// "gmail..com", ".gmail.com" or "gmail.com.").
+const EMAIL = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 
 /** A plausible email address (checked after `normaliseEmail`). Supabase Auth has the final say. */
 export function isValidEmail(email: string): boolean {
