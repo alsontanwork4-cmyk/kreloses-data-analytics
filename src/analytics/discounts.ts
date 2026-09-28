@@ -20,9 +20,10 @@ import type { DateRange } from "./periods";
  * - Per doctor (staff member, group): discount = Σ gross − Σ charged over their credited lines;
  *   discount rate = discount ÷ gross; share of invoices discounted = their invoices on which THEIR
  *   share of the discount is over RM 0.05 ÷ their invoices.
- * - Refunds are NOT discounts: the charged amount is before any refund (today the revenue base
- *   does not deduct refunds at all; if it ever does, discounts must keep using the pre-refund
- *   charged amount — the refund test in discounts.test.ts guards this).
+ * - Refunds are NOT discounts: the charged amount is `revenueFacts.credited_amount`, BEFORE any
+ *   refund. Since #6 revenue (`revenueFacts.revenue`) is after refunds, so a doctor's charged here
+ *   exceeds their Doctors-page revenue by their lines' refund shares (and differs by return lines,
+ *   which discounts leave out) — the refund test in discounts.test.ts guards this.
  * - Only SOLD lines count (`soldLine`: credited item lines with gross ≥ 0). Left out of every figure —
  *   totals, gross, charged, rate, discounted-invoice counts, types and the difference row alike:
  *   return lines (gross < 0: a return already reduces revenue; counted here it would show as a
@@ -38,7 +39,7 @@ import type { DateRange } from "./periods";
 export interface DiscountFigures {
   /** Σ quantity × unit price of the credited lines, before any discount, RM. */
   gross: Money;
-  /** Σ what those lines were charged after every discount (their credited amount = their revenue), RM. */
+  /** Σ what those lines were charged after every discount, before any refund (their credited amount; revenue is this less refund shares), RM. */
   charged: Money;
   /** gross − charged, RM (`METRIC_DEFINITIONS.discount`). Negative if lines were charged above their price. */
   discount: Money;
@@ -177,7 +178,7 @@ export async function getDoctorDiscounts(sql: Sql, filter: GlobalFilter): Promis
     sql<FigureRow[]>`
       with facts as (${revenueFacts(sql, factsScope(filter))}),
       lines as (
-        select f.credit_group, f.staff_id, f.invoice_id, f.gross_amount as gross, f.revenue as charged
+        select f.credit_group, f.staff_id, f.invoice_id, f.gross_amount as gross, f.credited_amount as charged
         from facts f
         where ${soldLine(sql, sql`f`)} and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
       ),
@@ -297,19 +298,19 @@ export async function getDiscountTypes(sql: Sql, filter: GlobalFilter): Promise<
     everyone as (${revenueFacts(sql, { branches: branchScope(filter), staff: { all: true } })}),
     -- The sold lines in the filter (with a doctor filter: the selected doctors' lines).
     scoped_lines as (
-      select f.invoice_id, f.invoice_line_id, f.gross_amount, f.revenue
+      select f.invoice_id, f.invoice_line_id, f.gross_amount, f.credited_amount as charged
       from scoped f
       where ${soldLine(sql, sql`f`)} and f.sale_date between ${period.dateFrom}::date and ${period.dateTo}::date
     ),
     -- Per invoice: the invoice-level discount (discount lines + difference) that #5's spread put on
     -- ALL its sold lines (whole) and on the lines in the filter (scoped): line amount − credited.
     scoped_share as (
-      select s.invoice_id, sum(l.amount - s.revenue) as scoped, count(*) as scoped_lines
+      select s.invoice_id, sum(l.amount - s.charged) as scoped, count(*) as scoped_lines
       from scoped_lines s join invoice_lines l on l.id = s.invoice_line_id
       group by s.invoice_id
     ),
     shares as (
-      select e.invoice_id, sum(l.amount - e.revenue) as whole, count(*) as whole_lines, min(sc.scoped) as scoped, min(sc.scoped_lines) as scoped_lines
+      select e.invoice_id, sum(l.amount - e.credited_amount) as whole, count(*) as whole_lines, min(sc.scoped) as scoped, min(sc.scoped_lines) as scoped_lines
       from everyone e
       join invoice_lines l on l.id = e.invoice_line_id
       join scoped_share sc on sc.invoice_id = e.invoice_id

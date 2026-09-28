@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PUBLIC_PATHS, isPublicPath } from "@/auth/paths";
+import { PUBLIC_EXACT_PATHS, isPublicPath } from "@/auth/paths";
 
 import { handleNightlyCron, isAuthorizedCronRequest, MIN_CRON_SECRET_LENGTH } from "./cron";
 import type { NightlyConnectionResult } from "./nightly";
@@ -89,9 +89,9 @@ describe("nightly cron authentication", () => {
     });
   });
 
-  it("is reachable without a session (the proxy lets it through) — it authenticates itself", () => {
-    expect(PUBLIC_PATHS).toContain("/api/cron");
+  it("is reachable without a session (the proxy lets it through) — exactly that path, nothing under or beside it", () => {
+    expect(PUBLIC_EXACT_PATHS).toContain("/api/cron/nightly");
     expect(isPublicPath("/api/cron/nightly")).toBe(true);
-    expect(isPublicPath("/api/me")).toBe(false);
+    for (const gated of ["/api/cron", "/api/cron/backfill", "/api/cron/nightly/x", "/api/me"]) expect(isPublicPath(gated), gated).toBe(false);
   });
 });

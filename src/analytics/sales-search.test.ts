@@ -18,12 +18,12 @@ import { SALES_SEARCH_MAX_PAGE_SIZE, searchSales, type SaleCredit } from "./inde
  *   700104 INV-N-0104 20 Sep  North  Customer 0003 2,300.00  Dr Bravo Brown 2,075.85 (2) · no staff 175.42 (1)
  *                                                           · Branch North General 48.73 (1)
  *   700203 INV-S-0203 18 Sep  South  Customer 0001   250.00  Dr Alpha Anderson 153.85 (1) · Dr Bravo Brown 96.15 (1)
- *   700202 INV-S-0202 15 Sep  South  Customer 0005 1,100.00  Dr Bravo Brown 1,100.00 (2)
+ *   700202 INV-S-0202 15 Sep  South  Customer 0005 1,000.00  Dr Bravo Brown 1,000.00 (2)  (net 1,100.00 less its 100.00 refund, #6)
  *   700206 INV-S-0206 10 Sep  South  Customer 0004  (120.00) Dr Delta (120.00) (1: a return)
  *   700102 INV-N-0102  5 Sep  North  Customer 0002   380.50  Dr Alpha Anderson 300.50 (2) · Dr Bravo Brown 80.00 (1)
  *   700201 INV-S-0201  2 Sep  South  Customer 0004   600.00  Dr Delta 600.00 (2)
  *   700101 INV-N-0101  1 Sep  North  Customer 0001 1,200.00  Dr Alpha Anderson 1,200.00 (3)
- *   Cancelled 700103 and 700204 are never found.                                  Total 5,855.40
+ *   Cancelled 700103 and 700204 are never found.                                  Total 5,755.40
  *
  * Items: "Consultation" is on 700203, 700102, 700201 and 700101; 700101 also sells
  * `Antibiotic tablets "Amoxi" {250mg}`; "Dental scaling" is on 700104 only (in September).
@@ -67,7 +67,7 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
 
   it("lists every active sale in the period, newest first, paged, with each invoice's credited split per staff", async () => {
     const first = await searchSales(db.sql, SEPTEMBER, { pageSize: 4 });
-    expect(first).toMatchObject({ period: SEPTEMBER, page: 1, pageSize: 4, totalMatches: 9, totalPages: 3, totalRevenue: "5855.40" });
+    expect(first).toMatchObject({ period: SEPTEMBER, page: 1, pageSize: 4, totalMatches: 9, totalPages: 3, totalRevenue: "5755.40" });
     expect(first.sales).toEqual([
       {
         invoiceId: expect.any(String),
@@ -117,7 +117,7 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
 
     const second = await searchSales(db.sql, SEPTEMBER, { pageSize: 4, page: 2 });
     expect(second.sales.map((sale) => [sale.saleNumber, sale.revenue])).toEqual([
-      ["INV-S-0202", "1100.00"],
+      ["INV-S-0202", "1000.00"],
       ["INV-S-0206", "-120.00"],
       ["INV-N-0102", "380.50"],
       ["INV-S-0201", "600.00"],
@@ -132,7 +132,7 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
     expect(third.sales[0]!.credits).toEqual([credit("Dr Alpha Anderson", "1200.00", 3)]);
 
     // Past the last page: no rows, but the totals still say what matched.
-    expect(await searchSales(db.sql, SEPTEMBER, { pageSize: 4, page: 4 })).toMatchObject({ page: 4, totalMatches: 9, totalPages: 3, totalRevenue: "5855.40", sales: [] });
+    expect(await searchSales(db.sql, SEPTEMBER, { pageSize: 4, page: 4 })).toMatchObject({ page: 4, totalMatches: 9, totalPages: 3, totalRevenue: "5755.40", sales: [] });
   });
 
   it("caps the page size and starts at page 1", async () => {
@@ -148,7 +148,7 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
     const result = await searchSales(db.sql, SEPTEMBER, { customer: "customer 0001" });
     expect(result).toMatchObject({ totalMatches: 2, totalRevenue: "1450.00" });
     expect(result.sales.map((sale) => sale.saleNumber)).toEqual(["INV-S-0203", "INV-N-0101"]);
-    expect(await searchSales(db.sql, SEPTEMBER, { customer: "CUSTOMER" })).toMatchObject({ totalMatches: 8, totalRevenue: "5810.40" });
+    expect(await searchSales(db.sql, SEPTEMBER, { customer: "CUSTOMER" })).toMatchObject({ totalMatches: 8, totalRevenue: "5710.40" });
   });
 
   it("searches by item name (any sold line; wildcard characters are taken literally)", async () => {
@@ -179,7 +179,7 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
       "INV-S-0205",
     ]);
     const range = await searchSales(db.sql, SEPTEMBER, { minRevenue: "250", maxRevenue: "1200.00", sort: "smallest" });
-    expect(range).toMatchObject({ totalMatches: 5, totalRevenue: "3530.50" });
+    expect(range).toMatchObject({ totalMatches: 5, totalRevenue: "3430.50" });
     expect(range.sales.map((sale) => sale.saleNumber)).toEqual(["INV-S-0203", "INV-N-0102", "INV-S-0201", "INV-S-0202", "INV-N-0101"]);
     expect(await numbers({ maxRevenue: "-0.01" })).toEqual(["INV-S-0206"]);
     expect(await numbers({ sort: "oldest", pageSize: 3 })).toEqual(["INV-N-0101", "INV-S-0201", "INV-N-0102"]);
@@ -187,11 +187,12 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
     expect(await numbers({ customer: "0004", item: "x-ray" })).toEqual(["INV-S-0201"]);
   });
 
-  it("shows a sale whose line items are not synced yet at its net amount; doctor and item searches cannot find it", async () => {
-    // 700104's header changes in Kreloses and its invoice page cannot be read this time.
+  it("shows a sale whose line items are not synced yet at its revenue base; doctor and item searches cannot find it", async () => {
+    // 700104 is edited in Kreloses (gross and discount changed, net the same — a line-relevant change,
+    // #6; a payment alone would not need its lines again) and its invoice page cannot be read this time.
     const row = h.fake.saleRows.find((candidate) => candidate.SaleId === 700104)!;
-    row.PaymentStatusName = "Paid";
-    row.TotalPayments = "2,438.00";
+    row.GrossAmount = "2,490.00";
+    row.Discounts = "190.00";
     h.clock.advance(3_600_000);
     let pageDown = true;
     h.fake.intercept((request) =>
@@ -208,7 +209,7 @@ describe("Analytics Service: sales search (fed by the Sync Engine, line items in
         credits: [{ staffId: null, name: "Line items not synced yet", creditGroup: "pending", revenue: "2300.00", lines: 0 }],
       }),
     ]);
-    expect(await searchSales(db.sql, SEPTEMBER)).toMatchObject({ totalMatches: 9, totalRevenue: "5855.40" });
+    expect(await searchSales(db.sql, SEPTEMBER)).toMatchObject({ totalMatches: 9, totalRevenue: "5755.40" });
     expect(await numbers({ item: "dental" })).toEqual([]);
     expect(await numbers({}, { ...SEPTEMBER, doctorIds: [staff["Dr Bravo Brown"]!] })).toEqual(["INV-S-0203", "INV-S-0202", "INV-N-0102"]);
 
