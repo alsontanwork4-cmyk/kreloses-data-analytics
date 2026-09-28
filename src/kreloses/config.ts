@@ -55,7 +55,8 @@ export function resolveReaderOptions(options: ReaderOptions = {}): ResolvedReade
 /**
  * Reader options for the running app. Real Kreloses unless BOTH `KRELOSES_BASE_URL_WWW` and
  * `KRELOSES_BASE_URL_SEA` are set, which the e2e suite does to point the app at a local fake
- * Kreloses. The override is refused (throws) when `NODE_ENV` is `production`, and must point at
+ * Kreloses. The override is refused (throws) when `NODE_ENV` is `production` or on any Vercel
+ * deployment (`VERCEL` / `VERCEL_ENV` set), and must point at
  * this machine (localhost / 127.0.0.1 / [::1]), so a misconfigured deployment can never send a
  * Kreloses password anywhere else.
  */
@@ -63,9 +64,9 @@ export function readerOptionsFromEnv(env: Record<string, string | undefined>): R
   const www = env.KRELOSES_BASE_URL_WWW?.trim();
   const sea = env.KRELOSES_BASE_URL_SEA?.trim();
   if (!www && !sea) return {};
-  if (env.NODE_ENV === "production") {
+  if (env.NODE_ENV === "production" || env.VERCEL || env.VERCEL_ENV) {
     throw new Error(
-      "KRELOSES_BASE_URL_WWW / KRELOSES_BASE_URL_SEA are for local tests only and are refused in production. Unset them.",
+      "KRELOSES_BASE_URL_WWW / KRELOSES_BASE_URL_SEA are for local tests only and are refused in production and on Vercel. Unset them.",
     );
   }
   if (!www || !sea) {

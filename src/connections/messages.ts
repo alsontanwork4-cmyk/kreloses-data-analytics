@@ -1,4 +1,4 @@
-import { AuthFailed, isKrelosesError } from "@/kreloses";
+import { AuthFailed, isKrelosesError, Transient } from "@/kreloses";
 
 import { CredentialsKeyError, DecryptionError } from "./encryption";
 
@@ -50,7 +50,10 @@ export function describeTestFailure(error: unknown): { code: ConnectionErrorCode
       case "transient":
         return {
           code: "unreachable",
-          message: `Couldn't reach Kreloses (${error.message}). Check the internet connection or try again in a few minutes.`,
+          message:
+            error instanceof Transient && error.status !== undefined
+              ? `Kreloses is having problems right now (it answered HTTP ${error.status} to ${error.request ?? "a request"}). Use “Test again” in a few minutes.`
+              : `Couldn't reach Kreloses (${error.message}). Check the internet connection or try again in a few minutes.`,
         };
     }
   }
@@ -69,6 +72,8 @@ function unexpectedStepMessage(error: AuthFailed): string {
       return "Kreloses asked for a one-time code (two-step verification) after the password, which the app cannot enter. Turn off two-step verification for this Kreloses login, or use a login without it.";
     case "returned_to_login":
       return `Kreloses accepted the password but then sent the app back to its login page, so the session did not work. ${error.detail ?? ""}`.trim();
+    case "too_many_redirects":
+      return `Kreloses kept redirecting after the password (probably a redirect loop), so the app could not finish logging in.${error.detail ? ` (${error.detail})` : ""}`;
     default:
       return `Kreloses showed an unexpected page after the password, so the app could not finish logging in.${error.detail ? ` (${error.detail})` : ""}`;
   }

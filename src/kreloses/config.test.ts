@@ -32,6 +32,12 @@ describe("Reader configuration from the environment", () => {
     ).toThrow(/refused in production/);
   });
 
+  it("also refuses the override on any Vercel deployment, whatever NODE_ENV says", () => {
+    const override = { KRELOSES_BASE_URL_WWW: "http://127.0.0.1:5123", KRELOSES_BASE_URL_SEA: "http://127.0.0.1:5123" };
+    expect(() => readerOptionsFromEnv({ NODE_ENV: "development", VERCEL: "1", ...override })).toThrow(/refused/);
+    expect(() => readerOptionsFromEnv({ NODE_ENV: "development", VERCEL_ENV: "preview", ...override })).toThrow(/refused/);
+  });
+
   it("only allows overrides that point at this machine, and needs both", () => {
     expect(() =>
       readerOptionsFromEnv({

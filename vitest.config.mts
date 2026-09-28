@@ -16,6 +16,8 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, "**/*.live.test.ts"],
     environment: "node",
     globalSetup: ["src/db/vitest-global-setup.ts"],
+    // Blocks any fetch to the real Kreloses (tests use the fake's transport).
+    setupFiles: ["src/test-support/no-real-kreloses.ts"],
     testTimeout: 30_000,
     hookTimeout: 60_000,
   },

@@ -275,39 +275,58 @@ The only code that knows Kreloses exists. Import from `@/kreloses`:
 
 ```ts
 login(credentials: { email; password }, options?: ReaderOptions): Promise<KrelosesSession>
-listLocations(session): Promise<{ id: string; name: string }[]>   // POST /Report/GetFilter {report: 14}
+listLocations(session): Promise<{ id: string; name: string }[]>   // POST /Report/GetFilter {report: 14}; never empty
 fetchFilterTemplate(session, report: number): Promise<unknown>     // raw filter template (#4 passes it back as `filter`)
-readerOptionsFromEnv(process.env): ReaderOptions                   // real Kreloses, or the e2e fake outside production
+readerOptionsFromEnv(process.env): ReaderOptions                   // real Kreloses, or the e2e fake outside production/Vercel
+session.postJson(path, body): Promise<unknown>                     // AJAX POST to a sea endpoint (#4: /Sale/Get)
+session.getHtml(path): Promise<string>                             // page load of a sea page (#5: /Sale/Overview/{id})
 ```
 
 - **Errors** (all `KrelosesError`, safe to log/store — never passwords, cookie values, tokens or
-  query strings): `AuthFailed` (`reason`: `bad_credentials` | `unexpected_step` | `session_expired`;
-  for `unexpected_step`, `step`: `one_time_code` | `returned_to_login` | `redirected_elsewhere` |
-  `unrecognised_page`; plus a human `detail`), `LayoutChanged` (`shape`: keys/types of an
-  unexpected JSON body), `RateLimited` (`retryAfterSeconds`), `Transient` (network, timeout, 5xx).
+  query strings). What to do with each:
+  - `AuthFailed` — don't retry until the owner acts. `reason`: `bad_credentials` (the login form
+    came back without ever reaching sea; Kreloses's own message in `detail`) | `unexpected_step`
+    (`step`: `one_time_code` | `returned_to_login` (reached sea, then bounced to the login page) |
+    `redirected_elsewhere` (off Kreloses; not followed) | `too_many_redirects` |
+    `unrecognised_page`) | `session_expired` (an established session was answered with the login
+    page: log in again once).
+  - `LayoutChanged` — needs a code fix, don't retry: an unexpected page/JSON (`shape` = keys and
+    types, never values), HTTP 500 on the login form POST (ASP.NET's answer to an anti-forgery
+    mismatch), a Location filter with no locations, an app endpoint that redirects elsewhere or
+    answers other than 200.
+  - `RateLimited` (`retryAfterSeconds`) and `Transient` (`status` for a 5xx other than the login
+    POST's 500, absent for network errors/timeouts; `request` = `METHOD host/path`) — retry later.
 - **Session**: a browser-like session — a cookie jar that honours Domain/host-only/Path/Secure/
   expiry (the login is on www, the app on sea), redirects followed by hand and only between the
-  two Kreloses hosts, requests **serial per session** with `requestDelayMs` (default 1 s) between
-  them. `session.postJson(path, body)` is the building block for app endpoints: it maps a login
-  redirect / 401 / 403 / login page to `AuthFailed("session_expired")` and non-JSON to
-  `LayoutChanged`. `session.navigate({method, url, followRedirects})` fetches pages.
+  two Kreloses hosts (at most 10 per request), requests **serial per session** with
+  `requestDelayMs` (default 1 s) between them. `postJson` and `getHtml` both recognise an expired
+  session the same way: a redirect to the login page, 401/403, ASP.NET Identity's AJAX answer
+  (HTTP 200, empty body, `X-Responded-JSON` 401/403), or the login form instead of the content.
+  `session.navigate({method, url, followRedirects})` is the lower-level page fetch.
 - **Transport**: `ReaderOptions.transport` is fetch-shaped (`(url, init) => Promise<Response>`,
-  always `redirect: "manual"`). Tests pass `createFakeKreloses().transport`; nothing in the test
-  suites may reach kreloses.com.
+  always `redirect: "manual"`). Tests pass `createFakeKreloses().transport`. A Vitest setup file
+  (`src/test-support/no-real-kreloses.ts`) makes any `fetch` to `*.kreloses.com` throw and fails
+  the test, so a test that forgets the transport cannot reach the real site.
 - **Fixtures and the fake** (Seam 2): synthetic responses in `src/kreloses/__fixtures__/` (see its
   README — none are real recordings yet), served by `createFakeKreloses()` in
-  `src/kreloses/testing/fake-kreloses.ts`. To extend for `listInvoices` / `getInvoice` (#4, #5):
-  add `*.response.json` + body fixtures, a route in the fake's `route()`, and the Reader function
-  on top of `session.postJson` / `session.navigate`; use `fake.intercept(request => Response)` in a
-  test for one-off failures and `fake.expireSessions()` for expiry.
+  `src/kreloses/testing/fake-kreloses.ts`. Every sea path needs a signed-in session in the fake
+  (page loads get a 302 to the login page, AJAX calls the `X-Responded-JSON` answer; option
+  `ajaxAuthFailure: "redirect"` for a plain 302). To extend for `listInvoices` / `getInvoice`
+  (#4, #5): add `*.response.json` + body fixtures and a route to `BUILT_IN_ROUTES` (or
+  `fake.addRoute({host: "sea", method, path, handler: ({request, account, fixture}) => …})` in a
+  test) — the login check comes for free — then the Reader function on top of `session.postJson`
+  / `session.getHtml`. Use `fake.intercept(request => Response | undefined)` for one-off failures
+  and `fake.expireSessions()` for expiry.
 
 #### Live login check (real Kreloses)
 
 `npm run test:live` logs in to the **real** Kreloses once, lists the locations the login can see,
-and prints a redacted diagnostic: each HTTP hop's method, host/path (no query string) and status,
-cookie names with their Domain/Path/expiry/flags (never values), whether a one-time-code step
-appeared, which host the session works on, the number of visible locations (not their names) and
-the shape (keys/types) of the GetFilter JSON. It is skipped unless credentials are set, needs no
+and prints a redacted diagnostic: each HTTP hop's method, host/path (no query string; path
+segments other than generic route words shown as `<segment>`, numbers as `<number>`), status and
+any `X-Responded-JSON` status, cookie names with their Domain/Path/expiry/flags (never values),
+whether a one-time-code step appeared, which host the session works on, the number of visible
+locations (not their names) and the shape (keys/types) of the GetFilter JSON (objects whose keys
+look like data, e.g. names, are shown only as `{<n keys>: …}`). It is skipped unless credentials are set, needs no
 database, and is never part of `npm test`. Run it from a terminal without saving the password in
 your shell history:
 

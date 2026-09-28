@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { KRELOSES_SEA_URL, KRELOSES_WWW_URL } from "../config";
 import type { Transport, TransportRequest } from "../transport";
+
+import { SYNTHETIC_ACCOUNTS, type FakeAccount } from "./synthetic-accounts";
 
 /**
  * A fake Kreloses for tests: a `Transport` that answers like www.kreloses.com and
@@ -13,52 +16,18 @@ import type { Transport, TransportRequest } from "../transport";
  *
  * It behaves like the real ASP.NET MVC site where it matters to the Reader: the anti-forgery
  * token must come back in both the form and its cookie (otherwise HTTP 500, as MVC does), the auth
- * cookie is scoped to the parent domain, and sea redirects to the www login page without it.
+ * cookie is scoped to the parent domain, and EVERY sea path needs a signed-in session — without
+ * one, a page load is redirected to the www login page and an AJAX call (X-Requested-With) gets
+ * ASP.NET Identity's HTTP 200 + `X-Responded-JSON` 401.
  *
- * Extending it (tickets #4, #5): add a route in `route()` backed by a new fixture file, and use
- * `intercept()` in a test to inject one-off responses (errors, odd shapes).
+ * Extending it (tickets #4, #5): add a route to `BUILT_IN_ROUTES` below (or `fake.addRoute(…)` in
+ * a test), backed by fixture files; sea routes get the login check for free. Use `intercept()` in
+ * a test to inject one-off responses (errors, odd shapes) and `expireSessions()` for expiry.
  */
 
-export const FIXTURES_DIR = path.join(process.cwd(), "src", "kreloses", "__fixtures__");
+export const FIXTURES_DIR = fileURLToPath(new URL("../__fixtures__/", import.meta.url));
 
-export interface FakeAccount {
-  email: string;
-  password: string;
-  /** Location ids (from `report-14-filter.json`) this login can see. */
-  locationIds: string[];
-  /**
-   * `ok` (default); `one_time_code` (redirects to a code page after the password);
-   * `host_only_cookie` (auth cookie without Domain, so it never reaches sea);
-   * `kreloses_down` (HTTP 503 on the login POST); `rate_limited` (HTTP 429 on the login POST).
-   */
-  behaviour?: "ok" | "one_time_code" | "host_only_cookie" | "kreloses_down" | "rate_limited";
-}
-
-/** Synthetic logins used by tests and the e2e fake server. None of these exist anywhere. */
-export const SYNTHETIC_ACCOUNTS = {
-  north: { email: "north.branch@clinic.example", password: "north-pass-1101", locationIds: ["1101"] },
-  south: { email: "south.branch@clinic.example", password: "south-pass-1102", locationIds: ["1102"] },
-  both: { email: "both.branches@clinic.example", password: "both-pass-1101-1102", locationIds: ["1101", "1102"] },
-  oneTimeCode: {
-    email: "two.step@clinic.example",
-    password: "two-step-pass",
-    locationIds: ["1101"],
-    behaviour: "one_time_code",
-  },
-  hostOnlyCookie: {
-    email: "host.only@clinic.example",
-    password: "host-only-pass",
-    locationIds: ["1101"],
-    behaviour: "host_only_cookie",
-  },
-  down: { email: "kreloses.down@clinic.example", password: "down-pass", locationIds: [], behaviour: "kreloses_down" },
-  rateLimited: {
-    email: "rate.limited@clinic.example",
-    password: "rate-limited-pass",
-    locationIds: [],
-    behaviour: "rate_limited",
-  },
-} as const satisfies Record<string, FakeAccount>;
+export { SYNTHETIC_ACCOUNTS, type FakeAccount } from "./synthetic-accounts";
 
 export interface RecordedRequest {
   method: string;
@@ -70,12 +39,42 @@ export interface RecordedRequest {
 
 export type Interceptor = (request: RecordedRequest) => Response | undefined | Promise<Response | undefined>;
 
+export interface FakeRouteContext {
+  request: RecordedRequest;
+  /** The signed-in account. Always set for sea routes (unless the route is `public`). */
+  account: FakeAccount | undefined;
+  /** `fixtureResponse(name, variables)` with the fake's hosts. */
+  fixture(name: string, variables?: Record<string, string>): Response;
+}
+
+export interface FakeRoute {
+  host: "www" | "sea";
+  method: "GET" | "POST";
+  /** A string matches the path exactly, ignoring case and a trailing slash; or a RegExp. */
+  path: string | RegExp;
+  /** www routes are always public. A sea route answers only signed-in requests unless `public`. */
+  public?: boolean;
+  handler(context: FakeRouteContext): Response | Promise<Response>;
+}
+
+export interface FakeKrelosesOptions {
+  accounts?: readonly FakeAccount[];
+  baseUrls?: { www: string; sea: string };
+  /**
+   * How sea answers an AJAX call without a valid session: `x-responded-json` (default; what
+   * ASP.NET Identity's cookie middleware does) or `redirect` (a plain 302 to the login page).
+   */
+  ajaxAuthFailure?: "x-responded-json" | "redirect";
+}
+
 export interface FakeKreloses {
   transport: Transport;
   /** Every request received, in order. */
   requests: RecordedRequest[];
-  /** Adds a handler that runs before the built-in routes; return a Response to answer, or undefined. */
+  /** Adds a handler that runs before any route; return a Response to answer, or undefined. */
   intercept(interceptor: Interceptor): void;
+  /** Adds a route (checked before the built-in ones). Sea routes get the login check. */
+  addRoute(route: FakeRoute): void;
   /** Invalidates every auth ticket, as if every session had expired. */
   expireSessions(): void;
 }
@@ -85,23 +84,17 @@ const FORM_TOKEN = "SYNTHETIC-FORM-TOKEN-7f3a9c1e2b4d+Qw==";
 const COOKIE_TOKEN = "SYNTHETIC-COOKIE-TOKEN-51c0ffee";
 const AUTH_COOKIE = ".AspNet.ApplicationCookie";
 
-export function createFakeKreloses(
-  options: { accounts?: readonly FakeAccount[]; baseUrls?: { www: string; sea: string } } = {},
-): FakeKreloses {
+export function createFakeKreloses(options: FakeKrelosesOptions = {}): FakeKreloses {
   const accounts: readonly FakeAccount[] = options.accounts ?? Object.values(SYNTHETIC_ACCOUNTS);
   const www = new URL(options.baseUrls?.www ?? KRELOSES_WWW_URL);
   const sea = new URL(options.baseUrls?.sea ?? KRELOSES_SEA_URL);
   const hosts = { www, sea };
   const requests: RecordedRequest[] = [];
   const interceptors: Interceptor[] = [];
+  const addedRoutes: FakeRoute[] = [];
   const sessions = new Map<string, FakeAccount>();
 
-  function signedInAccount(request: RecordedRequest): FakeAccount | undefined {
-    const ticket = readCookie(request.headers.cookie, AUTH_COOKIE);
-    return ticket ? sessions.get(ticket) : undefined;
-  }
-
-  function postLogin(request: RecordedRequest): Response {
+  function postLogin({ request, fixture }: FakeRouteContext): Response {
     const form = new URLSearchParams(request.body ?? "");
     if (form.get("__RequestVerificationToken") !== FORM_TOKEN || readCookie(request.headers.cookie, "__RequestVerificationToken") !== COOKIE_TOKEN) {
       return new Response(
@@ -111,7 +104,7 @@ export function createFakeKreloses(
     }
     const email = (form.get("Email") ?? "").trim().toLowerCase();
     const account = accounts.find((candidate) => candidate.email.toLowerCase() === email && candidate.password === form.get("Password"));
-    if (!account) return fixtureResponse("post-login-bad-credentials", {}, hosts);
+    if (!account) return fixture("post-login-bad-credentials");
 
     switch (account.behaviour ?? "ok") {
       case "kreloses_down":
@@ -122,7 +115,7 @@ export function createFakeKreloses(
       case "rate_limited":
         return new Response("Too Many Requests", { status: 429, headers: { "Retry-After": "120" } });
       case "one_time_code":
-        return fixtureResponse("post-login-one-time-code", { AUTH_TICKET: newTicket() }, hosts);
+        return fixture("post-login-one-time-code", { AUTH_TICKET: newTicket() });
       case "host_only_cookie": {
         const ticket = newTicket();
         sessions.set(ticket, account);
@@ -131,12 +124,12 @@ export function createFakeKreloses(
       default: {
         const ticket = newTicket();
         sessions.set(ticket, account);
-        return fixtureResponse("post-login-success", { AUTH_TICKET: ticket }, hosts);
+        return fixture("post-login-success", { AUTH_TICKET: ticket });
       }
     }
   }
 
-  function getFilter(request: RecordedRequest, account: FakeAccount): Response {
+  function getFilter({ request, account, fixture }: FakeRouteContext): Response {
     let report: unknown;
     try {
       report = (JSON.parse(request.body ?? "") as { report?: unknown }).report;
@@ -149,33 +142,51 @@ export function createFakeKreloses(
     };
     for (const filter of template.Filters) {
       if (filter.Name === "Location" && filter.Options) {
-        filter.Options = filter.Options.filter((option) => option.Value === "" || account.locationIds.includes(option.Value));
+        filter.Options = filter.Options.filter((option) => option.Value === "" || account!.locationIds.includes(option.Value));
       }
     }
-    const response = fixtureResponse("post-get-filter", {}, hosts);
+    const response = fixture("post-get-filter");
     return new Response(JSON.stringify(template), { status: response.status, headers: response.headers });
   }
 
-  function route(request: RecordedRequest): Response {
-    const { method, url } = request;
-    const routePath = url.pathname.toLowerCase().replace(/\/+$/, "") || "/";
-    if (routePath === "/__health") return new Response("ok");
+  const BUILT_IN_ROUTES: FakeRoute[] = [
+    {
+      host: "www",
+      method: "GET",
+      path: "/account/login",
+      handler: ({ fixture }) => fixture("get-login", { ASPNET_SESSION: randomBytes(12).toString("hex") }),
+    },
+    { host: "www", method: "POST", path: "/account/login", handler: postLogin },
+    { host: "www", method: "GET", path: "/account/verifycode", handler: ({ fixture }) => fixture("get-verify-code") },
+    { host: "sea", method: "GET", path: "/", handler: ({ fixture }) => fixture("get-sea-root") },
+    { host: "sea", method: "GET", path: "/home/index", handler: ({ fixture }) => fixture("get-sea-home") },
+    { host: "sea", method: "POST", path: "/report/getfilter", handler: getFilter },
+  ];
 
-    if (url.host === www.host) {
-      if (routePath === "/account/login" && method === "GET") {
-        return fixtureResponse("get-login", { ASPNET_SESSION: randomBytes(12).toString("hex") }, hosts);
-      }
-      if (routePath === "/account/login" && method === "POST") return postLogin(request);
-      if (routePath === "/account/verifycode" && method === "GET") return fixtureResponse("get-verify-code", {}, hosts);
+  function matches(route: FakeRoute, request: RecordedRequest): boolean {
+    const onHost = request.url.host === (route.host === "www" ? www.host : sea.host);
+    if (!onHost || route.method !== request.method) return false;
+    if (route.path instanceof RegExp) return route.path.test(request.url.pathname);
+    const normalise = (value: string) => value.toLowerCase().replace(/\/+$/, "") || "/";
+    return normalise(route.path) === normalise(request.url.pathname);
+  }
+
+  function route(request: RecordedRequest): Response | Promise<Response> {
+    if (request.url.pathname === "/__health") return new Response("ok");
+    const ticket = readCookie(request.headers.cookie, AUTH_COOKIE);
+    const account = ticket ? sessions.get(ticket) : undefined;
+    const fixture = (name: string, variables: Record<string, string> = {}) => fixtureResponse(name, variables, hosts);
+    const context: FakeRouteContext = { request, account, fixture };
+
+    const found = [...addedRoutes, ...BUILT_IN_ROUTES].find((candidate) => matches(candidate, request));
+    // Every sea path, known or not, needs a signed-in session first.
+    const needsSession = found ? found.host === "sea" && !found.public : request.url.host === sea.host;
+    if (needsSession && !account) {
+      const ajax = request.headers["x-requested-with"]?.toLowerCase() === "xmlhttprequest";
+      const answer = ajax && (options.ajaxAuthFailure ?? "x-responded-json") === "x-responded-json";
+      return fixture(answer ? "sea-ajax-not-signed-in" : "sea-not-signed-in");
     }
-    if (url.host === sea.host) {
-      const account = signedInAccount(request);
-      const isSeaRoute = ["/", "/home/index", "/report/getfilter"].includes(routePath);
-      if (isSeaRoute && !account) return fixtureResponse("sea-not-signed-in", {}, hosts);
-      if (account && routePath === "/" && method === "GET") return fixtureResponse("get-sea-root", {}, hosts);
-      if (account && routePath === "/home/index" && method === "GET") return fixtureResponse("get-sea-home", {}, hosts);
-      if (account && routePath === "/report/getfilter" && method === "POST") return getFilter(request, account);
-    }
+    if (found) return found.handler(context);
     return new Response("<html><body><h1>404 - Not found</h1></body></html>", {
       status: 404,
       headers: { "Content-Type": "text/html" },
@@ -201,9 +212,11 @@ export function createFakeKreloses(
     transport,
     requests,
     intercept: (interceptor) => void interceptors.push(interceptor),
+    addRoute: (added) => void addedRoutes.push(added),
     expireSessions: () => sessions.clear(),
   };
 }
+
 
 export function readFixture(name: string): string {
   return readFileSync(path.join(FIXTURES_DIR, name), "utf8");

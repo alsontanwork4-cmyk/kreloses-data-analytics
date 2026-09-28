@@ -98,11 +98,18 @@ export async function runLoginDiagnostic(
 }
 
 export function formatLoginDiagnostic(diagnostic: LoginDiagnostic): string {
-  const lines = ["Kreloses live login check (redacted: no email, password, cookie values, tokens or query strings)", ""];
+  const lines = [
+    "Kreloses live login check (redacted: no email, password, cookie values, tokens, query strings, names or ids)",
+    "",
+  ];
   lines.push("HTTP exchanges:");
   for (const hop of diagnostic.hops) {
     const outcome = hop.status === null ? `no response (${hop.failure})` : String(hop.status);
-    const extras = [hop.location ? `-> ${hop.location}` : null, hop.contentType ? `[${hop.contentType}]` : null];
+    const extras = [
+      hop.location ? `-> ${hop.location}` : null,
+      hop.contentType ? `[${hop.contentType}]` : null,
+      hop.respondedJsonStatus !== undefined ? `[X-Responded-JSON status ${hop.respondedJsonStatus}]` : null,
+    ];
     lines.push(`  ${hop.seq}. ${hop.method} ${hop.url} -> ${outcome}${extras.filter(Boolean).map((x) => ` ${x}`).join("")} (${hop.durationMs} ms)`);
     for (const change of hop.setCookies) lines.push(`       ${describeCookieChange(change)}`);
   }
@@ -129,7 +136,50 @@ export function formatLoginDiagnostic(diagnostic: LoginDiagnostic): string {
     lines.push("Cookies held at the end:");
     for (const cookie of diagnostic.cookies) lines.push(`  ${describeCookie(cookie)}`);
   }
-  return lines.join("\n");
+  return maskUrlPaths(lines.join("\n"), diagnostic);
+}
+
+/**
+ * Generic route words kept as-is in URL paths; any other path segment could be data (a clinic's
+ * own slug, a name) and is printed as `<segment>`, numbers as `<number>`.
+ */
+const ROUTE_WORDS = new Set(
+  [
+    "account", "login", "logon", "logoff", "logout", "signin", "signout", "register", "confirm", "lockout",
+    "forgotpassword", "resetpassword", "verifycode", "sendcode", "twofactor", "externallogin",
+    "externallogincallback", "accessdenied", "authorize", "oauth", "connect", "callback", "home", "index",
+    "default", "dashboard", "app", "api", "report", "reports", "getfilter", "sale", "sales", "get", "list",
+    "overview", "detail", "details", "invoice", "invoices", "customer", "customers", "staff", "settings",
+    "profile", "manage", "select", "selectlocation", "location", "locations", "branch", "branches", "clinic",
+    "region", "error", "errors", "content", "scripts", "bundles",
+  ],
+);
+
+function maskPath(hostAndPath: string): string {
+  const slash = hostAndPath.indexOf("/");
+  if (slash < 0) return hostAndPath;
+  const segments = hostAndPath
+    .slice(slash + 1)
+    .split("/")
+    .map((segment) =>
+      segment === "" ? "" : /^\d+$/.test(segment) ? "<number>" : ROUTE_WORDS.has(segment.toLowerCase()) ? segment : "<segment>",
+    );
+  return `${hostAndPath.slice(0, slash)}/${segments.join("/")}`;
+}
+
+/** Replaces every URL path seen in the hops (wherever it appears in the report) by its masked form. */
+function maskUrlPaths(report: string, diagnostic: LoginDiagnostic): string {
+  const urls = new Set<string>();
+  for (const hop of diagnostic.hops) {
+    urls.add(hop.url);
+    if (hop.location) urls.add(hop.location);
+  }
+  let masked = report;
+  for (const url of [...urls].sort((a, b) => b.length - a.length)) {
+    const replacement = maskPath(url);
+    if (replacement !== url) masked = masked.replaceAll(url, replacement);
+  }
+  return masked;
 }
 
 function describeError(error: unknown): string {
@@ -148,7 +198,7 @@ function describeCookieChange(change: CookieChange): string {
 function describeCookie(cookie: CookieSummary): string {
   const flags = [
     cookie.hostOnly ? `host-only ${cookie.domain}` : `Domain=${cookie.domain}`,
-    `Path=${cookie.path}`,
+    `Path=${maskPath(`x${cookie.path}`).slice(1)}`,
     cookie.expiresAt ? `expires ${cookie.expiresAt}` : "session cookie",
     cookie.secure ? "Secure" : null,
     cookie.httpOnly ? "HttpOnly" : null,

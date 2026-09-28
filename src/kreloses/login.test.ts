@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { AuthFailed, LayoutChanged, RateLimited, Transient, listLocations, login, type HopEvent } from "./index";
-import { SYNTHETIC_ACCOUNTS, createFakeKreloses, readFixture } from "./testing/fake-kreloses";
+import {
+  AuthFailed,
+  KRELOSES_SEA_URL,
+  KRELOSES_WWW_URL,
+  LayoutChanged,
+  RateLimited,
+  Transient,
+  listLocations,
+  login,
+  type HopEvent,
+} from "./index";
+import { SYNTHETIC_ACCOUNTS, createFakeKreloses, fixtureResponse, readFixture } from "./testing/fake-kreloses";
 
 /** Seam 2: the Reader's login against the synthetic fixtures served by the fake Kreloses. */
 const fast = { requestDelayMs: 0 };
@@ -171,6 +181,102 @@ describe("Kreloses Reader: login", () => {
     );
     expect(error).toBeInstanceOf(Transient);
     expect((error as Error).message).toBe("no answer within 20 ms to GET www.kreloses.com/account/login");
+  });
+
+  it("does not mistake an app page with a code-like field for a one-time-code step", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.url.host === "sea.kreloses.com" && request.url.pathname === "/Home/Index"
+        ? new Response(
+            readFixture("sea-app-home.html").replace(
+              '<div id="root"',
+              '<form action="/Items/Search" method="get"><input type="text" name="Code" autocomplete="one-time-code" /></form><div id="root"',
+            ),
+            { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
+          )
+        : undefined,
+    );
+    const session = await login(north, { ...fast, transport: fake.transport });
+    expect(await listLocations(session)).toEqual([{ id: "1101", name: "Branch North" }]);
+  });
+
+  it("treats a redirect back to the login form that never reached sea as bad credentials", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.method === "POST" && request.url.pathname === "/account/login"
+        ? new Response(null, { status: 302, headers: { Location: "/account/login?failed=1" } })
+        : undefined,
+    );
+    const error = await loginError(login(north, { ...fast, transport: fake.transport }));
+    expect(error).toBeInstanceOf(AuthFailed);
+    expect(error).toMatchObject({ reason: "bad_credentials" });
+  });
+
+  it("uses Kreloses's .alert-danger / .text-danger text as the bad-credentials message", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.method === "POST" && request.url.pathname === "/account/login"
+        ? new Response(
+            readFixture("login-page.html").replace(
+              "<h2>Log in</h2>",
+              '<h2>Log in</h2><div class="alert alert-danger" role="alert"> This account is locked. Try again in 5 minutes. </div><p class="text-danger">*</p>',
+            ),
+            { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
+          )
+        : undefined,
+    );
+    const error = await loginError(login(north, { ...fast, transport: fake.transport }));
+    expect(error).toMatchObject({ reason: "bad_credentials", detail: "This account is locked. Try again in 5 minutes." });
+  });
+
+  it("raises LayoutChanged when the login form POST fails with HTTP 500 (e.g. an anti-forgery mismatch)", async () => {
+    const fake = createFakeKreloses();
+    // The login page without its anti-forgery cookie: the fake then fails the POST like MVC does.
+    fake.intercept((request) =>
+      request.method === "GET" && request.url.pathname === "/account/login"
+        ? new Response(readFixture("login-page.html"), { status: 200, headers: { "Content-Type": "text/html" } })
+        : undefined,
+    );
+    const error = await loginError(login(north, { ...fast, transport: fake.transport }));
+    expect(error).toBeInstanceOf(LayoutChanged);
+    expect((error as Error).message).toMatch(/HTTP 500.*anti-forgery/);
+
+    // A 503 (maintenance, overload) stays Transient: worth retrying later.
+    const unavailable = await loginError(login(down, { ...fast, transport: createFakeKreloses().transport }));
+    expect(unavailable).toBeInstanceOf(Transient);
+    expect(unavailable).toMatchObject({ status: 503 });
+  });
+
+  it("reports a redirect loop as its own unexpected step", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.url.host === "sea.kreloses.com" && request.url.pathname === "/"
+        ? new Response(null, { status: 302, headers: { Location: "/" } })
+        : undefined,
+    );
+    const error = await loginError(login(north, { ...fast, transport: fake.transport }));
+    expect(error).toMatchObject({ reason: "unexpected_step", step: "too_many_redirects" });
+    expect((error as AuthFailed).detail).toMatch(/more than 10 redirects/);
+  });
+
+  it("finds the anti-forgery token outside the form, or in a meta tag", async () => {
+    const tokenInput = /<input name="__RequestVerificationToken"[^>]*\/>/;
+    const token = readFixture("login-page.html").match(tokenInput)![0];
+    for (const page of [
+      readFixture("login-page.html").replace(tokenInput, "").replace("</body>", `${token}</body>`),
+      readFixture("login-page.html")
+        .replace(tokenInput, "")
+        .replace("</head>", '<meta name="__RequestVerificationToken" content="SYNTHETIC-FORM-TOKEN-7f3a9c1e2b4d&#x2B;Qw==" /></head>'),
+    ]) {
+      const fake = createFakeKreloses();
+      fake.intercept((request) => {
+        if (request.method !== "GET" || request.url.pathname !== "/account/login") return undefined;
+        const response = fixtureResponse("get-login", { ASPNET_SESSION: "s" }, { www: new URL(KRELOSES_WWW_URL), sea: new URL(KRELOSES_SEA_URL) });
+        return new Response(page, { status: 200, headers: response.headers });
+      });
+      const session = await login(north, { ...fast, transport: fake.transport });
+      expect(await listLocations(session)).toHaveLength(1);
+    }
   });
 
   it("reports every hop to an observer without values or query strings", async () => {

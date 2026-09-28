@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { formatLoginDiagnostic, runLoginDiagnostic } from "./diagnostics";
-import { SYNTHETIC_ACCOUNTS, createFakeKreloses } from "./testing/fake-kreloses";
+import { SYNTHETIC_ACCOUNTS, createFakeKreloses, readFixture } from "./testing/fake-kreloses";
 
 /**
  * The live smoke test prints this report so the owner can paste it into the ticket (a public
@@ -60,6 +60,94 @@ describe("live login diagnostic (redacted)", () => {
     for (const secret of [oneTimeCode.password, oneTimeCode.email, "SYNTHETIC-AUTH-", "Provider="]) {
       expect(report).not.toContain(secret);
     }
+  });
+
+  it("never prints dictionary keys (names) from the GetFilter JSON shape", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.url.pathname === "/Report/GetFilter"
+        ? Response.json({
+            Filters: [{ Name: "Location", Options: [{ Value: "1101", Text: "Branch North" }] }],
+            Totals: { "Dr Real Person": 5, "Nurse Someone Else": 2, "owner@clinic.example": 1 },
+            // Many plain keys: collapsed too, in case they are names or ids.
+            Customers: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`Customer${i}`, { Visits: i }])),
+          })
+        : undefined,
+    );
+    const report = formatLoginDiagnostic(await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport } }));
+    expect(report).toContain("Visible locations: 1");
+    expect(report).toContain("Totals: {<3 keys>: number}");
+    expect(report).toContain("Customers: {<30 keys>: {Visits: number}}");
+    for (const secret of ["Dr Real Person", "Nurse Someone", "owner@clinic.example", "Customer0", "Customer29"]) {
+      expect(report).not.toContain(secret);
+    }
+  });
+
+  it("does not leak names through the shape when GetFilter's layout changed", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.url.pathname === "/Report/GetFilter"
+        ? Response.json({ Filters: [{ Name: "Location", Options: { "Happy Paws Clinic North": 1101 } }] })
+        : undefined,
+    );
+    const diagnostic = await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport } });
+    const report = formatLoginDiagnostic(diagnostic);
+    expect(report).toContain("Visible locations: FAILED — LayoutChanged");
+    expect(report).toContain("Options: {<1 key>: number}");
+    expect(report).not.toContain("Happy Paws");
+  });
+
+  it("keeps Kreloses's own login error text out of the report", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.method === "POST" && request.url.pathname === "/account/login"
+        ? new Response(
+            readFixture("login-failed.html").replace(
+              "<h2>Log in</h2>",
+              '<h2>Log in</h2><div class="alert alert-danger">Hello Dr Real Person, your account is locked.</div>',
+            ),
+            { status: 200, headers: { "Content-Type": "text/html" } },
+          )
+        : undefined,
+    );
+    const report = formatLoginDiagnostic(
+      await runLoginDiagnostic({ email: both.email, password: "wrong" }, { reader: { requestDelayMs: 0, transport: fake.transport } }),
+    );
+    expect(report).toContain("Login: FAILED — AuthFailed (bad_credentials)");
+    expect(report).not.toContain("Invalid login attempt");
+    expect(report).not.toContain("Real Person");
+    expect(report).not.toContain("wrong");
+  });
+
+  it("masks URL path segments that are not common route words (e.g. a clinic's own slug)", async () => {
+    const fake = createFakeKreloses();
+    fake.intercept((request) =>
+      request.method === "POST" && request.url.pathname === "/account/login"
+        ? new Response(null, { status: 302, headers: { Location: "https://sea.kreloses.com/happy-paws-kl/Home/Index/12345" } })
+        : undefined,
+    );
+    const report = formatLoginDiagnostic(await runLoginDiagnostic(both, { reader: { requestDelayMs: 0, transport: fake.transport } }));
+    expect(report).toContain("2. POST www.kreloses.com/account/login -> 302 -> sea.kreloses.com/<segment>/Home/Index/<number>");
+    expect(report).not.toContain("happy-paws");
+    expect(report).not.toContain("12345");
+  });
+
+  it("flags OWIN's X-Responded-JSON answer on a hop", async () => {
+    const fake = createFakeKreloses();
+    let slept = 0;
+    const diagnostic = await runLoginDiagnostic(both, {
+      reader: { requestDelayMs: 0, transport: fake.transport },
+      probeMinutes: 5,
+      probeIntervalMinutes: 5,
+      sleep: async () => {
+        slept += 1;
+        fake.expireSessions();
+      },
+    });
+    expect(slept).toBe(1);
+    const report = formatLoginDiagnostic(diagnostic);
+    expect(report).toMatch(/POST sea\.kreloses\.com\/Report\/GetFilter -> 200 .*\[X-Responded-JSON status 401\]/);
+    expect(report).toContain("Session probe: FAILED after 5 min — AuthFailed (session_expired)");
   });
 
   it("optionally probes how long the session stays valid", async () => {

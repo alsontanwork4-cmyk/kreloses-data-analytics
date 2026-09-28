@@ -1,0 +1,10 @@
+{
+  "comment": "An AJAX request (X-Requested-With: XMLHttpRequest) to sea without a valid auth cookie (never signed in, or the session expired): ASP.NET Identity's cookie middleware does not redirect AJAX calls; it answers HTTP 200 with an empty body and puts the would-be 401 + redirect in X-Responded-JSON.",
+  "status": 200,
+  "headers": {
+    "X-Responded-JSON": "{\"status\":401,\"headers\":{\"location\":\"https:\\/\\/www.kreloses.com\\/account\\/login?ReturnUrl=%2F\"}}",
+    "Cache-Control": "private"
+  },
+  "setCookie": [],
+  "body": ""
+}

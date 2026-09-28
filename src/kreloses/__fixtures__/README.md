@@ -17,7 +17,8 @@ its own hosts and fills `{{VAR}}` placeholders (per-login auth tickets).
 | `post-login-success.response.json` | Good credentials: `302` to `https://sea.kreloses.com/` and `.AspNet.ApplicationCookie` with `domain=.kreloses.com` |
 | `get-sea-root.response.json` | `GET sea…/` signed in: relative `302` to `/Home/Index` |
 | `get-sea-home.response.json` + `sea-app-home.html` | The signed-in app shell on sea (a logout form, no password field) |
-| `sea-not-signed-in.response.json` | Any sea request without a valid auth cookie: `302` to `https://www.kreloses.com/account/login?ReturnUrl=…` (the "login redirect") |
+| `sea-not-signed-in.response.json` | A sea page load without a valid auth cookie: `302` to `https://www.kreloses.com/account/login?ReturnUrl=…` (the "login redirect") |
+| `sea-ajax-not-signed-in.response.json` | A sea AJAX call (`X-Requested-With: XMLHttpRequest`) without a valid auth cookie: ASP.NET Identity's HTTP 200, empty body, `X-Responded-JSON: {"status":401,…}` |
 | `post-login-one-time-code.response.json` + `get-verify-code.response.json` + `login-verify-code.html` | An OTP / two-factor step: `302` to `/Account/VerifyCode`, a form with a `Code` field |
 | `post-get-filter.response.json` + `report-14-filter.json` | `POST sea…/Report/GetFilter {"report":14}`: the Sale List filter template (Location, Sale status, Payment, Customer, Staff, Invoice category, Date). The fake narrows Location to the signed-in login's locations |
 | `report-14-filter-lowercase.json` | The same data in camelCase, wrapped in `{success, data}`, numeric ids and a duplicate — spellings the parser also accepts |
@@ -32,6 +33,9 @@ Until real responses are recorded, these are guesses:
   `Id`/`Name`, wrappers). The live test prints its **shape** (keys and types only).
 - The redirect chain after a successful login (here: www → `sea/` → `sea/Home/Index`).
 - The auth cookie's name and Domain, and whether the session cookie is persistent.
+- How sea answers an expired session: a 302 to the login page, or (for AJAX calls) ASP.NET
+  Identity's HTTP 200 + `X-Responded-JSON` 401. The Reader handles both; the live report flags
+  `X-Responded-JSON` on any hop.
 - Whether a real login ever shows an OTP page (the spec says no captcha was observed; OTP unknown).
 
 When replacing a fixture with a recorded one: strip every cookie value, token, customer name,

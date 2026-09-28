@@ -60,8 +60,6 @@ export function ConnectionCard({ connection }: { connection: ConnectionSummary }
           <dd data-testid="connection-branches">
             {connection.status !== "ok" ? (
               <span className="text-muted-foreground">Unknown until the login works</span>
-            ) : connection.visibleLocations.length === 0 ? (
-              <span className="text-destructive">None — this login cannot see any branch</span>
             ) : (
               <ul className="flex flex-wrap gap-1.5">
                 {connection.visibleLocations.map((location) => (

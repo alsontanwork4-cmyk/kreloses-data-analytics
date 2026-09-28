@@ -32,6 +32,7 @@ export type UnexpectedLoginStep =
   | "one_time_code"
   | "returned_to_login"
   | "redirected_elsewhere"
+  | "too_many_redirects"
   | "unrecognised_page";
 
 export class AuthFailed extends KrelosesError {
@@ -76,10 +77,16 @@ export class RateLimited extends KrelosesError {
 
 export class Transient extends KrelosesError {
   readonly code = "transient" as const;
+  /** The HTTP status when Kreloses answered with a server error; absent for network failures and timeouts. */
+  readonly status?: number;
+  /** The request that failed, as `METHOD host/path` (no query string). */
+  readonly request?: string;
 
-  constructor(message: string, options: { cause?: unknown } = {}) {
+  constructor(message: string, options: { cause?: unknown; status?: number; request?: string } = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "Transient";
+    this.status = options.status;
+    this.request = options.request;
   }
 }
 

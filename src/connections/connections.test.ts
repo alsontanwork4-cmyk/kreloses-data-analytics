@@ -85,10 +85,40 @@ describe("Kreloses connections", () => {
     const unreachable = await saveConnection(context, { label: "Down", email: down.email, password: down.password });
     expect(unreachable).toMatchObject({ ok: true, connection: { status: "failed", lastErrorCode: "unreachable" } });
     expect(unreachable.ok && unreachable.connection.lastError).toBe(
-      "Couldn't reach Kreloses (Kreloses answered HTTP 503 to POST www.kreloses.com/account/login). Check the internet connection or try again in a few minutes.",
+      "Kreloses is having problems right now (it answered HTTP 503 to POST www.kreloses.com/account/login). Use “Test again” in a few minutes.",
     );
 
     expect(await listConnections(db.sql)).toHaveLength(3);
+  });
+
+  it("says plainly when Kreloses cannot be reached at all", async () => {
+    const offline: ConnectionsContext = {
+      ...context,
+      reader: {
+        requestDelayMs: 0,
+        transport: async () => {
+          throw new TypeError("fetch failed");
+        },
+      },
+    };
+    const result = await saveConnection(offline, { label: "North", email: north.email, password: north.password });
+    expect(result).toMatchObject({ ok: true, connection: { status: "failed", lastErrorCode: "unreachable" } });
+    expect(result.ok && result.connection.lastError).toBe(
+      "Couldn't reach Kreloses (network error on GET www.kreloses.com/account/login). Check the internet connection or try again in a few minutes.",
+    );
+  });
+
+  it("does not report a login that sees no branch as connected", async () => {
+    const noBranches: ConnectionsContext = {
+      ...context,
+      reader: {
+        requestDelayMs: 0,
+        transport: createFakeKreloses({ accounts: [{ email: "nothing.visible@clinic.example", password: "p", locationIds: [] }] })
+          .transport,
+      },
+    };
+    const result = await saveConnection(noBranches, { label: "Nothing", email: "nothing.visible@clinic.example", password: "p" });
+    expect(result).toMatchObject({ ok: true, connection: { status: "failed", lastErrorCode: "layout_changed", visibleLocations: [] } });
   });
 
   it("supports several connections, one per branch login", async () => {

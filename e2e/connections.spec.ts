@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { SYNTHETIC_ACCOUNTS } from "../src/kreloses/testing/fake-kreloses";
+import { SYNTHETIC_ACCOUNTS } from "../src/kreloses/testing/synthetic-accounts";
 
 import { signIn } from "./support/auth";
 import { withRunDatabase } from "./support/db";
@@ -129,7 +129,7 @@ test.describe("Kreloses connections", () => {
     await addConnection(page, { label: "Offline branch", email: down.email, password: down.password });
     const offline = card(page, "Offline branch");
     await expect(offline.getByTestId("connection-status")).toHaveText("Login failed");
-    await expect(offline.getByTestId("connection-error")).toContainText("Couldn't reach Kreloses");
+    await expect(offline.getByTestId("connection-error")).toContainText("Kreloses is having problems right now (it answered HTTP 503");
   });
 
   test("the form explains what is missing and never echoes the password", async ({ page }) => {

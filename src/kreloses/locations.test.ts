@@ -101,12 +101,34 @@ describe("Kreloses Reader: listLocations", () => {
     expect(await failure(listLocations(missing.session))).toBeInstanceOf(LayoutChanged);
   });
 
-  it("raises AuthFailed(session_expired) when Kreloses redirects to its login page", async () => {
+  it("raises AuthFailed(session_expired) on OWIN's AJAX answer: HTTP 200, empty body, X-Responded-JSON 401", async () => {
     const { fake, session } = await signedIn();
     fake.expireSessions();
     const error = await failure(listLocations(session));
     expect(error).toBeInstanceOf(AuthFailed);
     expect(error).toMatchObject({ reason: "session_expired" });
+
+    const request = fake.requests.at(-1)!;
+    expect(request.headers["x-requested-with"]).toBe("XMLHttpRequest");
+  });
+
+  it("raises AuthFailed(session_expired) when Kreloses redirects to its login page", async () => {
+    const fake = createFakeKreloses({ ajaxAuthFailure: "redirect" });
+    const session = await login(both, { ...fast, transport: fake.transport });
+    fake.expireSessions();
+    const error = await failure(listLocations(session));
+    expect(error).toBeInstanceOf(AuthFailed);
+    expect(error).toMatchObject({ reason: "session_expired" });
+  });
+
+  it("raises LayoutChanged when the login can see no location at all", async () => {
+    const fake = createFakeKreloses({
+      accounts: [{ email: "nothing.visible@clinic.example", password: "p", locationIds: [] }],
+    });
+    const session = await login({ email: "nothing.visible@clinic.example", password: "p" }, { ...fast, transport: fake.transport });
+    const error = await failure(listLocations(session));
+    expect(error).toBeInstanceOf(LayoutChanged);
+    expect((error as Error).message).toMatch(/no locations/);
   });
 
   it("raises AuthFailed(session_expired) on 401/403 or a login page instead of JSON", async () => {

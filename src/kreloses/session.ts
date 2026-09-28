@@ -27,6 +27,11 @@ export interface HopEvent {
   location?: string;
   contentType?: string;
   setCookies: CookieChange[];
+  /**
+   * The `status` inside an `X-Responded-JSON` header, when present: ASP.NET Identity's way of
+   * saying 401 ("sign in again") to an AJAX request while answering HTTP 200 with an empty body.
+   */
+  respondedJsonStatus?: number;
   /** `timeout` or `network`, when there was no response. */
   failure?: "timeout" | "network";
   durationMs: number;
@@ -49,11 +54,17 @@ export interface SessionResponse {
   body: string;
   /** How many redirects were followed to get here. */
   redirects: number;
-  /** For a 3xx that was not followed: where it pointed. */
-  location?: URL;
+  /** Every URL requested for this request, in order (the first, then each followed redirect). */
+  chain: URL[];
+  /** For a 3xx that was not followed: where it pointed (null if nowhere valid). */
+  location?: URL | null;
+  /** For a 3xx that was not followed: why. */
+  unfollowed?: "not_following" | "off_kreloses" | "invalid_location" | "too_many_redirects";
 }
 
-const MAX_REDIRECTS = 10;
+/** Redirects followed per request before giving up (a loop, most likely). */
+export const MAX_REDIRECTS = 10;
+
 const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 const JSON_ACCEPT = "application/json, text/javascript, */*; q=0.01";
 
@@ -90,9 +101,10 @@ export class KrelosesSession {
   }
 
   /**
-   * POSTs JSON to an app endpoint (e.g. `/Report/GetFilter`) the way the Kreloses web UI does, and
-   * returns the parsed JSON. A redirect to the login page, a 401/403, or a login page instead of
-   * JSON raises `AuthFailed("session_expired")`; anything that is not JSON raises `LayoutChanged`.
+   * POSTs JSON to an app endpoint (e.g. `/Report/GetFilter`, `/Sale/Get`) the way the Kreloses web
+   * UI does (an AJAX call), and returns the parsed JSON. An expired session raises
+   * `AuthFailed("session_expired")` (see `#expectAppResponse`); a body that is not JSON raises
+   * `LayoutChanged`.
    */
   async postJson(path: string, payload: unknown): Promise<unknown> {
     const url = this.url("sea", path);
@@ -109,22 +121,47 @@ export class KrelosesSession {
         Referer: `${this.#options.sea.origin}/`,
       },
     });
-    const where = `POST ${redactUrl(url)}`;
-    if (response.status >= 300 && response.status < 400) {
-      if (response.location && looksLikeLoginUrl(response.location)) throw new AuthFailed("session_expired");
-      throw new LayoutChanged(
-        `${where} redirected to ${response.location ? redactUrl(response.location) : "nowhere"} instead of returning data`,
-      );
-    }
-    if (response.status === 401 || response.status === 403) throw new AuthFailed("session_expired");
-    if (response.status !== 200) throw new LayoutChanged(`${where} returned HTTP ${response.status}`);
+    this.#expectAppResponse(response, "POST");
     const contentType = response.headers.get("content-type") ?? "";
-    if (!/json/i.test(contentType) && findLoginForm(response.body)) throw new AuthFailed("session_expired");
     try {
       return JSON.parse(response.body) as unknown;
     } catch {
-      throw new LayoutChanged(`${where} did not return JSON (content type "${contentType || "none"}")`);
+      throw new LayoutChanged(`POST ${redactUrl(url)} did not return JSON (content type "${contentType || "none"}")`);
     }
+  }
+
+  /**
+   * GETs an app page (e.g. `/Sale/Overview/{id}`) as a browser page load and returns its HTML. An
+   * expired session raises `AuthFailed("session_expired")`; a redirect elsewhere or a missing page
+   * raises `LayoutChanged`.
+   */
+  async getHtml(path: string): Promise<string> {
+    const url = this.url("sea", path);
+    const response = await this.navigate({ method: "GET", url, followRedirects: false });
+    this.#expectAppResponse(response, "GET");
+    return response.body;
+  }
+
+  /**
+   * The checks every app (sea) response goes through. The session has expired when Kreloses
+   * redirects to its login page, answers 401/403, answers an AJAX call with HTTP 200 and an
+   * `X-Responded-JSON` 401/403 (ASP.NET Identity's cookie middleware), or serves its login form
+   * instead of the page. Any other redirect or non-200 status means the endpoint has changed.
+   */
+  #expectAppResponse(response: SessionResponse, method: "GET" | "POST"): void {
+    const where = `${method} ${redactUrl(response.url)}`;
+    if (response.status >= 300 && response.status < 400) {
+      if (response.location && looksLikeLoginUrl(response.location)) throw new AuthFailed("session_expired");
+      throw new LayoutChanged(
+        `${where} redirected to ${response.location ? redactUrl(response.location) : "nowhere"} instead of answering`,
+      );
+    }
+    if (response.status === 401 || response.status === 403) throw new AuthFailed("session_expired");
+    const responded = respondedJsonStatus(response.headers);
+    if (responded === 401 || responded === 403) throw new AuthFailed("session_expired");
+    if (response.status !== 200) throw new LayoutChanged(`${where} returned HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!/json/i.test(contentType) && findLoginForm(response.body)) throw new AuthFailed("session_expired");
   }
 
   /**
@@ -154,20 +191,31 @@ export class KrelosesSession {
   async #follow(request: SessionRequest): Promise<SessionResponse> {
     let { method, url, body } = request;
     let headers = { ...request.headers };
+    const chain: URL[] = [];
     for (let redirects = 0; ; redirects += 1) {
+      chain.push(url);
       const response = await this.#exchange(method, url, headers, body);
       if (isRedirect(response.status)) {
         const target = resolveLocation(response.headers.get("location"), url);
         await discardBody(response);
-        if (!request.followRedirects || !target || !this.#isKrelosesUrl(target) || redirects >= MAX_REDIRECTS) {
-          return { status: response.status, url, headers: response.headers, body: "", redirects, location: target ?? undefined };
+        const unfollowed = !request.followRedirects
+          ? "not_following"
+          : !target
+            ? "invalid_location"
+            : !this.#isKrelosesUrl(target)
+              ? "off_kreloses"
+              : redirects >= MAX_REDIRECTS
+                ? "too_many_redirects"
+                : null;
+        if (unfollowed) {
+          return { status: response.status, url, headers: response.headers, body: "", redirects, chain, location: target, unfollowed };
         }
         if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
           method = "GET";
           body = undefined;
           headers = withoutBodyHeaders(headers);
         }
-        url = target;
+        url = target!;
         continue;
       }
       let text: string;
@@ -176,7 +224,7 @@ export class KrelosesSession {
       } catch (error) {
         throw new Transient(`the response to ${method} ${redactUrl(url)} was cut off`, { cause: error });
       }
-      return { status: response.status, url, headers: response.headers, body: text, redirects };
+      return { status: response.status, url, headers: response.headers, body: text, redirects, chain };
     }
   }
 
@@ -214,12 +262,13 @@ export class KrelosesSession {
         failure === "timeout"
           ? `no answer within ${timeout >= 1000 ? `${Math.round(timeout / 1000)}s` : `${timeout} ms`} to ${method} ${redactUrl(url)}`
           : `network error on ${method} ${redactUrl(url)}`,
-        { cause: error },
+        { cause: error, request: `${method} ${redactUrl(url)}` },
       );
     }
 
     const setCookies = this.#jar.store(url, response.headers.getSetCookie());
     const location = isRedirect(response.status) ? resolveLocation(response.headers.get("location"), url) : null;
+    const responded = respondedJsonStatus(response.headers);
     this.#options.observer?.({
       seq,
       method,
@@ -227,6 +276,7 @@ export class KrelosesSession {
       status: response.status,
       ...(location ? { location: redactUrl(location) } : {}),
       ...(response.headers.get("content-type") ? { contentType: response.headers.get("content-type")! } : {}),
+      ...(responded !== null ? { respondedJsonStatus: responded } : {}),
       setCookies,
       durationMs: Date.now() - startedAt,
     });
@@ -240,7 +290,10 @@ export class KrelosesSession {
     }
     if (response.status >= 500) {
       await discardBody(response);
-      throw new Transient(`Kreloses answered HTTP ${response.status} to ${method} ${redactUrl(url)}`);
+      throw new Transient(`Kreloses answered HTTP ${response.status} to ${method} ${redactUrl(url)}`, {
+        status: response.status,
+        request: `${method} ${redactUrl(url)}`,
+      });
     }
     return response;
   }
@@ -257,7 +310,19 @@ export function redactUrl(url: URL): string {
 }
 
 export function looksLikeLoginUrl(url: URL): boolean {
-  return /\/account\/log-?in\b/i.test(url.pathname);
+  return /\/account\/log-?(in|on)\b/i.test(url.pathname);
+}
+
+/** The `status` in an `X-Responded-JSON` header (`{"status":401,"headers":{…}}`), or null. */
+function respondedJsonStatus(headers: Headers): number | null {
+  const header = headers.get("x-responded-json");
+  if (!header) return null;
+  try {
+    const status = (JSON.parse(header) as { status?: unknown }).status;
+    return typeof status === "number" ? status : null;
+  } catch {
+    return null;
+  }
 }
 
 function isRedirect(status: number): boolean {

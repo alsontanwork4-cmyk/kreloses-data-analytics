@@ -77,13 +77,18 @@ export function findLoginForm(html: string): HtmlForm | null {
 const ONE_TIME_CODE_FIELD = /^(code|otp|otpcode|pin|token2fa|twofactorcode|verificationcode|authenticatorcode|recoverycode|selectedprovider)$/i;
 const ONE_TIME_CODE_PATH = /(verifycode|sendcode|two-?factor|2fa|otp|mfa|loginwith2fa)/i;
 
+/** A URL path such as `/Account/VerifyCode` or `/Account/SendCode`: a one-time-code / 2FA step. */
+export function isOneTimeCodePath(url: URL): boolean {
+  return ONE_TIME_CODE_PATH.test(url.pathname);
+}
+
 /**
- * Whether the page asks for a one-time code / second factor: a form with a code-like field (the
- * ASP.NET Identity `VerifyCode`/`SendCode` pages use `Code` and `SelectedProvider`), a field with
- * `autocomplete="one-time-code"`, or a URL path such as `/Account/VerifyCode`.
+ * Whether a page's forms ask for a one-time code / second factor: a code-like field (the ASP.NET
+ * Identity `VerifyCode`/`SendCode` pages use `Code` and `SelectedProvider`) or a field with
+ * `autocomplete="one-time-code"`. Only meaningful on login pages: an app page may well have a
+ * field called `Code` (e.g. an item-code search).
  */
-export function isOneTimeCodeStep(html: string, url: URL): boolean {
-  if (ONE_TIME_CODE_PATH.test(url.pathname)) return true;
+export function hasOneTimeCodeForm(html: string): boolean {
   return parseForms(html).some(
     (form) =>
       form.inputs.some(
@@ -93,13 +98,35 @@ export function isOneTimeCodeStep(html: string, url: URL): boolean {
   );
 }
 
+const TOKEN_FIELD = "__RequestVerificationToken";
+const META = /<meta\b([^>]*)>/gi;
+
+/**
+ * The ASP.NET anti-forgery token: from `form` if it has one, else from any hidden input of that
+ * name on the page, else from a `<meta name="__RequestVerificationToken" content="…">` tag.
+ */
+export function findAntiForgeryToken(html: string, form: HtmlForm | null): string | null {
+  const inForm = form?.inputs.find((input) => input.name === TOKEN_FIELD)?.value;
+  if (inForm) return inForm;
+  const onPage = parseInputs(html).find((input) => input.name === TOKEN_FIELD)?.value;
+  if (onPage) return onPage;
+  for (const match of html.matchAll(META)) {
+    const attributes = parseAttributes(match[1]!);
+    if (attributes.name === TOKEN_FIELD && attributes.content) return attributes.content;
+  }
+  return null;
+}
+
 const VALIDATION_SUMMARY = /<div\b[^>]*class\s*=\s*["'][^"']*\bvalidation-summary-errors\b[^"']*["'][^>]*>([\s\S]*?)<\/div\s*>/gi;
 const FIELD_ERROR = /<span\b[^>]*class\s*=\s*["'][^"']*\bfield-validation-error\b[^"']*["'][^>]*>([\s\S]*?)<\/span\s*>/gi;
+const DANGER = /<(div|span|p|li|strong|small)\b[^>]*class\s*=\s*["'][^"']*\b(?:alert-danger|text-danger)\b[^"']*["'][^>]*>([\s\S]*?)<\/\1\s*>/gi;
 const LIST_ITEM = /<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi;
 
 /**
- * ASP.NET MVC validation messages shown on the page (`validation-summary-errors` list items and
- * `field-validation-error` spans), as plain text, de-duplicated.
+ * Error messages shown on the page, as plain text, de-duplicated: ASP.NET MVC validation
+ * (`validation-summary-errors` list items, `field-validation-error` spans) and Bootstrap
+ * `.alert-danger` / `.text-danger` elements. Empty and one- or two-character texts (e.g. a
+ * required-field "*") are ignored.
  */
 export function validationMessages(html: string): string[] {
   const messages: string[] = [];
@@ -108,7 +135,8 @@ export function validationMessages(html: string): string[] {
     for (const item of items.length > 0 ? items : [summary[1]!]) messages.push(toPlainText(item));
   }
   for (const field of html.matchAll(FIELD_ERROR)) messages.push(toPlainText(field[1]!));
-  return [...new Set(messages.filter(Boolean))];
+  for (const danger of html.matchAll(DANGER)) messages.push(toPlainText(danger[2]!));
+  return [...new Set(messages.filter((message) => message.length > 2))];
 }
 
 export function toPlainText(html: string, maxLength = 200): string {
