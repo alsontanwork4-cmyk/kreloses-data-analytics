@@ -157,6 +157,33 @@ describe("Kreloses Reader: getInvoice", () => {
     expect(extractPageModel(json)).toEqual({ Items: [{ Name: 'Tab "x" {1} </script>', Note: "it's } fine" }], Sale: { SaleId: 1 } });
   });
 
+  it("leaves text that looks like an HTML comment inside the model's strings alone (no item silently lost)", () => {
+    const items = [{ Name: "Tablets <!-- half" }, { Name: "Middle item" }, { Name: "Syrup --> 5ml" }];
+    const model = extractPageModel(`<script>var model = ${JSON.stringify({ Items: items })};</script>`);
+    expect(model.Items).toEqual(items);
+    // A lone "<!--" in a string does not swallow the rest of the page either.
+    expect(extractPageModel(`<script>var model = {"Items": [{"Name": "<!-- oops"}]};</script><p>after</p>`).Items).toEqual([{ Name: "<!-- oops" }]);
+  });
+
+  it("ignores assignments inside JS or HTML comments and outside scripts, wherever they come", () => {
+    const real = `{"Items": [{"Name": "Real"}]}`;
+    for (const decoy of [
+      `<script>/* var model = {"Items": []}; */ var model = ${real};</script>`,
+      `<script>// var model = {"Items": []};\n var model = ${real};</script>`,
+      `<!-- <script>var model = {"Items": []};</script> --><script>var model = ${real};</script>`,
+      `<p>var model = {"Items": []};</p><script>var model = ${real};</script>`,
+      `<script>var s = "var model = {\\"Items\\": []}"; var model = ${real};</script>`,
+    ]) {
+      expect(extractPageModel(decoy).Items, decoy).toEqual([{ Name: "Real" }]);
+    }
+  });
+
+  it("refuses a page with two models (which one would be the sale is a guess)", () => {
+    expect(() =>
+      extractPageModel(`<script>var model = {"Items": [{"Name": "A"}]};</script><script>var model = {"Items": [{"Name": "B"}]};</script>`),
+    ).toThrow(/more than one `var model = \{…\}`/);
+  });
+
   describe("fails loudly (LayoutChanged), never guessing and never echoing values", () => {
     const cases: [string, string, RegExp][] = [
       ["the page has no `var model`", readFixture("sale-overview-no-model.html"), /Sale\/Overview: no `var model = \{…\}` in the page/],

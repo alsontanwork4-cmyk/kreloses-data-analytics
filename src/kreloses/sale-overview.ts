@@ -93,32 +93,97 @@ export function parseSaleOverview(html: string, saleId: string): KrelosesInvoice
   return parseSaleOverviewModel(extractPageModel(html), saleId);
 }
 
-const MODEL_ASSIGNMENT = /\b(?:var|let|const)\s+model\s*=\s*/g;
+const MODEL_ASSIGNMENT = /(?:var|let|const)\s+model\s*=\s*/y;
 
 /**
- * The value of the page's `var model = {…};` as parsed JSON. Raises `LayoutChanged` when there is
- * no such assignment of an object, when the object never closes, or when it is not JSON.
+ * The value of the page's `var model = {…};` as parsed JSON. Only real code counts: the
+ * assignment must be inside a `<script>` (not in HTML text or an HTML comment) and not inside a JS
+ * string or comment — the page itself is never rewritten, so a model whose strings contain
+ * `<!--` or `/*` stays intact. Raises `LayoutChanged` when there is no such assignment of an
+ * object, when the object never closes or is not JSON, or when MORE than one parses (which one is
+ * the sale would be a guess).
  */
 export function extractPageModel(html: string): Record<string, unknown> {
-  // HTML comments are not code (a comment may well mention `var model = {…}`).
-  const page = html.replace(/<!--[\s\S]*?-->/g, " ");
+  const models: Record<string, unknown>[] = [];
   let problem: string | null = null;
-  for (const match of page.matchAll(MODEL_ASSIGNMENT)) {
-    const start = match.index + match[0].length;
-    if (page[start] !== "{") continue;
-    const end = matchingBrace(page, start);
-    if (end === null) {
-      problem ??= "the page model never ends (no matching closing brace)";
-      continue;
-    }
-    try {
-      // An object literal that parses as JSON is always an object.
-      return JSON.parse(page.slice(start, end + 1)) as Record<string, unknown>;
-    } catch {
-      problem ??= "the page model is not JSON";
+  for (const script of scriptBodies(html)) {
+    for (const start of modelAssignments(script)) {
+      if (script[start] !== "{") continue;
+      const end = matchingBrace(script, start);
+      if (end === null) {
+        problem ??= "the page model never ends (no matching closing brace)";
+        continue;
+      }
+      try {
+        // An object literal that parses as JSON is always an object.
+        models.push(JSON.parse(script.slice(start, end + 1)) as Record<string, unknown>);
+      } catch {
+        problem ??= "the page model is not JSON";
+      }
     }
   }
+  if (models.length > 1) throw new LayoutChanged("Sale/Overview: more than one `var model = {…}` in the page");
+  if (models.length === 1) return models[0]!;
   throw new LayoutChanged(`Sale/Overview: ${problem ?? "no `var model = {…}` in the page"}`);
+}
+
+/** The contents of each `<script>` element, skipping HTML comments outside scripts (as a browser does). */
+function scriptBodies(html: string): string[] {
+  const lower = html.toLowerCase();
+  const bodies: string[] = [];
+  const scriptOpen = /<script(?=[\s>/])/g;
+  for (let index = 0; index < html.length; ) {
+    const comment = lower.indexOf("<!--", index);
+    scriptOpen.lastIndex = index;
+    const script = scriptOpen.exec(lower)?.index ?? -1;
+    if (script < 0) break;
+    if (comment >= 0 && comment < script) {
+      const end = lower.indexOf("-->", comment + 4);
+      if (end < 0) break;
+      index = end + 3;
+      continue;
+    }
+    const tagEnd = html.indexOf(">", script);
+    if (tagEnd < 0) break;
+    const close = lower.indexOf("</script", tagEnd + 1);
+    bodies.push(html.slice(tagEnd + 1, close < 0 ? html.length : close));
+    index = close < 0 ? html.length : close + "</script".length;
+  }
+  return bodies;
+}
+
+/**
+ * Where the value of each `var|let|const model =` starts in a script, counting only code — not
+ * text inside a JS string ("…", '…', `…`) or a JS comment (`// …`, `/* … *\/`).
+ */
+function modelAssignments(script: string): number[] {
+  const starts: number[] = [];
+  for (let index = 0; index < script.length; index += 1) {
+    const char = script[index]!;
+    const next = script[index + 1];
+    if (char === '"' || char === "'" || char === "`") {
+      for (index += 1; index < script.length && script[index] !== char; index += 1) if (script[index] === "\\") index += 1;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      const end = script.indexOf("\n", index);
+      index = end < 0 ? script.length : end;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = script.indexOf("*/", index + 2);
+      index = end < 0 ? script.length : end + 1;
+      continue;
+    }
+    if (/[A-Za-z_$\d]/.test(script[index - 1] ?? " ")) continue;
+    MODEL_ASSIGNMENT.lastIndex = index;
+    const match = MODEL_ASSIGNMENT.exec(script);
+    if (match) {
+      starts.push(index + match[0].length);
+      index += match[0].length - 1;
+    }
+  }
+  return starts;
 }
 
 /** Index of the brace closing the one at `start`, skipping string literals ("…", '…', `…`) and escapes. */
