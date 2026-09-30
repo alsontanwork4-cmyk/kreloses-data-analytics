@@ -16,7 +16,7 @@ import { isConnectionId } from "./store";
  * long-running holder (a sync) keeps it by renewing it with every write (`renewConnectionLease`) and
  * stops writing the moment a renewal fails (fencing: someone else took it after it expired).
  */
-export type LeasePurpose = "sync" | "login-test";
+export type LeasePurpose = "sync" | "backfill" | "login-test";
 
 export interface ConnectionLease {
   connectionId: string;
@@ -24,6 +24,12 @@ export interface ConnectionLease {
   holder: string;
   purpose: LeasePurpose;
   expiresAt: Date;
+  /**
+   * A backfill lease only: another sync (nightly, Sync now) asked it to step aside
+   * (`requestBackfillYield`). Updated by every `renewConnectionLease`; the backfill run stops at its
+   * next request and releases the lease (docs/adr/0011).
+   */
+  yieldRequested?: boolean;
 }
 
 export type LeaseAttempt =
@@ -53,7 +59,8 @@ export async function acquireConnectionLease(sql: Sql, connectionId: string, opt
         on conflict (connection_id) do update set
           holder = excluded.holder,
           acquired_at = excluded.acquired_at,
-          expires_at = excluded.expires_at
+          expires_at = excluded.expires_at,
+          yield_requested_at = null
         where connection_locks.expires_at <= now()
         returning holder, expires_at
       `;
@@ -82,14 +89,30 @@ export async function acquireConnectionLease(sql: Sql, connectionId: string, opt
  * after the lease was lost (the row stays locked until the transaction ends).
  */
 export async function renewConnectionLease(sql: Queryable, lease: ConnectionLease, ttlMs: number): Promise<boolean> {
-  const renewed = await sql<{ expiresAt: Date }[]>`
+  const renewed = await sql<{ expiresAt: Date; yieldRequestedAt: Date | null }[]>`
     update connection_locks set expires_at = greatest(expires_at, now() + make_interval(secs => ${ttlSeconds(ttlMs)}))
     where connection_id = ${lease.connectionId} and holder = ${lease.holder}
-    returning expires_at
+    returning expires_at, yield_requested_at
   `;
   if (renewed.length === 0) return false;
   lease.expiresAt = renewed[0]!.expiresAt;
+  lease.yieldRequested = renewed[0]!.yieldRequestedAt !== null;
   return true;
+}
+
+/**
+ * Asks the history backfill holding this connection's lease (if one does and its lease has not
+ * expired) to step aside: it stops at its next request and releases the lease (docs/adr/0011).
+ * True if a backfill holds it. The nightly sync and Sync now call this, then wait for the lease.
+ */
+export async function requestBackfillYield(sql: Sql, connectionId: string): Promise<boolean> {
+  if (!isConnectionId(connectionId)) return false;
+  const asked = await sql`
+    update connection_locks set yield_requested_at = coalesce(yield_requested_at, now())
+    where connection_id = ${connectionId} and holder like 'backfill:%' and expires_at > now()
+    returning 1
+  `;
+  return asked.length > 0;
 }
 
 /** Gives the lease back. A no-op if it has expired and someone else holds it now. */
@@ -119,7 +142,13 @@ export class ConnectionBusy extends Error {
   readonly until: Date;
 
   constructor(heldFor: LeasePurpose, until: Date) {
-    super(heldFor === "sync" ? "A sync is using this Kreloses login right now." : "This Kreloses login is being tested right now.");
+    super(
+      heldFor === "sync"
+        ? "A sync is using this Kreloses login right now."
+        : heldFor === "backfill"
+          ? "The history backfill is using this Kreloses login right now (it runs in short chunks at night)."
+          : "This Kreloses login is being tested right now.",
+    );
     this.name = "ConnectionBusy";
     this.heldFor = heldFor;
     this.until = until;
@@ -127,7 +156,8 @@ export class ConnectionBusy extends Error {
 }
 
 function purposeOf(holder: string): LeasePurpose {
-  return holder.startsWith("login-test:") ? "login-test" : "sync";
+  if (holder.startsWith("login-test:")) return "login-test";
+  return holder.startsWith("backfill:") ? "backfill" : "sync";
 }
 
 function ttlSeconds(ttlMs: number): number {

@@ -7,6 +7,9 @@ import { listConnections } from "@/connections/service";
 import { EmptyState } from "@/components/empty-state";
 import { PageShell } from "@/components/shell/page-shell";
 import { getDb } from "@/db/client";
+import { clinicNow } from "@/lib/clinic-clock";
+import { backfillConfigFromEnv } from "@/sync/backfill-config";
+import { getBackfillProgress } from "@/sync/backfill-progress";
 import { syncMonthOptions } from "@/sync/months";
 
 import { AddConnection } from "./add-connection";
@@ -23,7 +26,12 @@ export const maxDuration = 300;
 /** Owner only: the Kreloses logins (one per branch login) the sync reads with. */
 export default async function ConnectionsPage() {
   await requireRole("owner");
-  const connections = await listConnections(getDb());
+  const sql = getDb();
+  const [connections, backfill] = await Promise.all([
+    listConnections(sql),
+    getBackfillProgress(sql, { now: clinicNow(), config: backfillConfigFromEnv() }),
+  ]);
+  const backfillById = new Map(backfill.map((progress) => [progress.connectionId, progress]));
   const keyProblem = encryptionKeyProblem();
   const months = syncMonthOptions();
 
@@ -52,7 +60,7 @@ export default async function ConnectionsPage() {
         <ul className="flex flex-col gap-4" aria-label="Kreloses connections">
           {connections.map((connection) => (
             <li key={connection.id}>
-              <ConnectionCard connection={connection} months={months} />
+              <ConnectionCard connection={connection} months={months} backfill={backfillById.get(connection.id)} />
             </li>
           ))}
         </ul>

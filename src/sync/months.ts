@@ -65,7 +65,9 @@ export function describeSyncResult(result: SyncResult, what: string): { tone: "o
         message:
           result.heldFor === "sync"
             ? "A sync is already running for this connection. See Sync status; try again when it has finished."
-            : "This Kreloses login is being tested right now. Try again in a moment.",
+            : result.heldFor === "backfill"
+              ? "The history backfill is using this connection and did not pause in time. Try again in a minute."
+              : "This Kreloses login is being tested right now. Try again in a moment.",
       };
     case "not_found":
       return { tone: "error", message: "That connection no longer exists. Reload the page." };

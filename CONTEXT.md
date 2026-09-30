@@ -410,10 +410,11 @@ One pass of the sync for one connection over a range of clinic days: reads the K
 and stores its invoices, branches and customers, then reads the line items of every new or changed
 active invoice (and the staff list). Every run is logged, with its counts (invoices
 read / new / changed / unchanged, line items read, invoice pages missing, invoices whose lines do
-not add up to their net) and, if it failed, why; warnings (e.g. an unreadable staff list) are
-recorded too. Kinds: *Sync now* (manual, one month chosen by the owner), *nightly* and *history
-backfill* (later). Outcomes: succeeded; stopped early (hit its time limit; it records where it got
-to); *some invoice pages missing* (read everything else; those sales stay "line items not synced
+not add up to their net, Kreloses requests sent) and, if it failed, why; warnings (e.g. an
+unreadable staff list) are recorded too. Kinds: *Sync now* (manual, one month chosen by the owner),
+*nightly* and *history backfill* (one month of history). Outcomes: succeeded; stopped early (hit its
+time limit — or, for the backfill, tonight's request budget, or it stepped aside for the nightly
+sync or Sync now; it records where it got to); *some invoice pages missing* (read everything else; those sales stay "line items not synced
 yet" and the next sync tries again); or failed (including when the first few invoice pages it tries
 for the first time are all missing — pages already missing in earlier syncs do not count).
 _Avoid_: Job, import, refresh
@@ -431,10 +432,27 @@ the night; the two are counted apart); only a new or changed sale in the window 
 fails it (Kreloses changed).
 _Avoid_: Cron job, scheduled import
 
+**History backfill**:
+Loading a connection's sales from 1 January 2024 up to the day it began, month by month, newest
+month first, in short chunks at night (00:00–06:00 Kuala Lumpur time by default), with a pause
+between requests and at most a set number of Kreloses requests per login per night (the **night
+budget**), so it takes about a week and a bit. It starts by itself the first time the connection's
+login works, and runs only once its night-time trigger has been set up; the owner can pause and start
+it. A **month is done** once any sync (the backfill, a nightly whose window covered it, or Sync now of
+that month) has read all its days; done months are never read again, and no invoice page is read
+twice. An old invoice page it cannot read is skipped with a warning (that sale stays "line items not
+synced yet" and later syncs try again), so one odd page never holds up older months. It never runs at
+the same time as another sync of the same connection, and steps aside when the nightly sync or Sync
+now needs the login. Its **progress**:
+months done, invoices done out of the total (an estimate until every month has been listed), line
+items read, requests used tonight out of the night budget, and about how many nights are left.
+_Avoid_: Import, initial load, migration
+
 **Carrying on (a stopped sync)**:
 A sync that stopped part-way — at its time limit, on an error, or because the server died — leaves
 a checkpoint; the next sync of the same kind (nightly; or Sync now of the same month) within a few
-hours carries on from it instead of starting over, and nothing is counted twice. Nightly syncs
+hours carries on from it instead of starting over, and nothing is counted twice. The history
+backfill's next chunk carries on a stopped month within a week. Nightly syncs
 remember "every sale newer than this moment is done" rather than a page number, because pages of a
 newest-first list shift as sales are added or removed. A chain of such runs is only as fresh as its
 first run's start. With one nightly sync a day, a stopped nightly is never carried on by the next

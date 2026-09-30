@@ -86,6 +86,11 @@ export default defineConfig({
         MCP_BEARER_TOKEN: process.env.E2E_MCP_BEARER_TOKEN,
         CLINIC_NOW: process.env.E2E_CLINIC_NOW,
         CRON_SECRET: process.env.E2E_CRON_SECRET,
+        // History backfill (e2e/backfill.spec.ts): a night window that contains the suite's fixed
+        // clinic time (09:00 KL), the smallest allowed budget and delay, so one call stops at the budget.
+        BACKFILL_NIGHT_WINDOW: "08:00-10:00",
+        BACKFILL_MAX_REQUESTS_PER_NIGHT: "50",
+        BACKFILL_REQUEST_DELAY_SECONDS: "0.5",
         // Point the Kreloses Reader at the fake (allowed outside production, loopback only).
         KRELOSES_BASE_URL_WWW: fakeKrelosesUrl,
         KRELOSES_BASE_URL_SEA: fakeKrelosesUrl,

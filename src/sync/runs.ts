@@ -55,6 +55,17 @@ export interface SyncCounts {
    * attempts (only `lineItemsFailed` does). In the listing that fails the run instead.
    */
   lineItemsUnreadable: number;
+  /**
+   * HTTP requests the run sent to Kreloses (#8): its login's, the location/staff lists, Sale List
+   * pages and invoice pages, retries and redirects included (a login that fails is not counted). The
+   * history backfill's per-night budget is counted in these.
+   */
+  requests: number;
+  /**
+   * Kreloses's TotalCount for the run's dates (all statuses) at the last Sale List page it read;
+   * absent until it reads one. The backfill's progress estimates invoices to go from it (#8).
+   */
+  saleListTotal?: number;
 }
 
 export const NO_COUNTS: SyncCounts = {
@@ -68,6 +79,7 @@ export const NO_COUNTS: SyncCounts = {
   lineItemGaps: 0,
   lineItemsSwept: 0,
   lineItemsUnreadable: 0,
+  requests: 0,
 };
 
 /**
@@ -78,10 +90,20 @@ export const NO_COUNTS: SyncCounts = {
  * - `line_items_left` — (nightly) the time budget ran out before every older sale left "not synced
  *   yet" was read; the next nightly sync carries on;
  * - `invoice_pages_unreadable` — (nightly sweep) some older invoice pages came back in a layout the
- *   app does not know: skipped (the run ends `partial`, its listing still counts), retried later.
+ *   app does not know: skipped (the run ends `partial`, its listing still counts), retried later;
+ * - `backfill_request_budget` — (backfill, #8) tonight's request budget for this login was used up:
+ *   the run stopped with its checkpoint and the backfill carries on the next night;
+ * - `backfill_yielded` — (backfill) the run stopped with its checkpoint so the nightly sync or Sync
+ *   now could use the login (docs/adr/0011); the next chunk carries on.
  */
 export interface SyncWarning {
-  code: "invoice_pages_missing" | "staff_list_unreadable" | "line_items_left" | "invoice_pages_unreadable";
+  code:
+    | "invoice_pages_missing"
+    | "staff_list_unreadable"
+    | "line_items_left"
+    | "invoice_pages_unreadable"
+    | "backfill_request_budget"
+    | "backfill_yielded";
   message: string;
 }
 
@@ -140,10 +162,15 @@ const RUN_COLUMNS = `
   resumed_from_run_id::text as resumed_from_run_id, chain_started_at
 `;
 
-/** The most recent runs first. */
-export async function listSyncRuns(sql: Sql, options: { limit?: number } = {}): Promise<SyncRun[]> {
+/**
+ * The most recent runs first; `modes` keeps only those kinds (Sync status lists the history
+ * backfill's many small runs apart from the nightly and Sync now runs).
+ */
+export async function listSyncRuns(sql: Sql, options: { limit?: number; modes?: readonly SyncMode[] } = {}): Promise<SyncRun[]> {
   const rows = await sql<SyncRun[]>`
-    select ${sql.unsafe(RUN_COLUMNS)} from sync_runs order by started_at desc, id desc limit ${options.limit ?? 50}
+    select ${sql.unsafe(RUN_COLUMNS)} from sync_runs
+    ${options.modes ? sql`where mode = any(${[...options.modes]}::text[])` : sql``}
+    order by started_at desc, id desc limit ${options.limit ?? 50}
   `;
   return rows.map((row) => ({ ...row, counts: { ...NO_COUNTS, ...row.counts } }));
 }

@@ -102,7 +102,7 @@ describe("Sync Engine", () => {
       dateTo: "2026-09-30",
       startedAt: h.clock.now,
       finishedAt: h.clock.now,
-      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 1, lineItemsSwept: 0, lineItemsUnreadable: 0 },
+      counts: { pages: 3, invoicesSeen: 11, inserted: 11, updated: 0, unchanged: 0, lineItemsRead: 9, lineItemsFailed: 0, lineItemGaps: 1, lineItemsSwept: 0, lineItemsUnreadable: 0, requests: 17, saleListTotal: 11 },
       checkpoint: null,
       coveredLocationIds: ["1101", "1102"],
       errorCode: null,
@@ -150,7 +150,7 @@ describe("Sync Engine", () => {
     h.clock.advance(3_600_000);
     const next = ran(await runSync(h.deps(), id, "manual", { dateRange: SEPTEMBER }));
 
-    expect(next.counts).toEqual({ pages: 1, invoicesSeen: 11, inserted: 0, updated: 2, unchanged: 9, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0 });
+    expect(next.counts).toEqual({ pages: 1, invoicesSeen: 11, inserted: 0, updated: 2, unchanged: 9, lineItemsRead: 1, lineItemsFailed: 0, lineItemGaps: 0, lineItemsSwept: 0, lineItemsUnreadable: 0, requests: 7, saleListTotal: 11 });
     const changed = await db.sql`
       select kreloses_sale_id, status, total_refunds, sync_run_id::text, fetched_at from invoices
       where kreloses_sale_id in ('700102', '700202') order by kreloses_sale_id

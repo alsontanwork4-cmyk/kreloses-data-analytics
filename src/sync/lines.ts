@@ -28,6 +28,8 @@ export interface InvoiceNeedingLines {
   headerVersion: number;
   /** How many reads in a row already found its page missing (0 = never tried, or it worked). */
   missingAttempts: number;
+  /** Its page (for this header) already opened but could not be READ in an earlier run (#8: `detail_unreadable_at`). */
+  unreadableBefore: boolean;
   /** When the sale happened (the sweep's order). */
   saleAt: Date;
 }
@@ -61,7 +63,8 @@ export type LinesScope = { saleIds: readonly string[] } | { sweep: { locationIds
  */
 export async function invoicesNeedingLines(sql: Sql, scope: LinesScope): Promise<InvoiceNeedingLines[]> {
   const needsLines = sql`i.status = 'active' and not i.lines_current and i.detail_missing_count < ${MAX_PAGE_MISSING_ATTEMPTS}`;
-  const columns = sql`i.id::text as invoice_id, i.kreloses_sale_id as sale_id, i.header_version, i.detail_missing_count as missing_attempts, i.sale_at`;
+  const columns = sql`i.id::text as invoice_id, i.kreloses_sale_id as sale_id, i.header_version, i.detail_missing_count as missing_attempts,
+    i.detail_unreadable_at is not null as unreadable_before, i.sale_at`;
   if ("saleIds" in scope) {
     if (scope.saleIds.length === 0) return [];
     const rows = await sql<InvoiceNeedingLines[]>`
@@ -126,6 +129,19 @@ export async function listPermanentlyMissingInvoices(sql: Sql, options: { limit?
 export async function recordMissingPage(sql: Queryable, invoiceId: string, headerVersion: number): Promise<void> {
   await sql`
     update invoices set detail_missing_count = detail_missing_count + 1
+    where id = ${invoiceId} and header_version = ${headerVersion}
+  `;
+}
+
+/**
+ * Records that an invoice's page opened but the app could not READ it, for `headerVersion` (#8):
+ * only so that a later run does not count it again as "the first pages tried are all failing". It
+ * never stops the invoice from being tried (unlike missing pages). Cleared when its lines are
+ * stored or its header changes.
+ */
+export async function recordUnreadablePage(sql: Queryable, invoiceId: string, headerVersion: number): Promise<void> {
+  await sql`
+    update invoices set detail_unreadable_at = coalesce(detail_unreadable_at, now())
     where id = ${invoiceId} and header_version = ${headerVersion}
   `;
 }
@@ -285,7 +301,8 @@ export async function saveInvoiceLines(
         detail_fetched_at = ${fetchedAt},
         raw_detail = ${tx.json(detail.raw as JsonValue)},
         line_gap_amount = ${senToMoney(gapSen)},
-        detail_missing_count = 0
+        detail_missing_count = 0,
+        detail_unreadable_at = null
       where id = ${invoiceId}
     `;
     return { status: "stored", gapSen };

@@ -14,9 +14,10 @@ export const PUBLIC_PATHS: readonly string[] = ["/login", "/auth"];
  * Like `PUBLIC_PATHS`, but exactly these paths and NOT their sub-paths, so a route added under one
  * later stays behind the sign-in gate. Each authenticates itself: `/api/mcp` with its bearer token
  * (`src/mcp/auth.ts`); `/api/cron/nightly` with Vercel Cron's `Authorization: Bearer <CRON_SECRET>`
- * (`handleNightlyCron`, `src/sync/cron.ts`).
+ * (`handleNightlyCron`, `src/sync/cron.ts`); `/api/cron/backfill` (#8) with the same header, sent by
+ * the GitHub Actions backfill workflow (`handleBackfillCron`).
  */
-export const PUBLIC_EXACT_PATHS: readonly string[] = ["/api/mcp", "/api/cron/nightly"];
+export const PUBLIC_EXACT_PATHS: readonly string[] = ["/api/mcp", "/api/cron/nightly", "/api/cron/backfill"];
 
 export function isPublicPath(pathname: string): boolean {
   return (

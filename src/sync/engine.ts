@@ -1,4 +1,12 @@
-import { acquireConnectionLease, releaseConnectionLease, renewConnectionLease, type ConnectionLease, type LeasePurpose } from "@/connections/lock";
+import {
+  acquireConnectionLease,
+  releaseConnectionLease,
+  renewConnectionLease,
+  requestBackfillYield,
+  type ConnectionLease,
+  type LeaseAttempt,
+  type LeasePurpose,
+} from "@/connections/lock";
 import { recordLoginOutcome } from "@/connections/service";
 import { isConnectionId } from "@/connections/store";
 import type { Queryable, Sql } from "@/db/sql";
@@ -24,14 +32,16 @@ import {
 import { reclassifyAllItems } from "@/items/store";
 import { upsertStaffDirectory } from "@/staff/store";
 
-import { countInvoicesNeedingLines, invoicesNeedingLines, recordMissingPage, saveInvoiceLines, type InvoiceNeedingLines, type SweepCursor } from "./lines";
+import { countInvoicesNeedingLines, invoicesNeedingLines, recordMissingPage, recordUnreadablePage, saveInvoiceLines, type InvoiceNeedingLines, type SweepCursor } from "./lines";
 import {
   describeSyncFailure,
   isLoginFailure,
   lineItemsLeftWarning,
   missingPagesWarning,
+  requestBudgetWarning,
   staffListWarning,
   unreadablePagesWarning,
+  yieldedWarning,
   type SyncFailure,
 } from "./messages";
 import {
@@ -98,8 +108,16 @@ import { saveInvoicePage, upsertBranches } from "./store";
  * tries again.
  *
  * Modes: `manual` ("Sync now": one chosen month), `nightly` (the cron: a recent window,
- * `nightlyWindow`, change detection + sweep, date-based checkpoint), `backfill` (#8: bounded past
- * ranges, page-based checkpoint).
+ * `nightlyWindow`, change detection + sweep, date-based checkpoint), `backfill` (#8: one month of
+ * history at a time, page-based checkpoint, driven by `runBackfillChunk` in ./backfill.ts).
+ *
+ * A backfill run holds the lease as a `backfill` holder and steps aside for the others: a nightly
+ * or manual run that finds the connection held by a backfill asks it to yield
+ * (`requestBackfillYield`) and waits up to `backfillYieldWaitMs` for the lease; the backfill sees
+ * the request at its next write and stops cleanly (`partial`, checkpoint kept, `stopReason:
+ * "yielded"`) at its next request (docs/adr/0011). Every run counts the HTTP requests it sends to
+ * Kreloses (`counts.requests`); `maxRequests` stops a run cleanly once it reaches that many (the
+ * backfill's per-night budget).
  */
 export interface SyncDeps {
   sql: Sql;
@@ -148,7 +166,22 @@ export interface SyncOptions {
   maxRetries?: number;
   /** Also sweep invoices of any date whose line items are not current. Default: nightly only. */
   sweep?: boolean;
+  /**
+   * Stop cleanly (`partial` with a checkpoint, `stopReason: "request_limit"`) instead of sending more
+   * than about this many HTTP requests to Kreloses (checked before each request and login; one
+   * request with its redirects may finish past it). The backfill's per-night budget. Default: none.
+   */
+  maxRequests?: number;
+  /**
+   * Nightly and manual runs only: when a history backfill holds the connection, how long to wait for
+   * it to step aside (it is asked to) before answering `busy`. Counts against the time budget.
+   * Default 60 s.
+   */
+  backfillYieldWaitMs?: number;
 }
+
+/** Why a run stopped early with a checkpoint (`partial`, `stoppedAtTimeLimit: true`). */
+export type StopReason = "time_limit" | "request_limit" | "yielded";
 
 export type SyncResult =
   | {
@@ -159,11 +192,14 @@ export type SyncResult =
       /** Things to tell the owner even though the run did not fail (also on Sync status). */
       warnings: SyncWarning[];
       /**
-       * For `partial`: true = stopped at the time budget (carry on from `checkpoint`); false = read
-       * everything but some invoice pages were missing (`counts.lineItemsFailed`) — a COMPLETE
-       * listing (it counts for "data as of" and is never resumed).
+       * For `partial`: true = stopped early — at the time budget, or (backfill) at its request
+       * budget or to step aside for another sync (`stopReason`) — carry on from `checkpoint`; false
+       * = read everything but some invoice pages were missing (`counts.lineItemsFailed`) — a
+       * COMPLETE listing (it counts for "data as of" and is never resumed).
        */
       stoppedAtTimeLimit?: boolean;
+      /** For a run that stopped early (`stoppedAtTimeLimit: true`): why. */
+      stopReason?: StopReason;
       /** The run this one carried on from (`resume`), if any. */
       resumedFromRunId?: string;
     }
@@ -202,6 +238,13 @@ export const MIN_LOGIN_BUDGET_MS = 15_000;
 export const NIGHTLY_WINDOW_DAYS = 45;
 /** Invoices the sweep loads at a time. */
 const SWEEP_BATCH = 50;
+/**
+ * How long a nightly or manual run waits, by default, for a history backfill holding the connection
+ * to step aside: longer than one Kreloses request (20 s timeout) plus the backfill's one retry.
+ */
+export const BACKFILL_YIELD_WAIT_MS = 60_000;
+/** How often a waiting run checks whether the backfill has released the lease. */
+const YIELD_POLL_MS = 1_000;
 
 const DEFAULT_READER: SyncReader = { listLocations, listStaff, listInvoices, getInvoice };
 
@@ -228,6 +271,8 @@ class LeaseLost extends Error {
 
 export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMode, options: SyncOptions = {}): Promise<SyncResult> {
   const now = deps.now ?? (() => new Date());
+  // The time budget runs from here: waiting for a backfill to step aside counts against it.
+  const entry = now();
   const requested = options.dateRange ?? (mode === "nightly" ? nightlyWindow(now(), options.windowDays) : currentClinicMonth(now()));
   if (!isIsoDate(requested.from) || !isIsoDate(requested.to) || requested.from > requested.to) {
     throw new RangeError(`bad sync date range ${requested.from}..${requested.to}`);
@@ -238,7 +283,12 @@ export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMo
   const [connection] = await deps.sql<{ label: string }[]>`select label from connections where id = ${connectionId}`;
   if (!connection) return { status: "not_found" };
 
-  const attempt = await acquireConnectionLease(deps.sql, connectionId, { purpose: "sync", ttlMs: LEASE_TTL_MS });
+  const purpose: LeasePurpose = mode === "backfill" ? "backfill" : "sync";
+  let attempt = await acquireConnectionLease(deps.sql, connectionId, { purpose, ttlMs: LEASE_TTL_MS });
+  if (attempt.status === "busy" && attempt.heldFor === "backfill" && mode !== "backfill") {
+    // The nightly sync and Sync now come first: the backfill steps aside (docs/adr/0011).
+    attempt = await waitForBackfillToYield(deps, connectionId, purpose, options.backfillYieldWaitMs ?? BACKFILL_YIELD_WAIT_MS);
+  }
   if (attempt.status !== "acquired") return attempt;
   try {
     await markInterruptedRuns(deps.sql, connectionId, now());
@@ -272,10 +322,27 @@ export async function runSync(deps: SyncDeps, connectionId: string, mode: SyncMo
       resumeFrom,
       options,
       now,
-      deadline: startedAt.getTime() + budgetMs,
+      deadline: entry.getTime() + budgetMs,
     });
   } finally {
     await releaseConnectionLease(deps.sql, attempt.lease);
+  }
+}
+
+/**
+ * Asks the backfill holding the connection to step aside, then takes the lease as soon as it is
+ * released — or gives up after `waitMs` (answering busy). Asks again on every poll, in case another
+ * backfill chunk took the lease in between.
+ */
+async function waitForBackfillToYield(deps: SyncDeps, connectionId: string, purpose: LeasePurpose, waitMs: number): Promise<LeaseAttempt> {
+  const now = deps.now ?? (() => new Date());
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const until = now().getTime() + waitMs;
+  for (;;) {
+    await requestBackfillYield(deps.sql, connectionId);
+    await sleep(YIELD_POLL_MS);
+    const attempt = await acquireConnectionLease(deps.sql, connectionId, { purpose, ttlMs: LEASE_TTL_MS });
+    if (attempt.status !== "busy" || attempt.heldFor !== "backfill" || now().getTime() >= until) return attempt;
   }
 }
 
@@ -293,12 +360,29 @@ interface RunContext {
   deadline: number;
 }
 
-/** A run stopped at its time budget: unwinds to `execute`, which records it as `partial`. */
-class OutOfTime extends Error {
-  constructor() {
-    super("time budget reached");
-    this.name = "OutOfTime";
+/**
+ * A run stopped early — its time budget, its request budget, or asked to step aside: unwinds to
+ * `execute`, which records it as `partial` with its checkpoint.
+ */
+class StopEarly extends Error {
+  readonly reason: StopReason;
+
+  constructor(reason: StopReason) {
+    super(`stopped early: ${reason}`);
+    this.name = "StopEarly";
+    this.reason = reason;
   }
+}
+
+/** HTTP requests of each session already counted by some run (a backfill chunk reuses its session across runs). */
+const countedRequests = new WeakMap<KrelosesSession, number>();
+
+/** Requests `session` sent since they were last counted. */
+function newRequests(session: KrelosesSession): number {
+  const total = typeof session.requestCount === "number" ? session.requestCount : 0;
+  const before = countedRequests.get(session) ?? 0;
+  countedRequests.set(session, total);
+  return Math.max(0, total - before);
 }
 
 async function execute(run: RunContext): Promise<SyncResult> {
@@ -311,10 +395,28 @@ async function execute(run: RunContext): Promise<SyncResult> {
   // Where to carry on: a page (fixed ranges) or, nightly, "everything newer than processedAfter".
   let checkpoint: SyncCheckpoint = initialCheckpoint(run);
   const startedMidway = checkpoint.nextPage > 1 || checkpoint.processedAfter !== undefined || checkpoint.listingDone === true;
-  const client = new KrelosesClient(run);
+  /** Why the run must stop now (checked before every Kreloses request), or null to go on. */
+  const stopReason = (): StopReason | null => {
+    if (now().getTime() >= run.deadline) return "time_limit";
+    if (run.options.maxRequests !== undefined && counts.requests >= run.options.maxRequests) return "request_limit";
+    if (run.lease.yieldRequested) return "yielded";
+    return null;
+  };
+  const stopIfNeeded = () => {
+    const reason = stopReason();
+    if (reason) throw new StopEarly(reason);
+  };
+  const client = new KrelosesClient(run, {
+    stopIfNeeded,
+    countRequests: (sent) => {
+      counts = { ...counts, requests: counts.requests + sent };
+    },
+  });
   /** Invoices whose page this run has tried (the sweep never tries one twice). */
   const tried = new Set<string>();
-  let firstTimeMissing = 0;
+  let firstTimeFailed = 0;
+  /** False once a Sale List page showed the server ignored the date filter (see `saleListTotal`). */
+  let totalTrusted = true;
 
   /** Every write goes through here: renew the lease in the same transaction, or stop. */
   const fence = async (tx: Queryable) => {
@@ -325,7 +427,6 @@ async function execute(run: RunContext): Promise<SyncResult> {
       await fence(tx);
       return write(tx);
     }) as Promise<T>;
-  const outOfTime = () => now().getTime() >= run.deadline;
   let firstUnreadable: LayoutChanged | null = null;
   /** The run's warnings, plus the invoice pages it could not open or read. */
   const withPageWarnings = (): SyncWarning[] => [
@@ -353,20 +454,26 @@ async function execute(run: RunContext): Promise<SyncResult> {
       // up one of its MAX_PAGE_MISSING_ATTEMPTS; a page the app cannot READ does not (a layout the
       // app does not know is the app's problem, not the invoice's: once the app is updated, the next
       // sweep reads it — it must never have become "permanently missing" in between).
+      // The HISTORY BACKFILL (#8) reads only old sales, so it treats an unreadable page like the
+      // sweep does — skipped with a warning, the month still completes (else one odd old page would
+      // stop every older month for good) — but stays loud about a systematic change: its first
+      // MISSING_PAGES_TO_FAIL pages that fail FOR THE FIRST TIME (missing, or unreadable — marked by
+      // `detail_unreadable_at`), none read, still fail the run.
       const missing = error instanceof PageMissing;
-      const unreadable = swept && !missing && error instanceof LayoutChanged;
+      const unreadable = (swept || run.mode === "backfill") && !missing && error instanceof LayoutChanged;
       if (!missing && !unreadable) throw error;
       if (missing) counts = { ...counts, lineItemsFailed: counts.lineItemsFailed + 1 };
       else {
         counts = { ...counts, lineItemsUnreadable: counts.lineItemsUnreadable + 1 };
         firstUnreadable ??= error as LayoutChanged;
       }
-      if (!swept && invoice.missingAttempts === 0) firstTimeMissing += 1;
+      if (!swept && (missing ? invoice.missingAttempts === 0 : !invoice.unreadableBefore)) firstTimeFailed += 1;
       await fenced(async (tx) => {
         if (missing) await recordMissingPage(tx, invoice.invoiceId, invoice.headerVersion);
+        else await recordUnreadablePage(tx, invoice.invoiceId, invoice.headerVersion);
         await recordProgress(tx, runId, counts, checkpoint);
       });
-      if (!swept && counts.lineItemsRead === 0 && firstTimeMissing >= MISSING_PAGES_TO_FAIL) throw error;
+      if (!swept && counts.lineItemsRead === 0 && firstTimeFailed >= MISSING_PAGES_TO_FAIL) throw error;
       return;
     }
     const saved = await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, headerVersion: invoice.headerVersion, detail, fetchedAt: now() }, { fence });
@@ -382,7 +489,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
   };
 
   try {
-    // KrelosesClient.call stops the run (OutOfTime) instead of starting a request or a login past the budget.
+    // KrelosesClient.call stops the run (StopEarly) instead of starting a request or a login past the budget.
     const locations = await client.call((session) => reader.listLocations(session));
     // The Kreloses locations (branches) this login can see: what it covers, and all its sweep may open.
     const locationIds = locations.map((location) => location.id);
@@ -408,10 +515,15 @@ async function execute(run: RunContext): Promise<SyncResult> {
       // Handed back to the Reader with the next page, so paging that does not advance fails loudly.
       let previous: InvoicePage | undefined;
       while (listTo >= range.from) {
-        if (outOfTime()) throw new OutOfTime();
+        stopIfNeeded();
         const result = await client.call((session) =>
           reader.listInvoices(session, { page, dateRange: { from: range.from, to: listTo }, includeCancelled: true, pageSize, previous }),
         );
+        // Kreloses's TotalCount is the count for the run's dates only if the server applied the date
+        // filter (UNVERIFIED, README "Live login check"): a page holding rows outside the dates says it
+        // did not, so the run records no total from then on (the backfill's progress would otherwise
+        // count every sale ever for each month).
+        if (result.rowCount > result.invoices.length) totalTrusted = false;
         await fenced(async (tx) => {
           const written = await saveInvoicePage(tx, { runId, connectionId, invoices: result.invoices, fetchedAt: now() });
           counts = {
@@ -421,14 +533,16 @@ async function execute(run: RunContext): Promise<SyncResult> {
             inserted: counts.inserted + written.inserted,
             updated: counts.updated + written.updated,
             unchanged: counts.unchanged + written.unchanged,
+            saleListTotal: totalTrusted ? result.totalCount : undefined,
           };
+          if (counts.saleListTotal === undefined) delete counts.saleListTotal;
           // This page is where to carry on until its line items have been read too.
           await recordProgress(tx, runId, counts, checkpoint);
         });
 
         // Line items of the page's new and changed invoices, one Sale Overview page at a time.
         for (const invoice of await invoicesNeedingLines(deps.sql, { saleIds: result.invoices.map((invoice) => invoice.saleId) })) {
-          if (outOfTime()) throw new OutOfTime();
+          stopIfNeeded();
           await readLines(invoice, false);
         }
 
@@ -458,7 +572,7 @@ async function execute(run: RunContext): Promise<SyncResult> {
         for (const invoice of batch) {
           after = { saleAt: invoice.saleAt, invoiceId: invoice.invoiceId };
           if (tried.has(invoice.invoiceId)) continue;
-          if (outOfTime()) {
+          if (stopReason() !== null) {
             warnings.push(lineItemsLeftWarning(await countInvoicesNeedingLines(deps.sql, { locationIds })));
             break sweeping;
           }
@@ -481,9 +595,13 @@ async function execute(run: RunContext): Promise<SyncResult> {
   } catch (error) {
     if (error instanceof LeaseLost) return await leaseLost(run, counts, warnings);
     try {
-      if (error instanceof OutOfTime) {
-        await fenced((tx) => finishRun(tx, runId, { status: "partial", finishedAt: now(), counts, checkpoint, warnings: withPageWarnings() }));
-        return { status: "partial", runId, counts, warnings: withPageWarnings(), stoppedAtTimeLimit: true, ...resumed(run) };
+      if (error instanceof StopEarly) {
+        const stopped = [
+          ...withPageWarnings(),
+          ...(error.reason === "request_limit" ? [requestBudgetWarning()] : error.reason === "yielded" ? [yieldedWarning()] : []),
+        ];
+        await fenced((tx) => finishRun(tx, runId, { status: "partial", finishedAt: now(), counts, checkpoint, warnings: stopped }));
+        return { status: "partial", runId, counts, warnings: stopped, stoppedAtTimeLimit: true, stopReason: error.reason, ...resumed(run) };
       }
       const failure = describeSyncFailure(error);
       if (failure.code === "internal") {
@@ -544,30 +662,44 @@ class KrelosesClient {
   #session: KrelosesSession | null = null;
   #loggedInAgain = false;
   readonly #run: RunContext;
+  readonly #hooks: { stopIfNeeded: () => void; countRequests: (sent: number) => void };
 
-  constructor(run: RunContext) {
+  constructor(run: RunContext, hooks: { stopIfNeeded: () => void; countRequests: (sent: number) => void }) {
     this.#run = run;
+    this.#hooks = hooks;
   }
 
   async call<T>(request: (session: KrelosesSession) => Promise<T>): Promise<T> {
     this.#session ??= await this.#login();
     // No new request once the budget is spent (the listing and the line items check before each
     // one too; this also covers the start: locations and the staff list after a slow login).
-    if (this.#run.now().getTime() >= this.#run.deadline) throw new OutOfTime();
+    this.#hooks.stopIfNeeded();
     try {
-      return await this.#retrying(() => request(this.#session!));
+      return await this.#retrying(() => this.#counted(this.#session!, request));
     } catch (error) {
       if (!(error instanceof AuthFailed && error.reason === "session_expired") || this.#loggedInAgain) throw error;
       this.#loggedInAgain = true;
       this.#session = await this.#login();
-      return this.#retrying(() => request(this.#session!));
+      return this.#retrying(() => this.#counted(this.#session!, request));
     }
   }
 
   /** Logs in, unless too little of the budget is left for a login to finish (then the run stops cleanly). */
   async #login(): Promise<KrelosesSession> {
-    if (this.#run.now().getTime() + MIN_LOGIN_BUDGET_MS > this.#run.deadline) throw new OutOfTime();
-    return this.#retrying(() => this.#run.deps.login(this.#run.connectionId));
+    if (this.#run.now().getTime() + MIN_LOGIN_BUDGET_MS > this.#run.deadline) throw new StopEarly("time_limit");
+    this.#hooks.stopIfNeeded();
+    const session = await this.#retrying(() => this.#run.deps.login(this.#run.connectionId));
+    this.#hooks.countRequests(newRequests(session));
+    return session;
+  }
+
+  /** One request on `session`, with the HTTP requests it sent counted whatever the outcome. */
+  async #counted<T>(session: KrelosesSession, request: (session: KrelosesSession) => Promise<T>): Promise<T> {
+    try {
+      return await request(session);
+    } finally {
+      this.#hooks.countRequests(newRequests(session));
+    }
   }
 
   async #retrying<T>(attempt: () => Promise<T>): Promise<T> {
@@ -575,10 +707,16 @@ class KrelosesClient {
     const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     for (let retry = 0; ; retry += 1) {
+      // A retry is a new request: it must fit the request budget too (the time is checked below).
+      if (retry > 0) this.#hooks.stopIfNeeded();
       try {
         return await attempt();
       } catch (error) {
         if (!(error instanceof RateLimited || error instanceof Transient) || retry >= maxRetries) throw error;
+        // The history backfill never waits out a rate limit (a Retry-After can be long): it would hold
+        // the connection meanwhile — a nightly sync waiting for it would give up — and Kreloses asked
+        // for less, so the run stops and the backfill waits for the next night.
+        if (error instanceof RateLimited && this.#run.mode === "backfill") throw error;
         const wait =
           error instanceof RateLimited && error.retryAfterSeconds !== undefined
             ? error.retryAfterSeconds * 1000

@@ -83,6 +83,24 @@ export function unreadablePagesWarning(count: number, example: LayoutChanged): S
   };
 }
 
+/** The warning for a backfill run that stopped because tonight's request budget for the login is used up (#8). */
+export function requestBudgetWarning(): SyncWarning {
+  return {
+    code: "backfill_request_budget",
+    message:
+      "Tonight's history backfill budget of Kreloses requests for this login is used up, so it stopped here. The backfill carries on from this point tomorrow night.",
+  };
+}
+
+/** The warning for a backfill run that stepped aside for the nightly sync or Sync now (docs/adr/0011). */
+export function yieldedWarning(): SyncWarning {
+  return {
+    code: "backfill_yielded",
+    message:
+      "Paused so that the nightly sync (or Sync now) could use this Kreloses login. The history backfill carries on from this point in its next chunk.",
+  };
+}
+
 /** The warning for a run whose Sale List filter had no readable Staff list. */
 export function staffListWarning(error: LayoutChanged): SyncWarning {
   return {

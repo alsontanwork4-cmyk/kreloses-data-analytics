@@ -1,7 +1,10 @@
-import { TriangleAlert } from "lucide-react";
+import { History, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 
 import type { ConnectionStatus, ConnectionSummary } from "@/connections/service";
+import { backfillSummaryText } from "@/components/backfill/labels";
 import { Badge } from "@/components/ui/badge";
+import type { BackfillProgress } from "@/sync/backfill-progress";
 import { CLINIC_TIME_ZONE } from "@/filters";
 import { cn } from "@/lib/utils";
 
@@ -23,8 +26,8 @@ const TESTED_AT = new Intl.DateTimeFormat("en-GB", {
   second: "2-digit",
 });
 
-/** One Kreloses connection: what it is, whether its login works, and which branches it can see. */
-export function ConnectionCard({ connection, months }: { connection: ConnectionSummary; months: MonthOption[] }) {
+/** One Kreloses connection: what it is, whether its login works, which branches it can see, and its history backfill. */
+export function ConnectionCard({ connection, months, backfill }: { connection: ConnectionSummary; months: MonthOption[]; backfill?: BackfillProgress }) {
   const status = STATUS[connection.status];
   const titleId = `connection-${connection.id}-title`;
   return (
@@ -72,6 +75,16 @@ export function ConnectionCard({ connection, months }: { connection: ConnectionS
           </dd>
         </div>
       </dl>
+
+      {backfill ? (
+        <p data-testid="connection-backfill" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+          <History className="size-4 shrink-0" aria-hidden />
+          <span className="min-w-0">{backfillSummaryText(backfill)}</span>
+          <Link href="/sync" className="text-foreground underline underline-offset-4">
+            Backfill details
+          </Link>
+        </p>
+      ) : null}
 
       {connection.lastError ? (
         <p data-testid="connection-error" className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-destructive">
