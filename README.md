@@ -1125,6 +1125,68 @@ the doctor's, repeated per branch) and "Revenue per working day"; the **Overview
 revenue and Consult revenue tiles, and says how many sales are not synced yet (in revenue but in
 neither service line) whenever there are any.
 
+### Surgery department, vaccines and dental (#15)
+
+Spec stories 44–45 and "Metric definitions" Surgery / Surgery case. Definitions:
+`SURGERY_DEFINITIONS` (`src/analytics/surgery-definitions.ts`, spread into `METRIC_DEFINITIONS`:
+`surgeryCase`, `surgeryOperation`, `sedationOnlyCase`, `surgeryFee`, `wholeVisitValue`,
+`topProcedures`, `postOpFollowUp`, `vaccineRevenue`, `dentalScalingRevenue`; CONTEXT.md "Surgery
+case" …). Built on `revenueFacts` and #9's flags, so staff remaps and item changes apply at once:
+
+```ts
+getSurgeryDepartment(sql, filter): Promise<SurgeryDepartment>          // src/analytics/surgery.ts
+  // { period, followUpDays (POST_OP_FOLLOW_UP_DAYS = 14), syncedThrough, matureThrough (= syncedThrough − 14),
+  //   pendingLineItems (dates + branches, doctor filter ignored),
+  //   total: SurgeryFigures, branches: (SurgeryFigures & { branchId, branchName })[] (every branch in the filter, by name),
+  //   doctors: (SurgeryFigures & { staffId, name, source })[] (kind doctor, with a case; by surgery fees desc, then name) }
+  // SurgeryFigures = { cases, operations, sedationOnly, surgeryFees, wholeVisitValue, averageSurgeryFee, averageWholeVisitValue,
+  //   surgeryFeeSharePercent, followUp: { withoutCustomer, notYetMature, mature, followedUp, followUpPercent } }
+getTopProcedures(sql, filter, { limit? }): Promise<TopProcedures>      // limit default 5, clamped 1–50
+  // { period, limit, overall: TopProcedure[], doctors: { staffId, name, procedures: TopProcedure[] }[] }
+  // TopProcedure = { itemKey, name (most frequent spelling), cases, fees, averageFee }; by fees desc, cases desc, name
+getVaccineDentalRevenue(sql, filter): Promise<VaccineDentalRevenue>   // src/analytics/vaccines-dental.ts
+  // { period, total, doctors: (… & { staffId, name, source })[] (kind doctor with revenue; by revenue desc) }
+  // figures = { revenue, vaccineRevenue, vaccineSharePercent, dentalScalingRevenue, dentalScalingSharePercent }
+```
+
+- **Case** = an active sale whose line items are synced with ≥ 1 SOLD surgery line (`is_surgery`,
+  `invoice_lines.quantity > 0`: a returned surgery line never makes a case). Pending sales have no
+  known lines, so they are never cases — `pendingLineItems` says how many there are and the page
+  notes it (without a doctor filter too). **Operation** = a case with ≥ 1 sold `is_procedure` line,
+  whoever it is credited to (an invoice-level property: a case where one doctor operates and another
+  sedates is an operation for both); otherwise **sedation only**.
+- **Attribution**: a case counts for its branch and for EVERY doctor (kind doctor now) with a sold
+  surgery line on it. **Surgery fee** = Σ revenue of the case's surgery lines (a doctor: their own;
+  the total under a doctor filter: the selected doctors' lines, and only their cases); **whole-visit
+  value** = Σ revenue of every line on the sale (all staff; counted in full for each doctor of a
+  shared case). Averages = ÷ cases (sen, half away from zero); fee share = fees ÷ whole visit (1 dp).
+  Surgery fees ≠ #9's surgery revenue: that counts every surgery line in the period, so a surgery
+  item returned on a LATER sale lowers surgery revenue but never the fee of the case it was sold on.
+- **Post-op follow-up** reuses #13's `serviceVisits(sql, { all: true })`: another service visit of
+  the customer 1–14 days after the case day, at ANY branch (clinic-wide, like retention: a follow-up
+  at the other branch counts under a branch filter), possibly after the period. A case is mature
+  once case day + 14 ≤ `syncedThrough(sql, { all: true })`; not-yet-mature cases and walk-ins (no
+  customer) are out of the rate and counted (`notYetMature`, `withoutCustomer`). The visits are
+  materialized and hash-joined to the cases (a correlated `EXISTS` ran per row: 1.3 s all-time at
+  35k sales / 13k cases, now ~250 ms; one month ~25 ms on the local stack), so no extra index.
+- **Top procedures**: `is_procedure` lines grouped by `item_key`, only on sales where that item was
+  SOLD (so the sale is a case): cases = such sales, fees = Σ revenue of the item's lines there. Overall
+  = the filter's lines (a doctor filter narrows it), per doctor = lines credited to them.
+- **Vaccine / dental-scaling revenue**: Σ revenue of `is_vaccine` / `is_dental_scaling` lines, per
+  doctor and for the whole filter (like `getServiceLinesByDoctor`: pending sales are in the total
+  revenue only).
+- **Page**: Mix has two tabs (`src/app/(dashboard)/mix/mix-tabs.tsx`, links keep the global filter):
+  "Service mix" (`/mix`) and "Surgery, vaccines & dental" (`/mix/surgery`, everyone): a stacked
+  chart of operations / sedation-only cases per doctor, "Surgery cases by doctor" / "by branch",
+  "Post-op follow-up within 14 days", top procedures overall and per doctor (`?top=5|10|20`), and
+  "Vaccines and dental scaling" — each a `<DataTable>` with CSV.
+- **Tests**: `src/analytics/surgery.test.ts` (Seam 1; every figure hand-computed) syncs the synthetic
+  scenario `src/analytics/testing/surgery-scenario.ts` — its OWN item names ("Syn Spay", "Syn
+  Sedation" …) classified by explicit owner assignments (`SURGERY_SCENARIO_ASSIGNMENTS`), so the
+  figures never depend on the seeded rules. `e2e/surgery.spec.ts` serves the same scenario, inserts
+  the assignments before syncing September 2026, and deletes `item_assignments`, owner rules and
+  `item_classifications` afterwards (like `e2e/mix.spec.ts`).
+
 ### Global filter
 
 The one filter every dashboard page and Analytics Service query takes lives in `@/filters`

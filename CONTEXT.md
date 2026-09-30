@@ -320,6 +320,37 @@ scaling (Preventive), not a surgery line; a separate anaesthesia line on the sam
 **Surgery revenue / consult revenue**:
 Revenue of surgery lines / consult lines. Line items not synced yet are in neither.
 
+**Surgery case**:
+An active sale (line items synced) with at least one sold surgery line; a returned surgery line
+never makes one. It belongs to the sale's branch and counts for every doctor with a sold surgery
+line on it (a case shared by two doctors counts once for each, and once in the totals). It is an
+*operation* when any of its sold lines is an operation (procedure), whoever it is credited to;
+otherwise it is **sedation only**. Sales whose line items are not synced yet are not cases until a
+sync reads them.
+_Avoid_: Surgery, procedure (for the whole case), operation (for a sedation-only case)
+
+**Surgery fee / whole-visit value**:
+A case's surgery fee is the revenue of its surgery lines (for a doctor: their own surgery lines on
+it); its whole-visit value is the revenue of the whole sale, every line and whoever it is credited
+to. Averages are per case. Surgery fees are not surgery revenue: a surgery item returned on a later
+sale lowers surgery revenue but never the fee of the case it was sold on.
+_Avoid_: Surgery revenue (for the fees of cases)
+
+**Top procedures**:
+Operation items by the fees of their lines on the cases they were sold on, with those cases and the
+average fee per case — overall and per doctor.
+
+**Post-op follow-up (within 14 days)**:
+A surgery case whose customer had another service visit (any doctor, any branch) 1–14 days after the
+case's day; a second visit the same day is not one. A case is *not yet mature* — left out of the rate
+and counted separately — until its 14 days have passed in the synced sales; walk-in cases cannot be
+followed up and are left out too.
+_Avoid_: Recheck rate, post-op visit (a post-op visit item is a consult line)
+
+**Vaccine revenue / dental-scaling revenue**:
+Revenue of lines whose item is a vaccination / dental scaling, per doctor, and as a share of the
+doctor's revenue.
+
 **Service mix**:
 Revenue split by the service-mix group of each credited line's item. Every credited sen is in
 exactly one bucket: a group, Unmapped, "No item on invoice" (an invoice amount with no sold line) or

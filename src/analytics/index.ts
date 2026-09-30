@@ -150,3 +150,19 @@ export {
   type ServiceLineKpiSet,
   type WorkingDayFigures,
 } from "./service-lines";
+export {
+  DEFAULT_TOP_PROCEDURES,
+  getSurgeryDepartment,
+  getTopProcedures,
+  MAX_TOP_PROCEDURES,
+  POST_OP_FOLLOW_UP_DAYS,
+  type BranchSurgery,
+  type DoctorSurgery,
+  type DoctorTopProcedures,
+  type PostOpFollowUp,
+  type SurgeryDepartment,
+  type SurgeryFigures,
+  type TopProcedure,
+  type TopProcedures,
+} from "./surgery";
+export { getVaccineDentalRevenue, type DoctorVaccineDental, type VaccineDentalFigures, type VaccineDentalRevenue } from "./vaccines-dental";
