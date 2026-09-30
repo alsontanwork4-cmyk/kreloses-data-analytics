@@ -51,6 +51,7 @@ Re-run `npm run db:create-dev -- kx_dev_you` after pulling new migrations (idemp
 | `npm run test:live` | Opt-in smoke test against the REAL Kreloses; skipped unless test credentials are set (see [Live login check](#live-login-check-real-kreloses)) |
 | `npm run db:create-dev -- <kx_name> [--reset] [--env]` | Create/migrate your own dev database |
 | `npm run db:drop-dev -- <kx_name>` | Drop it |
+| `scripts/deploy-wizard.sh [--dry-run \| --check URL]` | The owner's production deploy (see [Deploy to production](#deploy-to-production)) |
 
 ### Environment variables
 
@@ -118,8 +119,9 @@ supabase/
   config.toml     Local stack config (shared; don't change ports/project_id)
   migrations/     Timestamped SQL migrations
   templates/      Auth email templates
-scripts/          db:create-dev / db:drop-dev
+scripts/          db:create-dev / db:drop-dev; deploy-wizard.sh (the owner's production deploy, #7)
 e2e/              Playwright smoke suite
+docs/runbooks/    production-deploy.md: the deploy checklist and troubleshooting
 .github/workflows backfill.yml: the history backfill's night-time trigger (inert until the owner opts in)
 ```
 
@@ -1637,9 +1639,28 @@ unset KRELOSES_MCP_TOKEN
 Answers: `401` = missing or wrong token; `503` = the server has no `MCP_BEARER_TOKEN`; `405` = not a
 POST (the server is stateless: no event stream or sessions).
 
+## Deploy to production
+
+The owner deploys with the wizard, which walks through every step and asks before changing anything:
+the Vercel project, environment variables, Supabase migrations and Auth settings, the deploy, checks,
+Kreloses connections and the backfill switch. The checklist and troubleshooting are in
+[`docs/runbooks/production-deploy.md`](docs/runbooks/production-deploy.md).
+
+```bash
+scripts/deploy-wizard.sh --dry-run          # changes nothing; prints every command it would run
+scripts/deploy-wizard.sh                    # the deploy (re-run any time: finished stages are skipped)
+scripts/deploy-wizard.sh --check https://<production-domain>   # the post-deploy checks alone
+```
+
+It holds no secrets (it asks for them, never prints them and never writes them inside the
+repository). Its environment variable lists must name every variable the code reads:
+`scripts/deploy-wizard.test.ts` fails otherwise. Add a new variable there, in `.env.example` and in
+the table above. `.vercelignore` keeps `.env*` files and `.claude/` out of `vercel deploy` uploads
+(the CLI does not read `.gitignore`).
+
 ## Production (not deployed yet)
 
-When a hosted Supabase project and Vercel are set up:
+When a hosted Supabase project and Vercel are set up (the wizard does all of this):
 
 - `DATABASE_URL` = the Supabase pooler URL with `?sslmode=require`; with the transaction pooler
   (port 6543) set `DATABASE_PREPARE=false`. Apply migrations with `supabase db push`.

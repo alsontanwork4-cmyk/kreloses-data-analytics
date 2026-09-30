@@ -1,0 +1,24 @@
+# `vercel deploy` from a local checkout uploads every file that is NOT listed here or in the CLI's
+# short built-in list (node_modules, .next, .vercel, .env.local, .env.*.local, …): it does not read
+# .gitignore. Keep local-only files, secrets and agent worktrees out of production uploads (#7).
+# Git-triggered deployments only ever see committed files. Tested by scripts/deploy-wizard.test.ts.
+
+# Agent worktrees and per-user settings (each worktree is a whole checkout with its own .env.local)
+/.claude/
+
+# Environment files: only the placeholder template is committed
+.env*
+!.env.example
+.mcp.json
+*.pem
+
+# Local build output, test results and tool state
+/.next-e2e/
+/coverage/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/supabase/.temp/
+/supabase/.branches/
+*.tsbuildinfo
