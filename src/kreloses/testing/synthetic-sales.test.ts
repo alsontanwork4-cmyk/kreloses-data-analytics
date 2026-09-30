@@ -28,4 +28,23 @@ describe("synthetic sales (test builder)", () => {
       /needs a unitPrice/,
     );
   });
+
+  it("writes a discount line (ItemType 55) as Kreloses does: a negative amount off the whole invoice, named as its discount", () => {
+    const { rows, overviews } = syntheticSales([
+      {
+        saleId: 810002,
+        branch: "south",
+        at: "2026-10-05 10:00",
+        customer: 8,
+        lines: [
+          { name: "Consultation", amount: "100.00", staff: "Dr Bravo" },
+          { name: "5% DISCOUNT", itemType: 55, amount: "-5.00", staff: null },
+        ],
+      },
+    ]);
+    expect(rows[0]).toMatchObject({ GrossAmount: "100.00", Discounts: "5.00", NetAmount: "95.00", Total: "95.00" });
+    const model = overviews["810002"] as { Items: Record<string, unknown>[]; Totals: Record<string, unknown> };
+    expect(model.Items[1]).toMatchObject({ Name: "5% DISCOUNT", Quantity: "1", UnitPrice: "(5.00)", Amount: "(5.00)", StaffName: "", ItemType: 55, DiscountName: "5% DISCOUNT", DiscountAmount: "5.00" });
+    expect(model.Totals).toMatchObject({ GrossAmount: "100.00", Discounts: "5.00", NetAmount: "95.00" });
+  });
 });
