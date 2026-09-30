@@ -18,7 +18,7 @@ export function backfillState(progress: BackfillProgress): { label: string; tone
       return { label: "Not started", tone: "stopped" };
     case "active":
       if (progress.loginStatus === "failed") return { label: "Waiting for the login to work", tone: "waiting" };
-      return progress.started ? { label: "Loading history", tone: "working" } : { label: "Starts tonight", tone: "waiting" };
+      return progress.started ? { label: "Loading history", tone: "working" } : { label: "Waiting for its first night", tone: "waiting" };
   }
 }
 
@@ -36,7 +36,7 @@ export function invoicesText(progress: BackfillProgress): string {
   return `${formatCount(done)} of ${estimated ? "about " : ""}${formatCount(total)} invoices`;
 }
 
-/** `"about 3 nights"`, `"less than a night"`, `"none"`, or `"not known yet"`. */
+/** `"about 3 nights"`, `"none"`, or `"not known yet"`. */
 export function nightsLeftText(progress: BackfillProgress): string {
   const nights = progress.estimatedNightsLeft;
   if (nights === null) return "not known yet";
@@ -60,9 +60,31 @@ export function backfillSummaryText(progress: BackfillProgress): string {
       return "History backfill not started.";
     case "active": {
       if (progress.loginStatus === "failed") return "History backfill waits until the login works again.";
-      if (!progress.started) return `History backfill starts tonight (from ${monthName(progress.dateFrom.slice(0, 7))}).`;
+      if (!progress.started) return `History backfill (from ${monthName(progress.dateFrom.slice(0, 7))}) runs at night once its trigger is set up.`;
       const percent = progress.invoices.percent === null ? "" : `${progress.invoices.percent}% of invoices, `;
-      return `Loading history: ${percent}${progress.months.done} of ${progress.months.total} months, ${nightsLeftText(progress)} left.`;
+      const loading = `Loading history: ${percent}${progress.months.done} of ${progress.months.total} months, ${nightsLeftText(progress)} left.`;
+      return progress.noChunkLastNight ? `${loading} No chunk ran last night: check the backfill trigger.` : loading;
     }
   }
+}
+
+/**
+ * The backfill only runs when something calls its endpoint at night (the GitHub Actions workflow
+ * the owner enables): said while it has not started, and when a whole night went by without a chunk.
+ */
+export function triggerNote(progress: BackfillProgress): { tone: "info" | "warning"; text: string } | null {
+  if (progress.status !== "active" || progress.loginStatus === "failed") return null;
+  if (!progress.started) {
+    return {
+      tone: "info",
+      text: "It runs at night once the backfill trigger is set up (GitHub Actions: README, “History backfill”). Nothing runs until then.",
+    };
+  }
+  if (progress.noChunkLastNight) {
+    return {
+      tone: "warning",
+      text: "No backfill chunk ran last night. Check that the backfill trigger is still set up and running (GitHub Actions: README, “History backfill”).",
+    };
+  }
+  return null;
 }

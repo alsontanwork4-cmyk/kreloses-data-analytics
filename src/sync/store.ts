@@ -133,7 +133,8 @@ export async function saveInvoicePage(
       sync_run_id = case when ${changed} then excluded.sync_run_id else i.sync_run_id end,
       fetched_at = case when ${changed} then excluded.fetched_at else i.fetched_at end,
       header_version = case when ${lineRelevantChange} then i.header_version + 1 else i.header_version end,
-      detail_missing_count = case when ${lineRelevantChange} then 0 else i.detail_missing_count end
+      detail_missing_count = case when ${lineRelevantChange} then 0 else i.detail_missing_count end,
+      detail_unreadable_at = case when ${lineRelevantChange} then null else i.detail_unreadable_at end
     where ${changed} or i.raw_header is distinct from excluded.raw_header
     returning (xmax = 0) as inserted, sync_run_id = ${values.runId}::bigint as changed
   `;

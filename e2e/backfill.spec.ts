@@ -60,12 +60,14 @@ test.describe("History backfill", () => {
     test.setTimeout(180_000);
     await signIn(page, run.ownerEmail);
     const card = await addConnection(page, { label: "Both branches", email: both.email, password: both.password });
-    // The first successful login test asked for the history: it waits for the night window.
-    await expect(card.getByTestId("connection-backfill")).toContainText("History backfill starts tonight (from January 2024).");
+    // The first successful login test asked for the history: it waits for the night window — and for
+    // its trigger, which the page says has to be set up.
+    await expect(card.getByTestId("connection-backfill")).toContainText("History backfill (from January 2024) runs at night once its trigger is set up.");
 
     await page.goto("/sync");
     const backfill = page.getByRole("article", { name: "Both branches", exact: true }).filter({ has: page.getByTestId("backfill-status") });
-    await expect(backfill.getByTestId("backfill-status")).toHaveText("Starts tonight");
+    await expect(backfill.getByTestId("backfill-status")).toHaveText("Waiting for its first night");
+    await expect(backfill.getByTestId("backfill-trigger-note")).toContainText("It runs at night once the backfill trigger is set up");
     await expect(backfill.getByTestId("backfill-months")).toHaveText("0 of 33 (starts with September 2026)");
     await expect(backfill.getByTestId("backfill-invoices")).toHaveText("0 invoices (total not known yet)");
 
@@ -87,7 +89,10 @@ test.describe("History backfill", () => {
       await expect(backfill.getByTestId("backfill-invoices")).toContainText(/^\d+ of about \d+ invoices$/);
       await expect(backfill.getByTestId("backfill-percent")).toHaveText(/^\d+%$/);
       await expect(backfill.getByRole("progressbar")).toBeVisible();
-      await expect(backfill.getByTestId("backfill-nights")).toHaveText(/^about \d+ nights?$/);
+      await expect(backfill.getByTestId("backfill-nights")).toContainText(/^about \d+ nights?/);
+      await expect(backfill.getByTestId("backfill-nights")).toContainText(/at about [\d,]+ requests a night$/);
+      // A chunk ran tonight: no note about the trigger any more.
+      await expect(backfill.getByTestId("backfill-trigger-note")).toHaveCount(0);
       // Its runs (one per month) are listed apart (the latest 20), with the Kreloses requests each
       // sent, so they never push the nightly and Sync now runs off the page.
       const backfillRuns = page.getByTestId("backfill-runs");

@@ -32,7 +32,7 @@ import {
 import { reclassifyAllItems } from "@/items/store";
 import { upsertStaffDirectory } from "@/staff/store";
 
-import { countInvoicesNeedingLines, invoicesNeedingLines, recordMissingPage, saveInvoiceLines, type InvoiceNeedingLines, type SweepCursor } from "./lines";
+import { countInvoicesNeedingLines, invoicesNeedingLines, recordMissingPage, recordUnreadablePage, saveInvoiceLines, type InvoiceNeedingLines, type SweepCursor } from "./lines";
 import {
   describeSyncFailure,
   isLoginFailure,
@@ -414,7 +414,9 @@ async function execute(run: RunContext): Promise<SyncResult> {
   });
   /** Invoices whose page this run has tried (the sweep never tries one twice). */
   const tried = new Set<string>();
-  let firstTimeMissing = 0;
+  let firstTimeFailed = 0;
+  /** False once a Sale List page showed the server ignored the date filter (see `saleListTotal`). */
+  let totalTrusted = true;
 
   /** Every write goes through here: renew the lease in the same transaction, or stop. */
   const fence = async (tx: Queryable) => {
@@ -452,20 +454,26 @@ async function execute(run: RunContext): Promise<SyncResult> {
       // up one of its MAX_PAGE_MISSING_ATTEMPTS; a page the app cannot READ does not (a layout the
       // app does not know is the app's problem, not the invoice's: once the app is updated, the next
       // sweep reads it — it must never have become "permanently missing" in between).
+      // The HISTORY BACKFILL (#8) reads only old sales, so it treats an unreadable page like the
+      // sweep does — skipped with a warning, the month still completes (else one odd old page would
+      // stop every older month for good) — but stays loud about a systematic change: its first
+      // MISSING_PAGES_TO_FAIL pages that fail FOR THE FIRST TIME (missing, or unreadable — marked by
+      // `detail_unreadable_at`), none read, still fail the run.
       const missing = error instanceof PageMissing;
-      const unreadable = swept && !missing && error instanceof LayoutChanged;
+      const unreadable = (swept || run.mode === "backfill") && !missing && error instanceof LayoutChanged;
       if (!missing && !unreadable) throw error;
       if (missing) counts = { ...counts, lineItemsFailed: counts.lineItemsFailed + 1 };
       else {
         counts = { ...counts, lineItemsUnreadable: counts.lineItemsUnreadable + 1 };
         firstUnreadable ??= error as LayoutChanged;
       }
-      if (!swept && invoice.missingAttempts === 0) firstTimeMissing += 1;
+      if (!swept && (missing ? invoice.missingAttempts === 0 : !invoice.unreadableBefore)) firstTimeFailed += 1;
       await fenced(async (tx) => {
         if (missing) await recordMissingPage(tx, invoice.invoiceId, invoice.headerVersion);
+        else await recordUnreadablePage(tx, invoice.invoiceId, invoice.headerVersion);
         await recordProgress(tx, runId, counts, checkpoint);
       });
-      if (!swept && counts.lineItemsRead === 0 && firstTimeMissing >= MISSING_PAGES_TO_FAIL) throw error;
+      if (!swept && counts.lineItemsRead === 0 && firstTimeFailed >= MISSING_PAGES_TO_FAIL) throw error;
       return;
     }
     const saved = await saveInvoiceLines(deps.sql, { invoiceId: invoice.invoiceId, headerVersion: invoice.headerVersion, detail, fetchedAt: now() }, { fence });
@@ -511,6 +519,11 @@ async function execute(run: RunContext): Promise<SyncResult> {
         const result = await client.call((session) =>
           reader.listInvoices(session, { page, dateRange: { from: range.from, to: listTo }, includeCancelled: true, pageSize, previous }),
         );
+        // Kreloses's TotalCount is the count for the run's dates only if the server applied the date
+        // filter (UNVERIFIED, README "Live login check"): a page holding rows outside the dates says it
+        // did not, so the run records no total from then on (the backfill's progress would otherwise
+        // count every sale ever for each month).
+        if (result.rowCount > result.invoices.length) totalTrusted = false;
         await fenced(async (tx) => {
           const written = await saveInvoicePage(tx, { runId, connectionId, invoices: result.invoices, fetchedAt: now() });
           counts = {
@@ -520,8 +533,9 @@ async function execute(run: RunContext): Promise<SyncResult> {
             inserted: counts.inserted + written.inserted,
             updated: counts.updated + written.updated,
             unchanged: counts.unchanged + written.unchanged,
-            saleListTotal: result.totalCount,
+            saleListTotal: totalTrusted ? result.totalCount : undefined,
           };
+          if (counts.saleListTotal === undefined) delete counts.saleListTotal;
           // This page is where to carry on until its line items have been read too.
           await recordProgress(tx, runId, counts, checkpoint);
         });
@@ -699,6 +713,10 @@ class KrelosesClient {
         return await attempt();
       } catch (error) {
         if (!(error instanceof RateLimited || error instanceof Transient) || retry >= maxRetries) throw error;
+        // The history backfill never waits out a rate limit (a Retry-After can be long): it would hold
+        // the connection meanwhile — a nightly sync waiting for it would give up — and Kreloses asked
+        // for less, so the run stops and the backfill waits for the next night.
+        if (error instanceof RateLimited && this.#run.mode === "backfill") throw error;
         const wait =
           error instanceof RateLimited && error.retryAfterSeconds !== undefined
             ? error.retryAfterSeconds * 1000

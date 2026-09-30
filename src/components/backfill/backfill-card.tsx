@@ -1,4 +1,4 @@
-import { TriangleAlert } from "lucide-react";
+import { Info, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import type { BackfillProgress } from "@/sync/backfill-progress";
 
 import { BackfillControl } from "./backfill-controls";
-import { backfillState, invoicesText, monthName, nightsLeftText, requestsLabel, type BackfillTone } from "./labels";
+import { backfillState, invoicesText, monthName, nightsLeftText, requestsLabel, triggerNote, type BackfillTone } from "./labels";
 
 const TONE: Record<BackfillTone, string> = {
   done: "bg-emerald-600/10 text-emerald-800 dark:text-emerald-300",
@@ -31,6 +31,7 @@ export function BackfillCard({
   actions?: { start: (formData: FormData) => Promise<void>; pause: (formData: FormData) => Promise<void> };
 }) {
   const state = backfillState(progress);
+  const note = triggerNote(progress);
   const { invoices, months, night } = progress;
   const percent = invoices.percent;
   const titleId = `backfill-${progress.connectionId}-title`;
@@ -93,6 +94,9 @@ export function BackfillCard({
         </Item>
         <Item label="Nights left (estimate)" testId="backfill-nights">
           {nightsLeftText(progress)}
+          {progress.status === "active" ? (
+            <span className="block text-xs text-muted-foreground">at about {formatCount(progress.requestsPerNight)} requests a night</span>
+          ) : null}
         </Item>
         <Item label={progress.status === "complete" ? "Completed" : "Last chunk"} testId="backfill-last-run">
           {progress.status === "complete" && progress.completedAt
@@ -104,6 +108,19 @@ export function BackfillCard({
                 : "None"}
         </Item>
       </dl>
+
+      {note ? (
+        <p
+          data-testid="backfill-trigger-note"
+          className={cn(
+            "flex items-start gap-2 rounded-md px-3 py-2",
+            note.tone === "warning" ? "bg-amber-500/10 text-amber-900 dark:text-amber-200" : "bg-muted text-muted-foreground",
+          )}
+        >
+          {note.tone === "warning" ? <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden /> : <Info className="mt-0.5 size-4 shrink-0" aria-hidden />}
+          <span className="min-w-0 break-words">{note.text}</span>
+        </p>
+      ) : null}
 
       {progress.lastError && progress.status !== "complete" ? (
         <p data-testid="backfill-error" className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-destructive">

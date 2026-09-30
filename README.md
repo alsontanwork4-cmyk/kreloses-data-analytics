@@ -69,7 +69,7 @@ Every variable is listed with placeholders in [`.env.example`](.env.example). Ne
 | `DATABASE_ADMIN_URL` | Local tooling only: superuser URL of the local cluster (default `postgresql://postgres:postgres@127.0.0.1:54322/postgres`) |
 | `E2E_MAILPIT_URL`, `E2E_PORT`, `E2E_KRELOSES_PORT` | Local tooling only: e2e overrides |
 | `KRELOSES_BASE_URL_WWW`, `KRELOSES_BASE_URL_SEA` | Tests only: point the Kreloses Reader at a local fake (the e2e suite sets them). Refused in production and must be a loopback URL |
-| `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES` | Local only: credentials for `npm run test:live`. Never commit them |
+| `KRELOSES_TEST_EMAIL`, `KRELOSES_TEST_PASSWORD`, `KRELOSES_TEST_SESSION_PROBE_MINUTES`, `KRELOSES_TEST_MONTH` | Local only: credentials (and options) for `npm run test:live`. Never commit them |
 | `SYNC_TIME_BUDGET_SECONDS` | Optional: time budget of one sync invocation (10–280 s, default 200). Keep it well under the function limit (`maxDuration = 300` on the Connections page and the cron route). The nightly cron shares 250 s between all connections, each capped at this |
 | `SYNC_NIGHTLY_WINDOW_DAYS` | Optional: how many days back the nightly sync re-reads the Sale List to notice edits, cancellations and refunds (1–366, default 45) |
 | `CRON_SECRET` | Server only, **required for the nightly sync and the history backfill**: at least 16 random characters (`openssl rand -hex 32`). Vercel Cron sends it as `Authorization: Bearer …` to `/api/cron/nightly`, the backfill workflow to `/api/cron/backfill`; without it (or with a shorter one) both endpoints refuse every request |
@@ -450,11 +450,19 @@ export KRELOSES_TEST_EMAIL KRELOSES_TEST_PASSWORD
 npm run test:live
 # Optional: also measure session lifetime (one tiny request every 5 minutes for 60 minutes)
 KRELOSES_TEST_SESSION_PROBE_MINUTES=60 npm run test:live
+# Optional: read an older month's Sale List page and invoice pages instead (before the history backfill, #8)
+KRELOSES_TEST_MONTH=2024-03 npm run test:live
 unset KRELOSES_TEST_EMAIL KRELOSES_TEST_PASSWORD
 ```
 
 (The `read "NAME?prompt"` form is zsh; in bash use `read -rp "Kreloses email: " KRELOSES_TEST_EMAIL`
 and `read -rsp "Kreloses password: " KRELOSES_TEST_PASSWORD`.) Check the output before sharing it.
+
+**Before enabling the history backfill (#8)**, check in the output: that the Sale List's "rows
+outside the requested range" is 0 (the server applies the date filter — UNVERIFIED so far; the
+backfill's per-month totals and listing cost depend on it), the `RefundInfo` / `CreditNoteInfo`
+shapes (refunds, ADR 0008), and — with `KRELOSES_TEST_MONTH` set to a 2024 month — that old
+invoice pages parse like recent ones. See [History backfill](#history-backfill-8).
 
 ### Kreloses connections (`src/connections/`)
 
@@ -508,7 +516,10 @@ connection **keeps** synced data: `branches.connection_id` / `sync_runs.connecti
   is now"), `revenue_base` (**generated**: what its credited lines' revenue adds up to — net less
   the refunded part, #6; twin of `invoiceRevenueBaseSen`), `line_gap_amount` (net − Σ all line
   amounts when last read; the gap monitor) and `detail_missing_count` (#6: invoice page missing this
-  many reads in a row for the current header; at 3 the sync stops trying — "permanently missing").
+  many reads in a row for the current header; at 3 the sync stops trying — "permanently missing"),
+  `detail_unreadable_at` (#8: its page already opened but could not be read for the current header —
+  only so a later run does not count it again as "the first pages tried all fail"; never an attempt
+  limit; cleared when read or when the header changes).
 - `invoice_lines` (migration `…_line_items_and_doctor_credit.sql`) — the invoice page's `Items[]`
   as read: `invoice_id`, `line_no` (1-based; unique per invoice), `item_name`, `item_type` (55 =
   discount line), `quantity` `numeric(12,4)`, `unit_price`, `amount` (the charged amount, after any
@@ -797,12 +808,25 @@ night window), `backfill-store.ts` (`connection_backfills`), `backfill-progress.
   (so they never open the same invoice page at once). A chunk does nothing while the
   connection's login fails (no retrying a bad password every 15 minutes), and after a backfill run
   failed tonight because Kreloses asked to slow down (`rate_limited`) or changed its pages
-  (`layout_changed`) it waits for the next night; passing errors are retried by the next chunk.
+  (`layout_changed`) it waits for the next night; passing errors are retried by the next chunk. A
+  backfill run **never waits out a rate limit** (not even a short Retry-After): it would hold the
+  connection meanwhile and a waiting nightly sync would give up, so the run stops at once.
+- **Invoice pages it cannot read** (Kreloses changed a page): like the nightly sweep, the backfill
+  skips an old invoice page that opens but cannot be read — counted (`lineItemsUnreadable`), warned
+  (`invoice_pages_unreadable`), the sale stays "line items not synced yet" at its revenue base, the
+  month still completes, and the nightly sweep reads it once the app is updated (unreadable pages
+  never use up "missing" attempts). So one odd old page never stops the older months. It stays loud
+  about a systematic change: a run whose first 3 invoice pages that fail FOR THE FIRST TIME (missing,
+  or unreadable — `invoices.detail_unreadable_at` marks pages already seen unreadable for the current
+  header) all fail with none read still fails (`layout_changed`, and the backfill waits for the next
+  night). A Sale List page it cannot read always fails the run.
 - **The maths.** ~35,000 invoice pages over two logins = ~17,500 per login, plus one Sale List page
-  per 500 invoices. 24 chunks a night (every 15 minutes, 00:00–05:45) × 240 s ÷ ~2.5 s a request
-  (2 s pause + ~0.5 s answer) ≈ 2,300 requests a night per login, capped at 2,500: **about 7–8
-  nights** (more if GitHub delays or skips scheduled runs). On average one request every ~9 s per
-  login over the night. Test: `backfill-config.test.ts`.
+  per 500 invoices. 24 chunks a night (every 15 minutes, 00:00–05:45) × (240 s ÷ ~2.5 s a request
+  (2 s pause + ~0.5 s answer) = 96, less ~6 for logging in and re-listing where it stopped) ≈ 2,160
+  useful requests a night per login, and never more than the budget (2,500):
+  `backfillRequestsPerNight`. 17,500 ÷ 2,160 ≈ 8.1: **about 8–9 nights** (more if GitHub delays or
+  skips scheduled runs). On average one request every ~10 s per login over the night. Test:
+  `backfill-config.test.ts`.
 - **The nightly sync comes first.** Runs never overlap for one connection (the lease). A backfill
   run holds it as `backfill:…`; when the nightly sync (or Sync now) finds it held by a backfill it asks
   it to step aside (`requestBackfillYield`) and waits up to 60 s: the backfill sees the request at its
@@ -817,9 +841,21 @@ night window), `backfill-store.ts` (`connection_backfills`), `backfill-progress.
   months done / total and the month it is on; **invoices done / total** (done = cancelled, lines read,
   or page permanently missing, at the login's branches; total = per month what a complete read stored,
   else Kreloses's TotalCount once the backfill has listed the month, and the average of those for
-  months not listed yet — shown as "about" until every month is listed); line items read; requests
-  used tonight (or last night) / budget; nights left (invoices to go ÷ budget, rounded up); the last
-  chunk's time and error.
+  months not listed yet — shown as "about" until every month is listed). A run records TotalCount
+  (`counts.saleListTotal`) only while every Sale List page it read held sales of its dates only: a
+  page with rows outside them means the server ignored the date filter (UNVERIFIED, see the live
+  check below), and then TotalCount counts every sale ever. Also: line items read; requests used
+  tonight (or last night) / budget; nights left ((invoices to go + one Sale List page per month not
+  done) ÷ `backfillRequestsPerNight`, rounded up); the last chunk's time and error. It says the
+  backfill **runs at night once the trigger is set up** until its first chunk, and warns when a
+  started backfill had no chunk during the last whole night window (the trigger may have stopped).
+- **Check with the live test before enabling the backfill** (`npm run test:live`, README "Live
+  login check"): (1) whether the Sale List's date filter is honoured server-side (its "rows outside
+  the requested range" count must be 0 — otherwise each month's listing pages through every newer
+  sale, and month totals cannot be used); (2) the shapes of `RefundInfo` / `CreditNoteInfo` (refunds,
+  ADR 0008); (3) sample a few 2024 invoice pages (`KRELOSES_TEST_MONTH=2024-03 npm run test:live`
+  reads that month's Sale List page and up to three of its invoice pages) to confirm old pages open
+  and parse like recent ones — otherwise the backfill skips them as unreadable.
 - **Trigger.** Vercel Hobby allows one cron a day (the nightly), so `.github/workflows/backfill.yml`
   calls `GET /api/cron/backfill` every 15 minutes from 16:00 to 21:45 UTC (00:00–05:45 KL) plus by
   hand (`workflow_dispatch`), with `Authorization: Bearer <CRON_SECRET>` (the nightly's secret and
@@ -841,8 +877,8 @@ night window), `backfill-store.ts` (`connection_backfills`), `backfill-progress.
   workflow's cron (UTC) to match.
 - By hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/backfill`.
 - Tests: `src/sync/backfill.test.ts` (Seam 1, `__fixtures__/backfill-sales.ts`: several chunks = one
-  uninterrupted load, crash resume, window, budget, nightly mid-backfill, yielding, progress, auto
-  start, pause/start), `backfill-config.test.ts`, `backfill-workflow.test.ts` (the workflow's YAML, and
+  uninterrupted load, crash resume, window, budget, rate limits, unreadable pages, a server ignoring
+  the date filter, nightly mid-backfill, yielding, progress, auto start, pause/start), `backfill-config.test.ts`, `backfill-workflow.test.ts` (the workflow's YAML, and
   its step run with a stand-in `curl`), `cron.test.ts` (endpoint auth), `e2e/backfill.spec.ts` (the
   e2e app's window is 08:00–10:00 around its fixed 09:00 clock, budget 50, delay 0.5 s).
 

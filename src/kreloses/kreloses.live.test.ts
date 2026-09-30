@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { endOfMonth, isIsoDate } from "../filters/dates";
+
 import { formatLoginDiagnostic, runLoginDiagnostic } from "./diagnostics";
 
 /**
@@ -19,12 +21,16 @@ import { formatLoginDiagnostic, runLoginDiagnostic } from "./diagnostics";
 const email = process.env.KRELOSES_TEST_EMAIL?.trim();
 const password = process.env.KRELOSES_TEST_PASSWORD;
 const probeMinutes = Math.max(0, Number(process.env.KRELOSES_TEST_SESSION_PROBE_MINUTES) || 0);
+// Optional: KRELOSES_TEST_MONTH=2024-03 reads that month's Sale List page (and its invoice pages)
+// instead of the previous month — e.g. to check old invoice pages before enabling the backfill (#8).
+const month = /^\d{4}-\d{2}$/.test(process.env.KRELOSES_TEST_MONTH ?? "") && isIsoDate(`${process.env.KRELOSES_TEST_MONTH}-01`) ? process.env.KRELOSES_TEST_MONTH! : null;
+const saleListRange = month ? { from: `${month}-01`, to: endOfMonth(`${month}-01`) } : undefined;
 
 describe.skipIf(!email || !password)("live Kreloses login (opt-in)", () => {
   it(
     "logs in to the real Kreloses, lists the visible locations, reads one Sale List page and one invoice page, and prints a redacted diagnostic",
     async () => {
-      const diagnostic = await runLoginDiagnostic({ email: email!, password: password! }, { probeMinutes });
+      const diagnostic = await runLoginDiagnostic({ email: email!, password: password! }, { probeMinutes, ...(saleListRange ? { saleListRange } : {}) });
       console.log(`\n${formatLoginDiagnostic(diagnostic)}\n`);
 
       expect(diagnostic.login.ok, "login should succeed (see the diagnostic above)").toBe(true);

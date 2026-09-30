@@ -2,7 +2,7 @@ import type { Sql } from "@/db/sql";
 import { clinicToday, type IsoDate } from "@/filters";
 
 import { backfillMonths, backfillNight, completedMonths, type BackfillMonth } from "./backfill";
-import { BACKFILL_FROM, estimatedNights, nightWindowAt, type BackfillConfig } from "./backfill-config";
+import { BACKFILL_FROM, backfillRequestsPerNight, estimatedNights, nightWindowAt, type BackfillConfig } from "./backfill-config";
 import type { BackfillStatus } from "./backfill-store";
 import { MAX_PAGE_MISSING_ATTEMPTS } from "./lines";
 
@@ -53,8 +53,18 @@ export interface BackfillProgress {
   lineItemsRead: number;
   /** Kreloses requests the backfill sent in the night window now in progress, or the last one. */
   night: { start: Date; end: Date; inWindow: boolean; nextStart: Date; requestsUsed: number; requestBudget: number };
-  /** Nights still needed at the per-night request budget (invoices to go ÷ budget, rounded up); null while unknown. */
+  /** Useful requests a night can do: min(budget, what the night's chunks can send in time) — `backfillRequestsPerNight`. */
+  requestsPerNight: number;
+  /**
+   * Nights still needed: (invoices to go + one Sale List page per month not done) ÷ `requestsPerNight`,
+   * rounded up; 0 once complete; null while the total is unknown.
+   */
   estimatedNightsLeft: number | null;
+  /**
+   * An active backfill (login working) that has run before, but no chunk ran in the latest night
+   * window that is over: the trigger (GitHub Actions) may have stopped or not be set up.
+   */
+  noChunkLastNight: boolean;
   /** When its latest chunk ran a month (a backfill run started); null if none has. */
   lastRunAt: Date | null;
   /** Its latest backfill run's error, if that run failed. */
@@ -100,6 +110,17 @@ async function progressOf(sql: Sql, state: StateRow, { now, config }: { now: Dat
   const invoices = invoiceTotals(months, done, perMonth, listed);
   const complete = state.status === "complete";
   const percent = complete ? 100 : invoices.total === null ? null : invoices.total === 0 ? 0 : Math.min(99, Math.floor((invoices.done / invoices.total) * 100));
+  const requestsPerNight = backfillRequestsPerNight(config);
+  const monthsDone = months.filter((month) => done.has(month.month)).length;
+  const requestsLeft = invoices.total === null ? null : Math.max(0, invoices.total - invoices.done) + (months.length - monthsDone);
+  // The latest night window that is over (the one before, while inside a window).
+  const lastEndedStart = window.inWindow ? new Date(window.start.getTime() - 24 * 60 * 60_000) : window.start;
+  const noChunkLastNight =
+    state.status === "active" &&
+    state.loginStatus !== "failed" &&
+    state.startedAt !== null &&
+    state.startedAt < lastEndedStart &&
+    (runs.lastRunAt === null || runs.lastRunAt < lastEndedStart);
   return {
     connectionId: state.connectionId,
     connectionLabel: state.connectionLabel,
@@ -111,11 +132,13 @@ async function progressOf(sql: Sql, state: StateRow, { now, config }: { now: Dat
     requestedAt: state.requestedAt,
     completedAt: state.completedAt,
     pausedAt: state.pausedAt,
-    months: { done: months.filter((month) => done.has(month.month)).length, total: months.length, current: complete ? null : (months.find((month) => !done.has(month.month))?.month ?? null) },
+    months: { done: monthsDone, total: months.length, current: complete ? null : (months.find((month) => !done.has(month.month))?.month ?? null) },
     invoices: { ...invoices, percent },
     lineItemsRead: runs.lineItemsRead,
     night: { ...window, requestsUsed: tonight.requestsUsed, requestBudget: config.maxRequestsPerNight },
-    estimatedNightsLeft: complete ? 0 : invoices.total === null ? null : estimatedNights(Math.max(1, invoices.total - invoices.done), config.maxRequestsPerNight),
+    requestsPerNight,
+    estimatedNightsLeft: complete ? 0 : requestsLeft === null ? null : estimatedNights(Math.max(1, requestsLeft), requestsPerNight),
+    noChunkLastNight,
     lastRunAt: runs.lastRunAt,
     lastError: runs.lastError,
   };

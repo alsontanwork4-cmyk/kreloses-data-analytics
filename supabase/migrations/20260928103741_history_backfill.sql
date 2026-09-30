@@ -55,7 +55,21 @@ on conflict (connection_id) do nothing;
 create index sync_runs_connection_id_mode_started_at_idx on public.sync_runs (connection_id, mode, started_at desc);
 
 -- ---------------------------------------------------------------------------------------------
--- 2. The backfill steps aside for other syncs (docs/adr/0011).
+-- 2. Invoice pages that open but the app cannot read.
+--
+-- The backfill (like the nightly sweep) skips an old invoice page it cannot read, with a warning,
+-- so one odd page never stops the history; but a run whose first few pages tried FOR THE FIRST
+-- TIME all fail still fails (Kreloses changed its pages). This marks a page already seen
+-- unreadable for the current header version, so it is not counted again as "first time". It never
+-- stops the invoice being tried (the next sync, after an app update, reads it). Cleared when its
+-- lines are stored or its header changes.
+alter table public.invoices add column detail_unreadable_at timestamptz;
+
+comment on column public.invoices.detail_unreadable_at is
+  'When its invoice page (for the current header_version) first opened but could not be read; null once read or the header changes. Not an attempt limit.';
+
+-- ---------------------------------------------------------------------------------------------
+-- 3. The backfill steps aside for other syncs (docs/adr/0011).
 --
 -- A backfill run holds the connection's lease like any sync (holder "backfill:…"). When the
 -- nightly sync or Sync now finds the connection held by a backfill, it sets yield_requested_at;

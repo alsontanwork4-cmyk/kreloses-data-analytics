@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BACKFILL_CHUNK_BUDGET_MS,
   backfillConfigFromEnv,
+  backfillRequestsPerNight,
   estimatedNights,
   formatNightWindow,
   nightWindowAt,
@@ -49,15 +50,18 @@ describe("backfill settings", () => {
   });
 
   it("the defaults spread ~35,000 invoice pages over about a week of nights", () => {
-    const { maxRequestsPerNight, requestDelayMs } = backfillConfigFromEnv({});
-    // Two branch logins, ~17,500 invoice pages each, in 2,500-request nights: 7 nights at the budget.
-    expect(estimatedNights(17_500, maxRequestsPerNight)).toBe(7);
-    // The time limit caps a night lower: 24 chunks of 240 s at about 2.5 s a request (2 s pause +
-    // ~0.5 s answer) ≈ 2,300 requests, so ~8 nights in practice.
-    const chunks = (6 * 60) / 15;
-    const perNightByTime = Math.floor((chunks * BACKFILL_CHUNK_BUDGET_MS) / (requestDelayMs + 500));
-    expect(perNightByTime).toBe(2_304);
-    expect(estimatedNights(17_500, Math.min(perNightByTime, maxRequestsPerNight))).toBe(8);
+    const config = backfillConfigFromEnv({});
+    // A night can do at most the budget (2,500) — or what its chunks can send in time, if fewer: 24
+    // chunks (every 15 minutes, 00:00–05:45) of 240 s at about 2.5 s a request (2 s pause + ~0.5 s
+    // answer) = 96 requests, less ~6 for logging in and re-listing where it stopped = 90 → 2,160.
+    expect(BACKFILL_CHUNK_BUDGET_MS / (config.requestDelayMs + 500)).toBe(96);
+    expect(backfillRequestsPerNight(config)).toBe(2_160);
+    // Two branch logins, ~17,500 invoice pages each: 8.1 → about 8–9 nights.
+    expect(estimatedNights(17_500, backfillRequestsPerNight(config))).toBe(9);
+    // A lower budget binds instead; a longer window or a shorter pause lets more through, up to the budget.
+    expect(backfillRequestsPerNight({ ...config, maxRequestsPerNight: 1_000 })).toBe(1_000);
+    expect(backfillRequestsPerNight({ ...config, nightWindow: parseNightWindow("22:00-06:00")! })).toBe(2_500);
+    expect(backfillRequestsPerNight({ ...config, requestDelayMs: 30_000 })).toBe(24 * (7 - 6)); // 240 ÷ 30.5 = 7 a chunk
     expect(estimatedNights(0, 2_500)).toBe(0);
     expect(estimatedNights(1, 2_500)).toBe(1);
   });

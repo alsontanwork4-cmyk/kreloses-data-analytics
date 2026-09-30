@@ -436,11 +436,14 @@ _Avoid_: Cron job, scheduled import
 Loading a connection's sales from 1 January 2024 up to the day it began, month by month, newest
 month first, in short chunks at night (00:00–06:00 Kuala Lumpur time by default), with a pause
 between requests and at most a set number of Kreloses requests per login per night (the **night
-budget**), so it takes about a week. It starts by itself the first time the connection's login works;
-the owner can pause and start it. A **month is done** once any sync (the backfill, a nightly whose
-window covered it, or Sync now of that month) has read all its days; done months are never read again,
-and no invoice page is read twice. It never runs at the same time as another sync of the same
-connection, and steps aside when the nightly sync or Sync now needs the login. Its **progress**:
+budget**), so it takes about a week and a bit. It starts by itself the first time the connection's
+login works, and runs only once its night-time trigger has been set up; the owner can pause and start
+it. A **month is done** once any sync (the backfill, a nightly whose window covered it, or Sync now of
+that month) has read all its days; done months are never read again, and no invoice page is read
+twice. An old invoice page it cannot read is skipped with a warning (that sale stays "line items not
+synced yet" and later syncs try again), so one odd page never holds up older months. It never runs at
+the same time as another sync of the same connection, and steps aside when the nightly sync or Sync
+now needs the login. Its **progress**:
 months done, invoices done out of the total (an estimate until every month has been listed), line
 items read, requests used tonight out of the night budget, and about how many nights are left.
 _Avoid_: Import, initial load, migration

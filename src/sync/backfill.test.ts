@@ -302,6 +302,97 @@ describe("History backfill", () => {
       h.clock.advance(15 * MINUTE);
       expect(ran(await chunk(id)).stoppedBy).toBe("complete");
     });
+
+    it("when Kreloses asks to slow down it never waits holding the connection (even for a long Retry-After): the run stops and the backfill waits for the next night", async () => {
+      const id = await h.connect(both);
+      h.fake.intercept((request) =>
+        request.url.pathname === "/Sale/Overview/802505" ? new Response("slow down", { status: 429, headers: { "Retry-After": "90" } }) : undefined,
+      );
+      const result = ran(await chunk(id));
+      expect(result).toMatchObject({ stoppedBy: "failed", error: expect.stringMatching(/asked the app to slow down/) });
+      expect(h.sleeps).toEqual([]);
+      expect(pagesOpened().filter((saleId) => saleId === "802505")).toHaveLength(1);
+      h.clock.advance(15 * MINUTE);
+      expect(await chunk(id)).toEqual({ status: "idle", reason: "failed_tonight" });
+    });
+  });
+
+  describe("invoice pages the app cannot read (Kreloses changed a page)", () => {
+    /** These sales' pages come back in a layout the Reader does not know; returns "the app is fixed". */
+    const unreadable = (...saleIds: string[]) => {
+      let active = true;
+      h.fake.intercept((request) => {
+        const saleId = /^\/Sale\/Overview\/(\d+)$/.exec(request.url.pathname)?.[1];
+        return active && saleId && saleIds.includes(saleId)
+          ? new Response(readFixture("sale-overview-changed.html"), { headers: { "Content-Type": "text/html" } })
+          : undefined;
+      });
+      return () => (active = false);
+    };
+    const pending = () => db.sql`select kreloses_sale_id, detail_missing_count from invoices where status = 'active' and not lines_current order by 1`;
+
+    it("one old page it cannot read is skipped with a warning: the month and the backfill complete, that sale stays 'not synced yet' and the nightly sweep reads it once the app can", async () => {
+      const id = await h.connect(both);
+      const fixed = unreadable("802504");
+      const result = ran(await chunk(id));
+      expect(result.stoppedBy).toBe("complete");
+      const march = result.runs.find((run) => run.month === "2025-03")!;
+      expect(march).toMatchObject({ status: "partial", counts: { lineItemsRead: 5, lineItemsUnreadable: 1, lineItemsFailed: 0 } });
+      expect((await listSyncRuns(db.sql, { limit: 100 })).find((run) => run.id === march.runId)).toMatchObject({
+        warnings: [{ code: "invoice_pages_unreadable", message: expect.stringMatching(/^1 older invoice page could not be read/) }],
+        coveredLocationIds: ["1101", "1102"],
+      });
+      expect(await readBackfill(db.sql, id)).toMatchObject({ status: "complete" });
+      // Still counted at its revenue base; a page that could not be READ never uses up "missing" attempts.
+      expect(await pending()).toEqual([{ krelosesSaleId: "802504", detailMissingCount: 0 }]);
+      expect(await revenue("2025-03-01", "2025-03-31")).toBe("1952.40");
+
+      fixed();
+      h.clock.advance(150 * MINUTE);
+      expect(synced(await runSync(h.deps(), id, "nightly"))).toMatchObject({ status: "succeeded", counts: { lineItemsSwept: 1 } });
+      expect(await pending()).toEqual([]);
+    });
+
+    it("still fails loudly when the first three pages it tries for the first time are all unreadable (Kreloses changed its invoice pages); pages already seen unreadable do not count again", async () => {
+      const id = await h.connect(both, "Both");
+      // March 2025's first three active sales: 802507 and 802505 (page 1), 802504 (page 2).
+      unreadable("802507", "802505", "802504");
+      const first = ran(await chunk(id));
+      expect(first).toMatchObject({ stoppedBy: "failed", error: expect.stringMatching(/Kreloses answered in a way the app does not recognise/) });
+      expect(first.runs.at(-1)).toMatchObject({ month: "2025-03", status: "failed", counts: { lineItemsRead: 0, lineItemsUnreadable: 3 } });
+      h.clock.advance(15 * MINUTE);
+      expect(await chunk(id)).toEqual({ status: "idle", reason: "failed_tonight" });
+
+      // The next night the same three are known to be unreadable: they are skipped, the rest is read.
+      h.clock.advance(24 * 60 * MINUTE);
+      const next = ran(await chunk(id));
+      expect(next.stoppedBy).toBe("complete");
+      // (It carries on from page 2: 802504 is tried again and skipped; page 1's two are not listed again.)
+      expect(next.runs[0]).toMatchObject({ month: "2025-03", status: "partial", counts: { lineItemsRead: 3, lineItemsUnreadable: 1 } });
+      expect((await pending()).map((row) => row.krelosesSaleId)).toEqual(["802504", "802505", "802507"]);
+    });
+
+    it("a Sale List it cannot read still fails the run", async () => {
+      const id = await h.connect(both);
+      h.fake.intercept((request) =>
+        request.url.pathname === "/Sale/Get" ? new Response(readFixture("sale-get-changed.json"), { headers: { "Content-Type": "application/json" } }) : undefined,
+      );
+      expect(ran(await chunk(id))).toMatchObject({ stoppedBy: "failed", runs: [{ month: "2026-10", status: "failed" }] });
+    });
+  });
+
+  it("a Sale List whose server ignores the date filter never gives a month's total (its TotalCount would be every sale)", async () => {
+    h = createSyncHarness(db.sql, { fake: { ...backfillFake(), saleList: { ...backfillFake().saleList, ignoreDateFilter: true } }, now: NIGHT });
+    const id = await h.connect(both);
+    // The budget runs out in March 2025, part-way through its listing.
+    const result = ran(await chunk(id, { config: { maxRequestsPerNight: 45 } }));
+    expect(result.stoppedBy).toBe("request_limit");
+    const runs = await listSyncRuns(db.sql, { limit: 100 });
+    expect(runs.filter((run) => run.counts.saleListTotal !== undefined)).toEqual([]);
+    // Every sale is still stored once, on its own day (the Reader drops rows outside the month).
+    const progress = (await getBackfillProgress(db.sql, { now: h.clock.now, config: CONFIG })).find((row) => row.connectionId === id)!;
+    expect(progress.invoices.total).not.toBeNull();
+    expect(progress.invoices.total!).toBeLessThanOrEqual(16);
   });
 
   describe("the nightly sync keeps priority and nothing is read twice", () => {
@@ -463,6 +554,8 @@ describe("History backfill", () => {
         months: { done: 0, total: 34, current: "2026-10" },
         invoices: { done: 0, total: null, estimated: true, percent: null },
         estimatedNightsLeft: null,
+        // Not started yet: nothing is "missing" (the page says it runs once the trigger is set up).
+        noChunkLastNight: false,
         lastRunAt: null,
         lastError: null,
       });
@@ -486,13 +579,30 @@ describe("History backfill", () => {
         invoices: { done: 7, total: 20, estimated: true, percent: 35 },
         lineItemsRead: 5,
         night: { inWindow: true, requestsUsed: sent, requestBudget: 2_500, start: new Date("2026-10-01T16:00:00Z"), end: new Date("2026-10-01T22:00:00Z") },
+        // A night does at most min(budget, what its chunks can send in time): with no pause between
+        // requests (this test's settings) the budget, 2,500, binds (the defaults give 2,160: see
+        // backfill-config.test.ts).
+        requestsPerNight: 2_500,
+        // Requests still needed: 13 invoices + one Sale List page for each of the 15 months not done = 28.
         estimatedNightsLeft: 1,
+        noChunkLastNight: false,
         lastRunAt: NIGHT,
         // It failed after its one retry, 5 s later.
         lastError: { message: expect.stringMatching(/Kreloses could not be reached or had a problem/), at: new Date(NIGHT.getTime() + 5_000) },
       });
-      // 13 left at 5 a night → 3 nights.
-      expect((await getBackfillProgress(db.sql, { now: h.clock.now, config: { ...CONFIG, maxRequestsPerNight: 5 } })).find((row) => row.connectionId === id)!.estimatedNightsLeft).toBe(3);
+      // 28 requests at 5 a night → 6 nights.
+      expect((await getBackfillProgress(db.sql, { now: h.clock.now, config: { ...CONFIG, maxRequestsPerNight: 5 } })).find((row) => row.connectionId === id)).toMatchObject({
+        requestsPerNight: 5,
+        estimatedNightsLeft: 6,
+      });
+      // The next day at noon: that night's window had a chunk. A day later, one whole night went by
+      // without any chunk (is the trigger set up?).
+      const stoppedAt = h.clock.now;
+      h.clock.now = new Date("2026-10-02T04:00:00Z"); // 2 Oct, 12:00 KL
+      expect((await progress()).noChunkLastNight).toBe(false);
+      h.clock.now = new Date("2026-10-03T04:00:00Z"); // 3 Oct, 12:00 KL
+      expect((await progress()).noChunkLastNight).toBe(true);
+      h.clock.now = stoppedAt;
 
       failing = false;
       h.clock.advance(15 * MINUTE);

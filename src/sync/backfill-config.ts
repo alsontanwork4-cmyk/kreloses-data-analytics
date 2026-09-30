@@ -11,10 +11,11 @@ import { addDays, clinicToday, type IsoDate } from "@/filters";
  * - A chunk runs every 15 minutes during the night window (00:00–06:00 in Kuala Lumpur: 24 chunks a
  *   night), each connection for at most `BACKFILL_CHUNK_BUDGET_MS` (240 s), with a pause of
  *   `requestDelayMs` (2 s) after each answer. At roughly 2.5 s a request that is ≤ 96 requests a
- *   chunk, ≤ ~2,300 a night per login — and never more than `maxRequestsPerNight` (2,500).
- * - 17,500 ÷ ~2,300 ≈ 7.6: about a week (8 nights) for the whole history, more if GitHub delays or
- *   skips scheduled runs (it may, under load). On average that is one request every ~9 s per login
- *   over the night, at most one every ~2.5 s.
+ *   chunk, ~90 of them pages (logging in and re-listing where it stopped take ~6): ~2,160 a night
+ *   per login — and never more than `maxRequestsPerNight` (2,500). `backfillRequestsPerNight`.
+ * - 17,500 ÷ ~2,160 ≈ 8.1: about 8–9 nights for the whole history, more if GitHub delays or skips
+ *   scheduled runs (it may, under load). On average that is one request every ~10 s per login over
+ *   the night, at most one every ~2.5 s.
  */
 
 /** The first clinic day the backfill loads (spec: history from 1 Jan 2024). */
@@ -95,10 +96,31 @@ export function nightWindowAt(now: Date, window: NightWindow): { start: Date; en
   return { start, end, inWindow, nextStart };
 }
 
-/** Whole nights needed for `invoicesLeft` invoice pages at `perNight` requests a night (at least 1 while any are left). */
-export function estimatedNights(invoicesLeft: number, perNight: number): number {
-  if (invoicesLeft <= 0) return 0;
-  return Math.max(1, Math.ceil(invoicesLeft / Math.max(1, perNight)));
+/** Whole nights needed for `requestsLeft` Kreloses requests at `perNight` a night (at least 1 while any are left). */
+export function estimatedNights(requestsLeft: number, perNight: number): number {
+  if (requestsLeft <= 0) return 0;
+  return Math.max(1, Math.ceil(requestsLeft / Math.max(1, perNight)));
+}
+
+/** How often the trigger (`.github/workflows/backfill.yml`) calls the endpoint. */
+export const BACKFILL_TRIGGER_MINUTES = 15;
+/** Assumed time for Kreloses to answer one request (on top of the pause), for estimates only. */
+const ASSUMED_ANSWER_MS = 500;
+/** Requests a chunk spends on other things than new pages: logging in (4), the filter (1), re-listing where it stopped (1). */
+const CHUNK_OVERHEAD_REQUESTS = 6;
+
+/**
+ * About how many useful requests (invoice or Sale List pages) one login's backfill gets through in a
+ * night: the budget, or what the night's chunks can send in their time if that is less — chunks every
+ * `BACKFILL_TRIGGER_MINUTES` over the window, each `BACKFILL_CHUNK_BUDGET_MS` ÷ (pause + ~0.5 s
+ * answer), less its overhead. Defaults: min(2,500, 24 × (96 − 6)) = 2,160. For estimates ("nights left").
+ */
+export function backfillRequestsPerNight(config: BackfillConfig): number {
+  const { startMinute, endMinute } = config.nightWindow;
+  const minutes = endMinute > startMinute ? endMinute - startMinute : 1440 - startMinute + endMinute;
+  const chunks = Math.max(1, Math.floor(minutes / BACKFILL_TRIGGER_MINUTES));
+  const perChunk = Math.max(1, Math.floor(BACKFILL_CHUNK_BUDGET_MS / (config.requestDelayMs + ASSUMED_ANSWER_MS)) - CHUNK_OVERHEAD_REQUESTS);
+  return Math.max(1, Math.min(config.maxRequestsPerNight, chunks * perChunk));
 }
 
 const minuteFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kuala_Lumpur", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
