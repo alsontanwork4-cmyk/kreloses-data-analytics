@@ -1320,10 +1320,17 @@ export const myTool = defineTool({                   // src/mcp/tools/my-tool.ts
 ```
 
 A definition too long for the 2,048 characters (e.g. `yearlyCohort`, 1,131 on its own) is quoted by
-its opening sentences with `definitionExcerpt(name, sentences)` (`tools/text.ts`: verbatim, cut at a
-sentence end, " …" appended); every result still carries it in full. Summaries only word the
-service's figures (`formatRinggit`, `percent`, `plural`, `describeCoverage`, `formatDayWithWeekday`):
-they choose what to mention, never compute a metric.
+its opening sentences with `definitionExcerpt(name, sentences)` (`tools/text.ts`: sliced verbatim from
+the definition, " …" appended). It cuts only at a real sentence end (`splitSentences`: a full stop,
+space and capital, but never after an abbreviation such as "e.g.", "i.e.", "Dr." or "No.", a dotted
+word, or a single capital letter, which may be an initial, so "…in calendar year Y. Retained…" runs on);
+`text.test.ts` checks every excerpt the tools quote. Every result still carries the definition in
+full. Thresholds a description or summary names come from the Analytics Service's constants
+(`MIX_COMPARISON_THRESHOLD_POINTS`, `FULL_YEAR_HISTORY_BY_DAY`, `DISCOUNTED_INVOICE_THRESHOLD`,
+`RETURN_WINDOW_DAYS`, `LIMITED_HISTORY_DAYS`), never retyped (`description-constants.test.ts` changes
+them and checks the descriptions and the retention summaries follow).
+Summaries only word the service's figures (`formatRinggit`, `percent`, `plural`, `describeCoverage`,
+`formatDayWithWeekday`): they choose what to mention, never compute a metric.
 
 The registry (`tools/registry.ts`) does the rest for every tool alike: read-only annotations;
 strict input (unknown arguments are refused, so a misspelt filter never widens an answer); a
@@ -1337,7 +1344,7 @@ else into a generic error (logged server-side). Shared pieces: `filterInput` / `
 `doctorsInput`, `resolveFilter`, `filterOutput`, `isoDate` (`tools/filter.ts`); name matching (`tools/names.ts`:
 id, exact name, or every typed word starting a word of the name — ambiguous → an error listing the
 candidates); `money`, `pendingLineItemsOutput` (`tools/schemas.ts`); `clinicTimestamp` (ISO with
-`+08:00`); `describeCoverage` / `describeScope` / `plural` / `percent` / `joinAnd` / `definitionExcerpt`
+`+08:00`); `describeCoverage` / `describeScope` / `plural` / `percent` / `joinAnd` / `definitionExcerpt` / `splitSentences`
 (`tools/text.ts`). The route passes `clinicNow()` as the clock, so "today" (month to date,
 `daily_sales`'s yesterday) is the dashboard's, and `CLINIC_NOW` freezes both in tests. Output schemas
 are checked by the SDK on every call, so an Analytics Service result that breaks its own type (e.g. a

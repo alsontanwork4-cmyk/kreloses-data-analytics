@@ -33,17 +33,42 @@ export function percent(value: number | null): string {
   return value === null ? "n/a" : `${value.toFixed(1)}%`;
 }
 
-/** A sentence ends at a full stop followed by a capital letter ("e.g. a", "RM 0.05" and "(e.g. \"Dr Ong\")" do not end one). */
-const SENTENCE_END = /(?<=\.)\s+(?=[A-Z])/;
+/** A possible sentence end: a full stop, then whitespace, then a capital letter ("RM 0.05" and "e.g. a" are not candidates). */
+const CANDIDATE_END = /\.(?=\s+[A-Z])/g;
+
+/** Words written with a full stop that never end a sentence here (compared as written, without the stop). */
+const ABBREVIATIONS = new Set(["e.g", "i.e", "etc", "vs", "cf", "approx", "incl", "Dr", "Mr", "Mrs", "Ms", "Prof", "No", "Nos", "St", "Fig"]);
 
 /**
- * The first `sentences` sentences of a metric's definition, VERBATIM (generated from
- * `METRIC_DEFINITIONS`, never retyped), followed by " …" when there is more. For tool descriptions:
- * Claude Code cuts them after 2,048 characters, so a long definition is quoted by its opening
- * sentences there, and every result carries it in full (`definitions`).
+ * Whether the full stop ending `text` ends a sentence: not when the word before it is a known
+ * abbreviation ("e.g.", "Dr.", "No."), has a full stop of its own ("U.S."), or is a single capital
+ * letter (an initial, "J. Smith" — also "year Y." at the end of a sentence, so such a sentence runs on
+ * to the next real end: an excerpt may come out longer, never cut mid-sentence).
+ */
+function endsSentence(text: string): boolean {
+  const word = (text.slice(0, -1).split(/\s+/).at(-1) ?? "").replace(/^[("“'‘[]+|[)"”'’\]]+$/g, "");
+  return word !== "" && !word.includes(".") && !ABBREVIATIONS.has(word) && !/^[A-Z]$/.test(word);
+}
+
+/** Where each sentence of `text` ends (the index after its full stop), except the last. */
+function sentenceEnds(text: string): number[] {
+  return [...text.matchAll(CANDIDATE_END)].map((match) => match.index + 1).filter((end) => endsSentence(text.slice(0, end)));
+}
+
+/** `text` in sentences, each as written (trimmed). */
+export function splitSentences(text: string): string[] {
+  const bounds = [0, ...sentenceEnds(text), text.length];
+  return bounds.slice(1).map((end, index) => text.slice(bounds[index], end).trim());
+}
+
+/**
+ * The first `sentences` sentences of a metric's definition, VERBATIM (cut from `METRIC_DEFINITIONS`,
+ * never retyped), followed by " …" when there is more. For tool descriptions: Claude Code cuts them
+ * after 2,048 characters, so a long definition is quoted by its opening sentences there, and every
+ * result carries it in full (`definitions`).
  */
 export function definitionExcerpt(name: MetricName, sentences: number): string {
   const definition: string = METRIC_DEFINITIONS[name];
-  const parts = definition.split(SENTENCE_END);
-  return parts.length <= sentences ? definition : `${parts.slice(0, sentences).join(" ")} …`;
+  const end = sentenceEnds(definition)[sentences - 1];
+  return end === undefined ? definition : `${definition.slice(0, end)} …`;
 }

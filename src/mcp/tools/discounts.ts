@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  DISCOUNTED_INVOICE_THRESHOLD,
   getDiscountTypes,
   getDoctorDiscounts,
   METRIC_DEFINITIONS,
@@ -23,7 +24,10 @@ const figures = {
   discount: money.describe("gross − charged"),
   discountRatePercent: z.number().nullable().describe("discount ÷ gross × 100, one decimal; null when gross ≤ 0"),
   invoices: z.number().int().describe("Invoices with at least one sold line credited here"),
-  discountedInvoices: z.number().int().describe("Of those, the invoices where this row's share of the discount is over RM 0.05"),
+  discountedInvoices: z
+    .number()
+    .int()
+    .describe(`Of those, the invoices where this row's share of the discount is over ${formatRinggit(DISCOUNTED_INVOICE_THRESHOLD)}`),
   discountedInvoicesPercent: z.number().nullable(),
 };
 const staffRow = z.object({

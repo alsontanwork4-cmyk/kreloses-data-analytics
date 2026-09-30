@@ -227,7 +227,7 @@ describe("MCP server (Streamable HTTP, in process)", () => {
       expect(described.item_mix).toContain(METRIC_DEFINITIONS.serviceMix);
       expect(described.item_mix).toContain(METRIC_DEFINITIONS.mixComparison);
       expect(described.retention).toContain(METRIC_DEFINITIONS.serviceVisit);
-      expect(described.retention).toContain(definitionExcerpt("yearlyCohort", 3));
+      expect(described.retention).toContain(definitionExcerpt("yearlyCohort", 2));
       expect(described.discounts).toContain(METRIC_DEFINITIONS.discount);
       expect(described.discounts).toContain(METRIC_DEFINITIONS.discountRate);
       expect(described.discounts).toContain(METRIC_DEFINITIONS.discountedInvoices);
@@ -669,6 +669,13 @@ describe("MCP server (Streamable HTTP, in process)", () => {
       expect(text(mix)).toContain(
         '1 sale (RM 2,300.00) has line items not synced yet: its revenue is in the whole clinic\'s "Line items not synced yet" bucket and in no doctor\'s mix yet.',
       );
+      // With groups, that bucket is not in the answer: the summary states the unsynced sale directly instead of pointing at it.
+      const someGroups = await call(client, "item_mix", { ...SEPTEMBER, groups: ["diagnostics", "surgery"] });
+      expect(summaryOf(someGroups)).toContain(
+        "1 sale (RM 2,300.00) has line items not synced yet: its revenue is counted in the whole clinic's RM 5,755.40 but not yet in any service group or doctor's mix, so the group figures leave it out.",
+      );
+      expect(summaryOf(someGroups)).not.toContain("Line items not synced yet");
+      expect((someGroups.structuredContent as { groupLabels: unknown }).groupLabels).toEqual({ surgery: "Surgery", diagnostics: "Diagnostics" });
       const discounts = await call(client, "discounts", SEPTEMBER);
       expect((discounts.structuredContent as { discounts: unknown }).discounts).toEqual(json(await getDoctorDiscounts(db.sql, SEPTEMBER)));
       expect(text(discounts)).toContain("1 sale (RM 2,300.00) has line items not synced yet: its discounts are not in these figures until they are read.");
