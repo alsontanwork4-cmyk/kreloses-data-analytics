@@ -1325,9 +1325,10 @@ the definition, " …" appended). It cuts only at a real sentence end (`splitSen
 space and capital, but never after an abbreviation such as "e.g.", "i.e.", "Dr." or "No.", a dotted
 word, or a single capital letter, which may be an initial, so "…in calendar year Y. Retained…" runs on);
 `text.test.ts` checks every excerpt the tools quote. Every result still carries the definition in
-full. Thresholds a description names come from the Analytics Service's constants
-(`MIX_COMPARISON_THRESHOLD_POINTS`, `FULL_YEAR_HISTORY_BY_DAY`, `DISCOUNTED_INVOICE_THRESHOLD`), never
-retyped (`description-constants.test.ts` changes them and checks the descriptions follow).
+full. Thresholds a description or summary names come from the Analytics Service's constants
+(`MIX_COMPARISON_THRESHOLD_POINTS`, `FULL_YEAR_HISTORY_BY_DAY`, `DISCOUNTED_INVOICE_THRESHOLD`,
+`RETURN_WINDOW_DAYS`, `LIMITED_HISTORY_DAYS`), never retyped (`description-constants.test.ts` changes
+them and checks the descriptions and the retention summaries follow).
 Summaries only word the service's figures (`formatRinggit`, `percent`, `plural`, `describeCoverage`,
 `formatDayWithWeekday`): they choose what to mention, never compute a metric.
 

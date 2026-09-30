@@ -91,6 +91,8 @@ export { UPSELL_METRICS } from "./upsell-definitions";
 export {
   FULL_YEAR_HISTORY_BY_DAY,
   getRetention,
+  LIMITED_HISTORY_DAYS,
+  RETURN_WINDOW_DAYS,
   type DoctorRetention,
   type NewVsReturning,
   type NinetyDayReturns,
