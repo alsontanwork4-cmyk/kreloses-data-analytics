@@ -262,6 +262,7 @@ while (($#)); do
       ;;
     --check=*) MODE=check; CHECK_URL="${1#--check=}" ;;
     --check-env) MODE=check-env ;;
+    --migrate) MODE=migrate ;;
     --list-env) MODE=list-env ;;
     -h | --help) MODE=help ;;
     *)
@@ -281,6 +282,9 @@ Production deploy wizard (issue #7). Runbook: docs/runbooks/production-deploy.md
   scripts/deploy-wizard.sh --rotate NAME
                                         replace CRON_SECRET or MCP_BEARER_TOKEN with a new one (repeatable;
                                         never CREDENTIALS_ENCRYPTION_KEY), then redeploy and update GitHub
+  scripts/deploy-wizard.sh --migrate    only apply new database migrations: run it straight after merging
+                                        anything under supabase/migrations/ (merges deploy the code by
+                                        themselves; migrations are never applied automatically)
   scripts/deploy-wizard.sh --check URL  only the post-deploy HTTP checks against URL
   scripts/deploy-wizard.sh --check-env  fail if the code reads an environment variable the wizard does not know
   scripts/deploy-wizard.sh --list-env   print the wizard's environment variable lists
@@ -423,6 +427,23 @@ act_input() {
   show_cmd "$text"
   printf '%s' "$value" | "$@"
 }
+# act_env NAME VALUE CMD...: like act, with VALUE in the command's environment as NAME (how the
+# database password reaches the Supabase CLI: PGPASSWORD, never an argument).
+act_env() {
+  local name="$1" value="$2" text
+  shift 2
+  text="$name=<hidden> $(cmd_text "$@")"
+  guard_command "$text"
+  if ((DRY_RUN)); then
+    planned "$text"
+    return 0
+  fi
+  show_cmd "$text"
+  (
+    export "$name=$value"
+    "$@" </dev/null
+  )
+}
 # act_capture VAR CMD...: like act; the command's stdout goes into VAR (its stderr still shows).
 act_capture() {
   local var="$1" text output
@@ -536,14 +557,15 @@ get_value() {
     fi
     local answered=1
     if [[ "$kind" == secret ]]; then
-      read -rs value || answered=0
+      # IFS= keeps a password exactly as typed, leading and trailing spaces included.
+      IFS= read -rs value || answered=0
       printf '\n'
     else
       read -r value || answered=0
     fi
     [[ -z "$value" && -n "$default" ]] && value="$default"
     if [[ -z "$value" && $answered -eq 0 ]]; then die "No answer for $name (end of input)."; fi
-    case "$name" in *_URL) value="${value%/}" ;; esac
+    case "$name" in *_URL) value=$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s#/$##') ;; esac
     if [[ -n "$value" ]] && ! validate "$name" "$value"; then
       warn "$VALIDATION_ERROR"
       value=""
@@ -617,8 +639,13 @@ load_vercel_env() {
   VERCEL_ENV_READ=0
   ((VERCEL_OK)) || return 0
   local json keys
-  if json=$(probe vcs env list production --format json --project "$PROJECT_NAME" 2>/dev/null) &&
-    keys=$(printf '%s' "$json" | jq -r '(.envs // [])[] | .key' 2>/dev/null); then
+  if json=$(probe vcs env list production --format json --project "$PROJECT_NAME" 2>/dev/null); then
+    # Fail CLOSED: a list in a shape this wizard does not know must never read as "nothing set",
+    # or it would generate (and try to add) a second CREDENTIALS_ENCRYPTION_KEY.
+    if ! printf '%s' "$json" | jq -e '(.envs | type) == "array" and all(.envs[]; (.key | type) == "string")' >/dev/null 2>&1; then
+      die "The wizard did not recognise the list of environment variables that 'vercel env list --format json' returned (a newer Vercel CLI?). Nothing was generated or changed. Check the variables in Vercel → $PROJECT_NAME → Settings → Environment Variables, and update scripts/deploy-wizard.sh (load_vercel_env)."
+    fi
+    keys=$(printf '%s' "$json" | jq -r '.envs[].key')
     VERCEL_ENV_KEYS=$(printf '%s\n' "$keys" | sort -u | tr '\n' ' ')
     VERCEL_ENV_READ=1
   elif ((PROJECT_EXISTS)); then
@@ -993,32 +1020,9 @@ stage_supabase() {
   note "The secret key (sb_secret_…) is NOT needed: the app never uses it (README), so it stays in Supabase."
   get_value OWNER_EMAIL text "Owner email (always allowed in, as owner):"
 
-  say ""
-  step "Connection strings: click Connect at the top of the project → Connection String. Copy the"
-  step "Transaction pooler one (port 6543) WITHOUT revealing the password: [YOUR-PASSWORD] stays in it."
-  get_value SUPABASE_TRANSACTION_POOLER_URL secret "Transaction pooler string (hidden input):"
-  local session_default="${V_SUPABASE_TRANSACTION_POOLER_URL/:6543\//:5432/}"
-  step "The Session pooler string (port 5432, used only for migrations) is usually the same with 5432."
-  get_value SUPABASE_SESSION_POOLER_URL secret "Session pooler string (hidden input):" "$session_default"
-  step "The database password (Project Settings → Database; reset it there if you don't have it)."
-  get_value SUPABASE_DB_PASSWORD secret "Database password (hidden input):"
-
-  # Percent-encode the password for the URLs: @ → %40, / → %2F, : → %3A, space → %20, …
-  local encoded
-  encoded=$(printf '%s' "$V_SUPABASE_DB_PASSWORD" | jq -Rr '@uri')
-  register_secret "$encoded"
-  V_DATABASE_URL="${V_SUPABASE_TRANSACTION_POOLER_URL/"$PASSWORD_PLACEHOLDER"/$encoded}"
-  case "$V_DATABASE_URL" in
-    *sslmode=*) ;;
-    *\?*) V_DATABASE_URL="$V_DATABASE_URL&sslmode=require" ;;
-    *) V_DATABASE_URL="$V_DATABASE_URL?sslmode=require" ;;
-  esac
-  V_SESSION_DB_URL="${V_SUPABASE_SESSION_POOLER_URL/"$PASSWORD_PLACEHOLDER"/$encoded}"
-  V_DATABASE_PREPARE=false
-  register_secret "$V_DATABASE_URL"
-  register_secret "$V_SESSION_DB_URL"
+  collect_db_values
   done_item "DATABASE_URL = the transaction pooler (6543) with the password percent-encoded and sslmode=require"
-  note "Special characters in the password are percent-encoded in the URLs (e.g. @ → %40, / → %2F,"
+  note "Special characters in the password are percent-encoded in that URL (e.g. @ → %40, / → %2F,"
   note "space → %20): a raw '@' would split the URL in the wrong place. The password is never shown."
   done_item "DATABASE_PREPARE = false (Supabase's transaction pooler cannot use prepared statements)"
 
@@ -1030,45 +1034,81 @@ stage_supabase() {
     confirm "Carry on anyway?" || die "Stopped: use the values of one production project."
   fi
 
-  # Put the functions next to the database: every page runs several queries.
-  local region="" host_re='@aws-[0-9]+-([a-z0-9-]+)\.pooler\.supabase\.com:'
-  [[ "$V_SUPABASE_TRANSACTION_POOLER_URL" =~ $host_re ]] && region="${BASH_REMATCH[1]}"
-  local vercel_region=""
-  case "$region" in
-    ap-southeast-1) vercel_region="sin1 (Singapore)" ;;
-    ap-southeast-2) vercel_region="syd1 (Sydney)" ;;
-    ap-northeast-1) vercel_region="hnd1 (Tokyo)" ;;
-    ap-northeast-2) vercel_region="icn1 (Seoul)" ;;
-    ap-south-1) vercel_region="bom1 (Mumbai)" ;;
-    us-east-1) vercel_region="iad1 (Washington, D.C.)" ;;
-    us-east-2) vercel_region="cle1 (Cleveland)" ;;
-    us-west-1) vercel_region="sfo1 (San Francisco)" ;;
-    us-west-2) vercel_region="pdx1 (Portland)" ;;
-    eu-west-1) vercel_region="dub1 (Dublin)" ;;
-    eu-west-2) vercel_region="lhr1 (London)" ;;
-    eu-west-3) vercel_region="cdg1 (Paris)" ;;
-    eu-central-1) vercel_region="fra1 (Frankfurt)" ;;
-    eu-north-1) vercel_region="arn1 (Stockholm)" ;;
-    ca-central-1) vercel_region="yul1 (Montréal)" ;;
-    sa-east-1) vercel_region="gru1 (São Paulo)" ;;
-  esac
-  if [[ -n "$vercel_region" ]]; then
-    say ""
-    step "The database is in $region: in Vercel → $PROJECT_NAME → Settings → Functions, set the"
-    step "Function Region to $vercel_region (the default is Washington, D.C.; every query would cross the world)."
-    if [[ -n "${V_VERCEL_TEAM:-}" ]]; then open_page "https://vercel.com/$V_VERCEL_TEAM/$PROJECT_NAME/settings/functions"; fi
-    if ((!DRY_RUN)) && confirm "Is the Function Region set to $vercel_region?"; then
-      done_item "Vercel Function Region next to the database ($vercel_region)"
-    else
-      todo_item "set the Vercel Function Region to $vercel_region (Settings → Functions)"
-    fi
-  fi
+  check_function_region
 
   local name
   for name in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY OWNER_EMAIL SUPABASE_TRANSACTION_POOLER_URL SUPABASE_SESSION_POOLER_URL; do
     local holder="V_$name"
     save_value "$name" "${!holder:-}"
   done
+}
+
+# collect_db_values: the two pooler strings (with [YOUR-PASSWORD] in them) and the password. Sets
+# V_DATABASE_URL (the app's: transaction pooler, password percent-encoded) and V_SESSION_DB_URL (for
+# migrations: session pooler WITHOUT a password; the Supabase CLI gets it in PGPASSWORD).
+collect_db_values() {
+  say ""
+  step "Connection strings: click Connect at the top of the project → Connection String. Copy the"
+  step "Transaction pooler one (port 6543) WITHOUT revealing the password: [YOUR-PASSWORD] stays in it."
+  get_value SUPABASE_TRANSACTION_POOLER_URL secret "Transaction pooler string (hidden input):"
+  local session_default="${V_SUPABASE_TRANSACTION_POOLER_URL/:6543\//:5432/}"
+  step "The Session pooler string (port 5432, used only for migrations) is usually the same with 5432."
+  get_value SUPABASE_SESSION_POOLER_URL secret "Session pooler string (hidden input):" "$session_default"
+  step "The database password (Project Settings → Database; reset it there if you don't have it)."
+  get_value SUPABASE_DB_PASSWORD secret "Database password (hidden input):"
+
+  # Percent-encode the password for the app's URL: @ → %40, / → %2F, : → %3A, space → %20, …
+  local encoded
+  encoded=$(printf '%s' "$V_SUPABASE_DB_PASSWORD" | jq -Rr '@uri')
+  register_secret "$encoded"
+  V_DATABASE_URL="${V_SUPABASE_TRANSACTION_POOLER_URL/"$PASSWORD_PLACEHOLDER"/$encoded}"
+  case "$V_DATABASE_URL" in
+    *sslmode=*) ;;
+    *\?*) V_DATABASE_URL="$V_DATABASE_URL&sslmode=require" ;;
+    *) V_DATABASE_URL="$V_DATABASE_URL?sslmode=require" ;;
+  esac
+  register_secret "$V_DATABASE_URL"
+  V_SESSION_DB_URL="${V_SUPABASE_SESSION_POOLER_URL/":$PASSWORD_PLACEHOLDER"/}"
+  V_DATABASE_PREPARE=false
+}
+
+# Put the functions next to the database: every page runs several queries. vercel.json pins the
+# region ("regions"); Hobby allows one.
+check_function_region() {
+  local region="" host_re='@aws-[0-9]+-([a-z0-9-]+)\.pooler\.supabase\.com:' code="" place=""
+  [[ "$V_SUPABASE_TRANSACTION_POOLER_URL" =~ $host_re ]] && region="${BASH_REMATCH[1]}"
+  case "$region" in
+    ap-southeast-1) code=sin1 place=Singapore ;;
+    ap-southeast-2) code=syd1 place=Sydney ;;
+    ap-northeast-1) code=hnd1 place=Tokyo ;;
+    ap-northeast-2) code=icn1 place=Seoul ;;
+    ap-south-1) code=bom1 place=Mumbai ;;
+    us-east-1) code=iad1 place="Washington, D.C." ;;
+    us-east-2) code=cle1 place=Cleveland ;;
+    us-west-1) code=sfo1 place="San Francisco" ;;
+    us-west-2) code=pdx1 place=Portland ;;
+    eu-west-1) code=dub1 place=Dublin ;;
+    eu-west-2) code=lhr1 place=London ;;
+    eu-west-3) code=cdg1 place=Paris ;;
+    eu-central-1) code=fra1 place=Frankfurt ;;
+    eu-north-1) code=arn1 place=Stockholm ;;
+    ca-central-1) code=yul1 place="Montréal" ;;
+    sa-east-1) code=gru1 place="São Paulo" ;;
+  esac
+  [[ -n "$code" ]] || return 0
+  local pinned=""
+  [[ -f "$ROOT/vercel.json" ]] && pinned=$(jq -r '(.regions // []) | join(",")' "$ROOT/vercel.json" 2>/dev/null || true)
+  say ""
+  if [[ "$pinned" == "$code" ]]; then
+    done_item "vercel.json pins the functions to $code ($place), next to the database ($region)"
+    note "Check after the deploy: Vercel → $PROJECT_NAME → Settings → Functions shows $code (vercel.json wins over the dashboard)."
+  elif [[ -n "$pinned" ]]; then
+    warn "vercel.json pins the functions to $pinned, but the database is in $region: every query would cross the world."
+    todo_item "set \"regions\": [\"$code\"] ($place) in vercel.json, merge it, and deploy again"
+  else
+    step "The database is in $region: set Vercel → $PROJECT_NAME → Settings → Functions → Function Region to $code ($place)."
+    todo_item "set the Vercel Function Region to $code ($place)"
+  fi
 }
 
 env_value() {
@@ -1088,7 +1128,12 @@ stage_env() {
   local name value sensitivity
   for name in $PRODUCTION_ENV_VARS; do
     if vercel_has "$name" && in_list "$name" "$ROTATE"; then
-      act vercel env rm "$name" production --yes --project "$PROJECT_NAME" "${VFLAGS[@]}" || die "Could not remove the old $name."
+      # Replaced in place (no moment without the variable); still sensitive; the value on stdin.
+      act_input "$(env_value "$name")" vercel env update "$name" production --sensitive --yes --project "$PROJECT_NAME" "${VFLAGS[@]}" ||
+        die "Could not update $name (see above)."
+      ENV_CHANGED=1
+      ((DRY_RUN)) || done_item "$name replaced in Production with the new value"
+      continue
     elif vercel_has "$name"; then
       case "$name" in
         CREDENTIALS_ENCRYPTION_KEY) done_item "$name already set: kept (never replaced)" ;;
@@ -1131,10 +1176,11 @@ stage_migrations() {
     todo_item "database migrations (no database values in this run)"
     return 0
   fi
-  say "Compares supabase/migrations with the production database's migration history. Read-only first:"
+  say "Compares supabase/migrations with the production database's migration history. Read-only first."
+  say "(The password reaches the Supabase CLI in PGPASSWORD: it is never on a command line.)"
   local output
-  show_cmd "supabase db push --db-url <session-pooler-URL> --dry-run"
-  if ! output=$(cd "$ROOT" && supabase db push --db-url "$V_SESSION_DB_URL" --dry-run </dev/null 2>&1); then
+  show_cmd "PGPASSWORD=<hidden> supabase db push --db-url $V_SESSION_DB_URL --dry-run"
+  if ! output=$(cd "$ROOT" && PGPASSWORD="$V_SUPABASE_DB_PASSWORD" supabase db push --db-url "$V_SESSION_DB_URL" --dry-run </dev/null 2>&1); then
     mask "$output" | indent
     printf '\n'
     if [[ "$output" == *"inserted before the last migration"* || "$output" == *"not found in local migrations"* ]]; then
@@ -1153,7 +1199,8 @@ stage_migrations() {
   say ""
   warn "Applying them WRITES TO THE PRODUCTION DATABASE (tables, and the seed rules for item groups)."
   if confirm "Apply these migrations to production now?"; then
-    act supabase db push --db-url "$V_SESSION_DB_URL" --yes || die "supabase db push failed (see above; nothing after the failing migration was applied)."
+    act_env PGPASSWORD "$V_SUPABASE_DB_PASSWORD" supabase db push --db-url "$V_SESSION_DB_URL" --yes ||
+      die "supabase db push failed (see above; nothing after the failing migration was applied)."
     ((DRY_RUN)) || done_item "migrations applied to production"
     note "Once Kreloses connections exist, a Sync now (any month) re-classifies items under the new rules"
     note "(README Item groups: a migration that adjusts seed rules shows from the next sync run)."
@@ -1243,6 +1290,8 @@ stage_auth() {
   open_page "$dash/auth/smtp"
   step "Without it, Supabase's built-in email only reaches the project's team members and sends a"
   step "handful per hour: invited managers would get nothing. Use any SMTP provider you trust."
+  step "Then raise Authentication → Rate Limits → emails sent per hour (a low default applies with custom SMTP too)."
+  open_page "$dash/auth/rate-limits"
   note "If a link above 404s, the same page is under Authentication in the project's sidebar."
   say ""
   if ((DRY_RUN)); then
@@ -1335,37 +1384,25 @@ stage_kreloses() {
 stage_backfill() {
   stage "History backfill (GitHub Actions trigger)"
   if [[ ! -f "$ROOT/.github/workflows/backfill.yml" ]]; then
-    say "The history backfill (#8) is not on main yet. Run the wizard again after it merges: this stage"
-    say "is then the only one with anything left to do."
-    todo_item "history backfill: after #8 merges, run the wizard again"
+    say "No .github/workflows/backfill.yml in this checkout (the history backfill, #8): pull the latest"
+    say "main and run the wizard again."
+    todo_item "history backfill: pull the latest main, then run the wizard again"
     return 0
   fi
-  say "The backfill reads every invoice since 1 Jan 2024 over about a week of nights. Turn it on only"
-  say "after the live check confirmed the Reader's assumptions (README, 'UNVERIFIED until the live check'):"
-  step "the Sale List's date filter is honoured by the server (the report's \"rows outside the requested range\" is 0)"
-  step "SaleDate's time zone (the report's hour-of-day histogram: clinic hours at night mean KL time sent as UTC)"
-  step "an invoice line's Amount is after its item discount"
-  step "the sign of discount lines (type 55)"
-  step "the shapes of RefundInfo and CreditNoteInfo"
-  step "how a walk-in customer is represented"
-  step "whether item lines also carry an invoice-level DiscountName/DiscountAmount"
-  step "old invoice pages parse like recent ones: KRELOSES_TEST_MONTH=2024-03 npm run test:live (stage 11)"
-  say "Then Sync now a 2024 month and compare a few of its invoices with their pages in Kreloses."
-  if ! confirm "Reviewed all of that, and ready to turn the nightly backfill on?"; then
-    todo_item "history backfill: review the live check, then run the wizard again"
-    return 0
-  fi
-  if [[ -z "${V_PRODUCTION_URL:-}" ]]; then
-    todo_item "history backfill (needs the production URL: deploy first)"
-    return 0
-  fi
+  local cron_new=0 account token secrets variables enabled
+  in_list CRON_SECRET "$NEW_SECRETS" && cron_new=1
 
   get_value GITHUB_OWNER text "GitHub account that owns $REPO_SLUG:" "$REPO_OWNER"
-  local account="$V_GITHUB_OWNER" token="" secrets="" variables="" enabled=""
+  account="$V_GITHUB_OWNER"
   token=$(probe gh auth token --user "$account" 2>/dev/null || true)
   if [[ -z "$token" ]]; then
     step "gh is not signed in as $account. In another terminal: gh auth login (as $account)"
-    todo_item "history backfill: gh auth login as $account, then run the wizard again"
+    if ((cron_new)); then
+      warn "The app has a NEW CRON_SECRET: GitHub's copy must be updated too, or every backfill run gets 401."
+      todo_item "GitHub's CRON_SECRET: gh auth login as $account, then scripts/deploy-wizard.sh --rotate CRON_SECRET"
+    else
+      todo_item "history backfill: gh auth login as $account, then run the wizard again"
+    fi
     return 0
   fi
   register_secret "$token"
@@ -1375,43 +1412,106 @@ stage_backfill() {
   variables=$(probe gh variable list --repo "$REPO_SLUG" 2>/dev/null || true)
   enabled=$(printf '%s\n' "$variables" | awk -F'\t' '$1 == "BACKFILL_ENABLED" { print $2 }')
 
-  if in_list APP_URL "$secrets" && ! confirm "The repository secret APP_URL is already set. Replace it with $V_PRODUCTION_URL?"; then
-    done_item "GitHub secret APP_URL already set: kept"
-  else
-    act_input "$V_PRODUCTION_URL" gh secret set APP_URL --repo "$REPO_SLUG" || die "Could not set APP_URL."
-    ((DRY_RUN)) || done_item "GitHub secret APP_URL set"
+  # A new CRON_SECRET in the app: GitHub's copy follows at once, whatever the backfill's switch says
+  # (the workflow sends GitHub's copy; a stale one means 401 on every run).
+  local cron_synced=0
+  if ((cron_new)) && in_list CRON_SECRET "$secrets"; then
+    say "The app got a NEW CRON_SECRET in this run: GitHub's copy must match it."
+    act_input "${V_CRON_SECRET:-}" gh secret set CRON_SECRET --repo "$REPO_SLUG" || die "Could not update GitHub's CRON_SECRET."
+    ((DRY_RUN)) || done_item "GitHub secret CRON_SECRET updated to the app's new value"
+    cron_synced=1
   fi
 
-  if in_list CRON_SECRET "$NEW_SECRETS"; then
-    in_list CRON_SECRET "$secrets" && say "The app got a NEW CRON_SECRET in this run: GitHub's copy must match it."
-    act_input "${V_CRON_SECRET:-}" gh secret set CRON_SECRET --repo "$REPO_SLUG" || die "Could not set CRON_SECRET."
-    ((DRY_RUN)) || done_item "GitHub secret CRON_SECRET set (the app's value)"
-  elif in_list CRON_SECRET "$secrets"; then
-    done_item "GitHub secret CRON_SECRET already set: kept (it must equal the app's CRON_SECRET)"
-  else
-    local value="${V_CRON_SECRET:-}"
-    if [[ -z "$value" ]]; then
-      say "Vercel keeps CRON_SECRET write-only. Paste the copy you saved (or see the runbook to rotate it)."
-      get_value CRON_SECRET_FOR_GITHUB secret "The app's CRON_SECRET (hidden input):"
-      value="$V_CRON_SECRET_FOR_GITHUB"
-    fi
-    act_input "$value" gh secret set CRON_SECRET --repo "$REPO_SLUG" || die "Could not set CRON_SECRET."
-    ((DRY_RUN)) || done_item "GitHub secret CRON_SECRET set"
-  fi
-
-  if [[ "$enabled" == true ]]; then
-    done_item "GitHub variable BACKFILL_ENABLED is already true"
-  else
-    act gh variable set BACKFILL_ENABLED --body true --repo "$REPO_SLUG" || die "Could not set BACKFILL_ENABLED."
-    ((DRY_RUN)) || done_item "GitHub variable BACKFILL_ENABLED = true: the backfill runs every 15 minutes, 00:00–06:00 KL"
-  fi
-  if confirm "Run the backfill workflow once by hand now? (outside 00:00–06:00 KL it answers 200 and does nothing)"; then
-    act gh workflow run backfill.yml --repo "$REPO_SLUG" || warn "Could not start the workflow; try Actions → History backfill → Run workflow."
-  fi
-  note "Progress: $V_PRODUCTION_URL/sync. To stop it: gh variable set BACKFILL_ENABLED --body false --repo $REPO_SLUG"
+  case "$enabled" in
+    true)
+      done_item "GitHub variable BACKFILL_ENABLED is already true (the backfill runs at night)"
+      # It needs both secrets; add whichever is missing.
+      in_list APP_URL "$secrets" || backfill_app_url "$secrets"
+      ((cron_synced)) || in_list CRON_SECRET "$secrets" || backfill_cron_secret "$secrets" "$cron_new"
+      ;;
+    false)
+      say "The backfill trigger is switched OFF (BACKFILL_ENABLED=false)."
+      if confirm "Switch it back on?"; then
+        enable_backfill "$secrets" "$cron_new" "$cron_synced"
+      else
+        done_item "history backfill left off (BACKFILL_ENABLED=false)"
+      fi
+      ;;
+    *)
+      say "The backfill reads every invoice since 1 Jan 2024 over about a week of nights. Turn it on only"
+      say "after the live check confirmed the Reader's assumptions (README, 'UNVERIFIED until the live check'):"
+      step "the Sale List's date filter is honoured by the server (the report's \"rows outside the requested range\" is 0)"
+      step "SaleDate's time zone (the report's hour-of-day histogram: clinic hours at night mean KL time sent as UTC)"
+      step "an invoice line's Amount is after its item discount"
+      step "the sign of discount lines (type 55)"
+      step "the shapes of RefundInfo and CreditNoteInfo"
+      step "how a walk-in customer is represented"
+      step "whether item lines also carry an invoice-level DiscountName/DiscountAmount"
+      step "old invoice pages parse like recent ones: KRELOSES_TEST_MONTH=2024-03 npm run test:live (stage 11)"
+      say "Then Sync now a 2024 month and compare a few of its invoices with their pages in Kreloses."
+      if confirm "Reviewed all of that, and ready to turn the nightly backfill on?"; then
+        enable_backfill "$secrets" "$cron_new" "$cron_synced"
+      else
+        todo_item "history backfill: review the live check, then run the wizard again"
+      fi
+      ;;
+  esac
+  note "Progress: ${V_PRODUCTION_URL:-https://<production-domain>}/sync. On/off: gh variable set BACKFILL_ENABLED --body true|false --repo $REPO_SLUG"
   save_value GITHUB_OWNER "$account"
   unset GH_TOKEN
   DISPLAY_PREFIX=""
+}
+
+# enable_backfill SECRETS CRON_NEW CRON_SYNCED: the two repository secrets, then the switch.
+enable_backfill() {
+  local secrets="$1" cron_new="$2" cron_synced="$3"
+  if [[ -z "${V_PRODUCTION_URL:-}" ]]; then
+    todo_item "history backfill (needs the production URL: deploy first)"
+    return 0
+  fi
+  if in_list APP_URL "$secrets" && ! confirm "The repository secret APP_URL is already set. Replace it with $V_PRODUCTION_URL?"; then
+    done_item "GitHub secret APP_URL already set: kept"
+  else
+    backfill_app_url "$secrets"
+  fi
+  if ((cron_synced)); then
+    :
+  elif ((!cron_new)) && in_list CRON_SECRET "$secrets"; then
+    done_item "GitHub secret CRON_SECRET already set: kept (it must equal the app's CRON_SECRET)"
+  else
+    backfill_cron_secret "$secrets" "$cron_new"
+  fi
+  act gh variable set BACKFILL_ENABLED --body true --repo "$REPO_SLUG" || die "Could not set BACKFILL_ENABLED."
+  ((DRY_RUN)) || done_item "GitHub variable BACKFILL_ENABLED = true: the backfill runs every 15 minutes, 00:00–06:00 KL"
+  if confirm "Run the backfill workflow once by hand now? (outside 00:00–06:00 KL it answers 200 and does nothing)"; then
+    act gh workflow run backfill.yml --repo "$REPO_SLUG" || warn "Could not start the workflow; try Actions → History backfill → Run workflow."
+  fi
+}
+
+backfill_app_url() {
+  if [[ -z "${V_PRODUCTION_URL:-}" ]]; then
+    todo_item "GitHub secret APP_URL (needs the production URL: deploy first)"
+    return 0
+  fi
+  act_input "$V_PRODUCTION_URL" gh secret set APP_URL --repo "$REPO_SLUG" || die "Could not set APP_URL."
+  ((DRY_RUN)) || done_item "GitHub secret APP_URL set"
+}
+
+# backfill_cron_secret SECRETS CRON_NEW: GitHub's copy of the app's CRON_SECRET.
+backfill_cron_secret() {
+  local value="${V_CRON_SECRET:-}"
+  if [[ -z "$value" ]] && ((DRY_RUN)); then
+    planned "${DISPLAY_PREFIX}gh secret set CRON_SECRET --repo $REPO_SLUG < (the app's CRON_SECRET: you would be asked for it)"
+    return 0
+  fi
+  if [[ -z "$value" ]]; then
+    say "Vercel keeps CRON_SECRET write-only. Paste the copy you saved, or stop here (Ctrl-C) and run"
+    say "scripts/deploy-wizard.sh --rotate CRON_SECRET, which sets a new one in Vercel and GitHub together."
+    get_value CRON_SECRET_FOR_GITHUB secret "The app's CRON_SECRET (hidden input):"
+    value="$V_CRON_SECRET_FOR_GITHUB"
+  fi
+  act_input "$value" gh secret set CRON_SECRET --repo "$REPO_SLUG" || die "Could not set CRON_SECRET."
+  ((DRY_RUN)) || done_item "GitHub secret CRON_SECRET set (the app's value)"
 }
 
 stage_summary() {
@@ -1444,7 +1544,10 @@ stage_summary() {
   say ""
   say "${BOLD}Rotating secrets${RESET} (runbook, 'Rotating secrets'):"
   note "scripts/deploy-wizard.sh --rotate MCP_BEARER_TOKEN (or CRON_SECRET): a new value in Vercel, a"
-  note "redeploy, and GitHub's CRON_SECRET updated; then give Claude the new MCP token."
+  note "redeploy, and (CRON_SECRET) GitHub's copy updated too; then give Claude the new MCP token."
+  say ""
+  say "${BOLD}After merging anything under supabase/migrations/${RESET}: scripts/deploy-wizard.sh --migrate, straight away."
+  note "Merges to main deploy the code by themselves; migrations are never applied automatically."
   note "Keep Deployment Protection on (Standard): older deployments keep the old values, and it keeps"
   note "their URLs private. CREDENTIALS_ENCRYPTION_KEY is never rotated by the wizard: every Kreloses"
   note "password would have to be entered again."
@@ -1489,11 +1592,31 @@ if [[ -f "$SAVE_FILE" ]]; then
   ((DRY_RUN)) || chmod 600 "$SAVE_FILE"
 fi
 
-if ((DRY_RUN)); then
-  banner "Production deploy: Kreloses Data Analytics (DRY RUN: nothing will be changed)"
-else
-  banner "Production deploy: Kreloses Data Analytics"
+TITLE="Production deploy: Kreloses Data Analytics"
+[[ "$MODE" == migrate ]] && TITLE="Production database migrations: Kreloses Data Analytics"
+((DRY_RUN)) && TITLE="$TITLE (DRY RUN: nothing will be changed)"
+
+if [[ "$MODE" == migrate ]]; then
+  # After a merge that adds migrations: Git deploys the code by itself, migrations are never automatic.
+  TOTAL_STAGES=3
+  banner "$TITLE"
+  ((SAVE_ENABLED)) && note "Using the values saved in $SAVE_FILE by an earlier run."
+  stage_preflight
+  stage "Supabase: the production database connection"
+  say "From the Supabase dashboard of the PRODUCTION project (Connect → Connection String)."
+  collect_db_values
+  save_value SUPABASE_TRANSACTION_POOLER_URL "$V_SUPABASE_TRANSACTION_POOLER_URL"
+  save_value SUPABASE_SESSION_POOLER_URL "$V_SUPABASE_SESSION_POOLER_URL"
+  stage_migrations
+  printf '\n'
+  if ((${#TODO_ITEMS[@]})); then
+    for item in "${TODO_ITEMS[@]}"; do printf '  %s…%s %s\n' "$YELLOW" "$RESET" "$item"; done
+    exit 1
+  fi
+  exit 0
 fi
+
+banner "$TITLE"
 ((SAVE_ENABLED)) && note "Using the values saved in $SAVE_FILE by an earlier run."
 
 stage_preflight

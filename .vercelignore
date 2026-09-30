@@ -12,8 +12,11 @@
 .mcp.json
 *.pem
 
-# Local build output, test results and tool state
+# Local build output, test results, logs and tool state
 /.next-e2e/
+/out/
+/build/
+*.log
 /coverage/
 /test-results/
 /playwright-report/

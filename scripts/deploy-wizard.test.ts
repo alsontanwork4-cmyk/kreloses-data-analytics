@@ -1,10 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ignore from "ignore";
 import { afterAll, describe, expect, it } from "vitest";
 
 /**
@@ -31,7 +31,8 @@ const VALUES = {
 };
 const ENCODED_PASSWORD = "p%40ss%20w%2Frd%3A1%2B%26%3D%C3%A9";
 const EXPECTED_DATABASE_URL = `postgresql://postgres.abcdefghijklmnopqrst:${ENCODED_PASSWORD}@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require`;
-const EXPECTED_SESSION_URL = `postgresql://postgres.abcdefghijklmnopqrst:${ENCODED_PASSWORD}@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres`;
+// The Supabase CLI gets the password in PGPASSWORD, so its --db-url carries none.
+const EXPECTED_SESSION_URL = "postgresql://postgres.abcdefghijklmnopqrst@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres";
 const GH_TOKEN = "gho_SYNTHETIC_OWNER_TOKEN_0123456789";
 // What the stand-in openssl prints, call by call (44 base64 characters, 64 hex digits).
 const generated = (n: number, format: "base64" | "hex") =>
@@ -59,7 +60,7 @@ const PROJECT = {
 const LOG = `name=$(basename "$0")
 S="$STUB_STATE"
 stdin=""
-log() { jq -nc --arg cmd "$name" --arg stdin "$stdin" --arg ghToken "\${GH_TOKEN:-}" '{cmd:$cmd, args:$ARGS.positional, stdin:$stdin, ghToken:$ghToken}' --args -- "$@" >> "$STUB_LOG"; }
+log() { jq -nc --arg cmd "$name" --arg stdin "$stdin" --arg ghToken "\${GH_TOKEN:-}" --arg pgPassword "\${PGPASSWORD:-}" '{cmd:$cmd, args:$ARGS.positional, stdin:$stdin, ghToken:$ghToken, pgPassword:$pgPassword}' --args -- "$@" >> "$STUB_LOG"; }
 `;
 const STUBS: Record<string, string> = {
   vercel: `${LOG}
@@ -78,7 +79,10 @@ case "$1" in
     touch "$S/project-exists"; [ -f "$S/project.json" ] || cp "$S/project-after-link.json" "$S/project.json" ;;
   env)
     case "$2" in
-      list|ls) log "$@"; [ -f "$S/project-exists" ] || { echo "Error: Project not found" >&2; exit 1; }; cat "$S/env.json" 2>/dev/null || echo '{"envs":[]}' ;;
+      list|ls) log "$@"; [ -f "$S/project-exists" ] || { echo "Error: Project not found" >&2; exit 1; }
+        if [ -f "$S/env-shape-changed" ]; then echo '{"environmentVariables":[{"name":"CREDENTIALS_ENCRYPTION_KEY"}]}'; exit 0; fi
+        cat "$S/env.json" 2>/dev/null || echo '{"envs":[]}' ;;
+      update) stdin=$(cat); log "$@" ;;
       add) stdin=$(cat); log "$@"; [ -f "$S/env.json" ] || echo '{"envs":[]}' > "$S/env.json"
         jq --arg k "$3" '.envs += [{key:$k, target:["production"], type:"sensitive"}]' "$S/env.json" > "$S/env.tmp" && mv "$S/env.tmp" "$S/env.json" ;;
       rm) log "$@"; jq --arg k "$3" '.envs |= map(select(.key != $k))' "$S/env.json" > "$S/env.tmp" && mv "$S/env.tmp" "$S/env.json" ;;
@@ -191,6 +195,7 @@ interface Call {
   args: string[];
   stdin: string;
   ghToken: string;
+  pgPassword: string;
 }
 
 const sandboxes: string[] = [];
@@ -211,6 +216,7 @@ function sandbox(scenario: Scenario) {
   // The checkout: the real code (for the environment-variable scan, templates and routes).
   for (const name of ["src", "scripts", "supabase"]) symlinkSync(join(REPO, name), join(root, name));
   copyFileSync(join(REPO, "next.config.ts"), join(root, "next.config.ts"));
+  copyFileSync(join(REPO, "vercel.json"), join(root, "vercel.json"));
   if (scenario.backfillWorkflow ?? true) {
     mkdirSync(join(root, ".github", "workflows"), { recursive: true });
     writeFileSync(join(root, ".github", "workflows", "backfill.yml"), "name: History backfill\n");
@@ -365,8 +371,8 @@ describe("the deploy wizard, --dry-run", () => {
       "openssl rand -base64 32   (the new MCP_BEARER_TOKEN, kept in memory, never shown)",
       `save the values below to ${sb.saveFile} (chmod 600, outside the repository)`,
       ...PRODUCTION_VARS.map((name) => `vercel env add ${name} production ${SENSITIVE.has(name) ? "--sensitive" : "--no-sensitive"} --yes ${project} ${flags} ${hidden}`),
-      // Which database gets written stays visible; the password does not.
-      `supabase db push --db-url ${EXPECTED_SESSION_URL.replace(ENCODED_PASSWORD, "<hidden>")} --yes`,
+      // Which database gets written stays visible; the password travels in PGPASSWORD.
+      `PGPASSWORD=<hidden> supabase db push --db-url ${EXPECTED_SESSION_URL} --yes`,
       `vercel deploy --prod --yes ${project} ${flags}`,
       `${asOwner}gh secret set APP_URL --repo example-owner/example-repo ${hidden}`,
       `${asOwner}gh secret set CRON_SECRET --repo example-owner/example-repo ${hidden}`,
@@ -423,12 +429,15 @@ describe("the deploy wizard, for real (against stand-in CLIs)", () => {
       ]);
       expect(call.stdin, name).toBe(expectedValues[name]);
     }
-    // Migrations: a read-only dry run first, through the session pooler (5432), password percent-encoded.
+    // Migrations: a read-only dry run first, through the session pooler (5432); the raw password
+    // travels in PGPASSWORD, never on the command line.
     const pushes = calls.filter((call) => call.cmd === "supabase");
     expect(pushes.map((call) => call.args)).toEqual([
       ["db", "push", "--db-url", EXPECTED_SESSION_URL, "--dry-run"],
       ["db", "push", "--db-url", EXPECTED_SESSION_URL, "--yes"],
     ]);
+    for (const call of pushes) expect(call.pgPassword).toBe(VALUES.SUPABASE_DB_PASSWORD);
+    for (const call of calls.filter((c) => c.cmd !== "supabase")) expect(call.pgPassword).toBe("");
     // GitHub, as the repository owner: APP_URL and the app's own CRON_SECRET, then the opt-in switch.
     const gh = calls.filter((call) => call.cmd === "gh" && call.args[0] !== "auth");
     for (const call of gh) expect(call.ghToken).toBe(GH_TOKEN);
@@ -437,10 +446,13 @@ describe("the deploy wizard, for real (against stand-in CLIs)", () => {
     expect(gh.find((call) => call.args[0] === "variable" && call.args[1] === "set")?.args).toEqual([
       "variable", "set", "BACKFILL_ENABLED", "--body", "true", "--repo", "example-owner/example-repo",
     ]);
-    // No secret in any argument except the migration's --db-url (the Supabase CLI takes no other form).
-    for (const call of calls.filter((c) => c.cmd !== "supabase")) {
+    // No secret in any command's arguments, the migration's included.
+    for (const call of calls) {
       for (const secret of [...SECRET_VALUES, EXPECTED_DATABASE_URL]) expect(call.args.join(" ")).not.toContain(secret);
     }
+    // vercel.json pins the functions next to the database: no dashboard question about it.
+    expect(run.output).toContain("vercel.json pins the functions to sin1 (Singapore), next to the database");
+    expect(run.prompts.some((prompt) => /Function Region/.test(prompt))).toBe(false);
 
     expectNoSecrets(run.output);
     expect(run.output).not.toContain(EXPECTED_DATABASE_URL);
@@ -503,24 +515,29 @@ describe("the deploy wizard, for real (against stand-in CLIs)", () => {
     expect(readFileSync(sb.saveFile, "utf8")).not.toContain("CREDENTIALS_ENCRYPTION_KEY=");
   });
 
-  it("--rotate replaces the MCP token (remove, add the new one, redeploy) and refuses the encryption key", async () => {
-    const configured = {
-      projectExists: true, linked: true, envKeys: PRODUCTION_VARS, migrationsApplied: true, siteUp: true,
-      ghSecrets: ["APP_URL", "CRON_SECRET"], ghVariables: { BACKFILL_ENABLED: "true" },
-    };
+  const configured = {
+    projectExists: true, linked: true, envKeys: PRODUCTION_VARS, migrationsApplied: true, siteUp: true,
+    ghSecrets: ["APP_URL", "CRON_SECRET"], ghVariables: { BACKFILL_ENABLED: "true" },
+  };
+
+  it("--rotate replaces the MCP token in place (vercel env update, then a redeploy) and refuses the encryption key", async () => {
     const sb = sandbox(configured);
     const run = await runWizard(sb, ["--rotate", "MCP_BEARER_TOKEN"], {
-      answers: [[/Run npm ci/, "n"], [/Save a copy/, "n"], [/Replace it/, "n"], [/Run the backfill workflow once/, "n"]],
+      answers: [[/Run npm ci/, "n"], [/Save a copy/, "n"], [/Run the backfill workflow once/, "n"]],
     });
     expect(run.status, run.output).toBe(0);
     const changes = sb.calls().filter(isMutating);
     expect(changes.map((call) => `${call.cmd} ${call.args.slice(0, 3).join(" ")}`)).toEqual([
       "openssl rand -base64 32",
-      "vercel env rm MCP_BEARER_TOKEN",
-      "vercel env add MCP_BEARER_TOKEN",
+      "vercel env update MCP_BEARER_TOKEN",
       "vercel deploy --prod --yes",
     ]);
-    expect(changes[2]!.stdin).toBe(generated(1, "base64"));
+    // Updated in place (no moment without the variable), still sensitive, the value on stdin.
+    expect(changes[1]!.args).toEqual([
+      "env", "update", "MCP_BEARER_TOKEN", "production", "--sensitive", "--yes",
+      "--project", "kreloses-data-analytics", "--global-config", sb.vars.VERCEL_GLOBAL_CONFIG, "--scope", "example-team",
+    ]);
+    expect(changes[1]!.stdin).toBe(generated(1, "base64"));
     expect(run.output).not.toContain(generated(1, "base64"));
 
     const refused = sandbox(configured);
@@ -530,7 +547,76 @@ describe("the deploy wizard, for real (against stand-in CLIs)", () => {
     expect(refused.calls()).toEqual([]);
   });
 
-  it("stops at the backfill stage without touching GitHub while #8 is not merged", async () => {
+  it("--rotate CRON_SECRET updates GitHub's copy too, and never switches a backfill the owner turned off back on by itself", async () => {
+    const off = { ...configured, ghVariables: { BACKFILL_ENABLED: "false" } };
+    const sb = sandbox(off);
+    const run = await runWizard(sb, ["--rotate", "CRON_SECRET"], {
+      answers: [[/Run npm ci/, "n"], [/Save a copy/, "n"], [/Switch it back on/, "n"]],
+    });
+    expect(run.status, run.output).toBe(0);
+    const changes = sb.calls().filter(isMutating);
+    expect(changes.map((call) => `${call.cmd} ${call.args.slice(0, 3).join(" ")}`)).toEqual([
+      "openssl rand -hex 32",
+      "vercel env update CRON_SECRET",
+      "vercel deploy --prod --yes",
+      "gh secret set CRON_SECRET",
+    ]);
+    expect(changes[1]!.stdin).toBe(generated(1, "hex"));
+    expect(changes[3]!.stdin).toBe(generated(1, "hex"));
+    expect(changes[3]!.ghToken).toBe(GH_TOKEN);
+    expect(run.prompts.some((prompt) => /Switch it back on/.test(prompt))).toBe(true);
+    expect(run.prompts.some((prompt) => /ready to turn the nightly backfill on/.test(prompt))).toBe(false);
+    expect(run.output).toContain("GitHub secret CRON_SECRET updated to the app's new value");
+    expect(run.output).toContain("left off (BACKFILL_ENABLED=false)");
+    expect(run.output).not.toContain(generated(1, "hex"));
+
+    // Saying yes to its own question is the only way it goes back on.
+    const again = sandbox(off);
+    const on = await runWizard(again, [], { answers: [[/Run npm ci/, "n"], [/Deploy again anyway/, "n"], [/Replace it/, "n"], [/Run the backfill workflow once/, "n"]] });
+    expect(on.status, on.output).toBe(0);
+    expect(again.calls().filter(isMutating).map((call) => `${call.cmd} ${call.args.slice(0, 3).join(" ")}`)).toEqual(["gh variable set BACKFILL_ENABLED"]);
+  });
+
+  it("stops before generating anything when Vercel's variable list comes back in a shape it does not know", async () => {
+    const sb = sandbox({ projectExists: true, linked: true, flags: ["env-shape-changed"] });
+    const run = await runWizard(sb, []);
+    expect(run.status).toBe(1);
+    expect(run.output).toContain("did not recognise the list of environment variables");
+    expect(sb.calls().filter(isMutating).map(describeCall).filter((call) => !call.startsWith("npm"))).toEqual([]);
+  });
+
+  it("keeps a typed database password exactly, spaces included", async () => {
+    const sb = sandbox({ projectExists: true, linked: true, envKeys: PRODUCTION_VARS.filter((name) => name !== "DATABASE_URL") });
+    const run = await runWizard(sb, [], {
+      env: { SUPABASE_DB_PASSWORD: "" },
+      answers: [[/Run npm ci/, "n"], [/Database password/, "  pa ss  "], [/ready to turn the nightly backfill on/, "n"]],
+    });
+    expect(run.status, run.output).toBe(0);
+    expect(envAdds(sb.calls()).map((call) => call.stdin)).toEqual([
+      "postgresql://postgres.abcdefghijklmnopqrst:%20%20pa%20ss%20%20@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require",
+    ]);
+    for (const call of sb.calls().filter((c) => c.cmd === "supabase")) expect(call.pgPassword).toBe("  pa ss  ");
+  });
+
+  it("--migrate only applies the database migrations (for after a merge that adds some)", async () => {
+    const sb = sandbox({ ...configured, migrationsApplied: false });
+    const run = await runWizard(sb, ["--migrate"], { answers: [[/Run npm ci/, "n"]] });
+    expect(run.status, run.output).toBe(0);
+    expect(run.output).toContain("Stage 3/3");
+    expect(new Set(sb.calls().map((call) => call.cmd))).toEqual(new Set(["git", "node", "supabase"]));
+    expect(sb.calls().filter(isMutating).map((call) => call.args.slice(0, 5))).toEqual([["db", "push", "--db-url", EXPECTED_SESSION_URL, "--yes"]]);
+  });
+
+  it("warns when vercel.json pins the functions far from the database", async () => {
+    const sb = sandbox({ projectExists: true, linked: true, envKeys: PRODUCTION_VARS, migrationsApplied: true, siteUp: true });
+    const run = await runWizard(sb, ["--dry-run"], {
+      env: { SUPABASE_TRANSACTION_POOLER_URL: VALUES.SUPABASE_TRANSACTION_POOLER_URL.replace("ap-southeast-1", "us-east-1") },
+    });
+    expect(run.status, run.output).toBe(0);
+    expect(run.output).toContain("vercel.json pins the functions to sin1, but the database is in us-east-1");
+  });
+
+  it("stops at the backfill stage without touching GitHub when the checkout has no backfill workflow", async () => {
     const sb = sandbox({
       projectExists: true, linked: true, envKeys: PRODUCTION_VARS, migrationsApplied: true, siteUp: true, backfillWorkflow: false,
     });
@@ -538,7 +624,7 @@ describe("the deploy wizard, for real (against stand-in CLIs)", () => {
     expect(run.status, run.output).toBe(0);
     expect(sb.calls().filter((call) => call.cmd === "gh")).toEqual([]);
     expect(sb.calls().filter(isMutating)).toEqual([]);
-    expect(run.output).toContain("The history backfill (#8) is not on main yet");
+    expect(run.output).toContain("No .github/workflows/backfill.yml in this checkout");
   });
 
   it("refuses to deploy a checkout that is not a clean, up-to-date main (but a dry run only warns)", async () => {
@@ -669,14 +755,35 @@ describe("the wizard script itself", () => {
 
   it("keeps the wizard library verbatim, reads secrets hidden and never uses xtrace", () => {
     expect(source).toContain("# STAGES: author this section.");
-    expect(source).toContain('read -rs value || answered=0');
+    // Hidden input read exactly (IFS= keeps leading/trailing spaces in a password).
+    expect(source).toContain("IFS= read -rs value || answered=0");
     expect(source).not.toMatch(/^\s*set -[a-z]*x/m);
+  });
+});
+
+describe("vercel.json", () => {
+  const config = JSON.parse(readFileSync(join(REPO, "vercel.json"), "utf8")) as {
+    regions?: string[];
+    git?: { deploymentEnabled?: Record<string, boolean> };
+    crons?: { path: string; schedule: string }[];
+  };
+
+  it("pins the functions to one region next to the database (Hobby allows one)", () => {
+    expect(config.regions).toEqual(["sin1"]);
+  });
+
+  it("builds only main from Git: no preview builds of other branches (Hobby: one build at a time, a daily cap)", () => {
+    // Vercel: when a branch matches several patterns and any is true, it deploys; `**` also matches names with "/".
+    expect(config.git?.deploymentEnabled).toEqual({ main: true, "**": false });
+  });
+
+  it("keeps the nightly cron", () => {
+    expect(config.crons).toEqual([{ path: "/api/cron/nightly", schedule: "0 19 * * *" }]);
   });
 });
 
 describe(".vercelignore keeps local-only files out of `vercel deploy` uploads", () => {
   // The Vercel CLI matches .vercelignore with the `ignore` package (gitignore rules).
-  const ignore = createRequire(import.meta.url)("ignore") as () => { add(rules: string): { ignores(path: string): boolean } };
   const rules = ignore().add(readFileSync(join(REPO, ".vercelignore"), "utf8"));
 
   it("excludes agent worktrees, env files and local build/test output", () => {
@@ -692,6 +799,10 @@ describe(".vercelignore keeps local-only files out of `vercel deploy` uploads", 
       "test-results/report.json",
       "playwright-report/index.html",
       "supabase/.temp/project-ref",
+      "out/index.html",
+      "build/server.js",
+      "npm-debug.log",
+      "e2e-server.log",
     ]) {
       expect(rules.ignores(path), path).toBe(true);
     }
